@@ -36,10 +36,7 @@ export async function positionRoutes(app: FastifyInstance): Promise<void> {
       if (q.data.agentId) filter.agentId = q.data.agentId;
       if (q.data.since) filter.capturedAt = { $gte: new Date(q.data.since) };
 
-      const docs = await Position.find(filter)
-        .sort({ capturedAt: -1 })
-        .limit(q.data.limit)
-        .lean();
+      const docs = await Position.find(filter).sort({ capturedAt: -1 }).limit(q.data.limit).lean();
       return docs.map(serialize);
     },
   );

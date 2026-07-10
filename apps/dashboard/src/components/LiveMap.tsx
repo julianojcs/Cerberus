@@ -62,7 +62,9 @@ export function LiveMap({ agents }: { agents: Record<string, AgentPoint> }) {
         el.title = agentId;
         el.style.cssText =
           'width:18px;height:18px;border-radius:50%;background:#c1121f;border:2px solid #fff;box-shadow:0 0 8px #c1121f;';
-        marker = new maplibregl.Marker({ element: el }).setLngLat([point.lng, point.lat]).addTo(map);
+        marker = new maplibregl.Marker({ element: el })
+          .setLngLat([point.lng, point.lat])
+          .addTo(map);
         marker.setPopup(new maplibregl.Popup({ offset: 12 }));
         markersRef.current[agentId] = marker;
       }

@@ -70,9 +70,7 @@ export default function LoginPage() {
           />
         </label>
 
-        {error && (
-          <p style={{ color: 'var(--accent)', fontSize: 14, marginTop: 0 }}>{error}</p>
-        )}
+        {error && <p style={{ color: 'var(--accent)', fontSize: 14, marginTop: 0 }}>{error}</p>}
 
         <button className="btn" style={{ width: '100%' }} disabled={loading}>
           {loading ? 'Autenticando…' : 'Entrar'}

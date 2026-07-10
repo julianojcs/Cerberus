@@ -1,11 +1,5 @@
 import { z } from 'zod';
-import {
-  ActivityType,
-  MessageType,
-  OperationStatus,
-  OperationType,
-  Role,
-} from './constants.js';
+import { ActivityType, MessageType, OperationStatus, OperationType, Role } from './constants.js';
 
 const enumValues = <T extends Record<string, string>>(obj: T) =>
   Object.values(obj) as [string, ...string[]];
