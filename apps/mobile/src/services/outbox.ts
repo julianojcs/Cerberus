@@ -1,4 +1,4 @@
-import * as SecureStore from 'expo-secure-store';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { PositionSample } from '../shared/contracts';
 
 /**
@@ -8,8 +8,9 @@ import type { PositionSample } from '../shared/contracts';
  *
  * Observação: o `react-native-background-geolocation` já possui um buffer nativo
  * criptografado em SQLite. Este outbox complementa o caminho de publicação MQTT
- * da camada de aplicação. Para MVP usamos SecureStore; volumes maiores devem
- * migrar para SQLite/MMKV.
+ * da camada de aplicação. Usamos AsyncStorage: a fila NÃO é dado sensível e pode
+ * crescer numa zona de sombra — o SecureStore tem limite de ~2048 bytes/chave
+ * (estourado com poucas posições), que não se aplica aqui.
  */
 const OUTBOX_KEY = 'cerberus_outbox';
 const MAX_ITEMS = 1000;
@@ -21,12 +22,12 @@ export interface OutboxItem {
 }
 
 async function readAll(): Promise<OutboxItem[]> {
-  const raw = await SecureStore.getItemAsync(OUTBOX_KEY);
+  const raw = await AsyncStorage.getItem(OUTBOX_KEY);
   return raw ? (JSON.parse(raw) as OutboxItem[]) : [];
 }
 
 async function writeAll(items: OutboxItem[]): Promise<void> {
-  await SecureStore.setItemAsync(OUTBOX_KEY, JSON.stringify(items.slice(-MAX_ITEMS)));
+  await AsyncStorage.setItem(OUTBOX_KEY, JSON.stringify(items.slice(-MAX_ITEMS)));
 }
 
 export async function queuePosition(item: OutboxItem): Promise<void> {
