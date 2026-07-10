@@ -324,3 +324,69 @@ describe('provisionamento de usuários (admin)', () => {
     expect(get.statusCode).toBe(404);
   });
 });
+
+describe('mensagens táticas (texto)', () => {
+  it('admin envia mensagem (POST) e ela é persistida', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/messages`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { text: 'Comando: manter posição.' },
+    });
+    expect(res.statusCode).toBe(201);
+    const msg = res.json();
+    expect(msg.type).toBe('text');
+    expect(msg.text).toBe('Comando: manter posição.');
+    expect(msg.senderId).toBeTruthy();
+  });
+
+  it('agente envia mensagem com senderId = agentId', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/messages`,
+      headers: { authorization: `Bearer ${agentToken}` },
+      payload: { text: 'Alvo avistado.' },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().senderId).toBe('AG-0456');
+  });
+
+  it('histórico lista as mensagens (GET)', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/operations/${operationId}/messages`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const texts = (res.json() as Array<{ text: string }>).map((m) => m.text);
+    expect(texts).toContain('Alvo avistado.');
+    expect(texts).toContain('Comando: manter posição.');
+  });
+
+  it('rejeita texto vazio com 400', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/messages`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { text: '' },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('bloqueia operação fora do escopo com 403', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/operations/000000000000000000000000/messages',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('exige autenticação (401 sem token)', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/operations/${operationId}/messages`,
+    });
+    expect(res.statusCode).toBe(401);
+  });
+});
