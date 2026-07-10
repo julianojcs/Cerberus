@@ -1,0 +1,15 @@
+# Normaliza fim de linha: LF no repositório para todo arquivo de texto,
+# independentemente do SO do desenvolvedor (evita ruído de CRLF/LF nos diffs).
+* text=auto eol=lf
+
+# Binários — nunca normalizar (previne corrupção de assets).
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.pdf  binary
+*.p12  binary
+*.jks  binary
+*.p8   binary
+*.pem  binary
