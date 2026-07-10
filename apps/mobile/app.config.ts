@@ -1,0 +1,58 @@
+import type { ExpoConfig } from 'expo/config';
+
+/**
+ * Configuração do app móvel de campo.
+ *
+ * O `react-native-background-geolocation` (Transistor Software) é um módulo
+ * NATIVO — exige um Expo Dev Client / EAS Build (não roda no Expo Go). O config
+ * plugin abaixo injeta as permissões e o modo de localização em background.
+ *
+ * Licenciamento (conforme spec): em homologação (MVP) roda em modo debug sem
+ * restrições; para o binário oficial usa-se o plano Starter com 1 Application Key
+ * validando o `bundleId`/`package` corporativo — informe via variável de ambiente.
+ */
+const config: ExpoConfig = {
+  name: 'Cerberus Agente',
+  slug: 'cerberus-agente',
+  version: '0.1.0',
+  orientation: 'portrait',
+  scheme: 'cerberus',
+  userInterfaceStyle: 'dark',
+  ios: {
+    bundleIdentifier: 'br.gov.pf.cerberus.agente',
+    supportsTablet: true, // iPhones e iPads (conforme spec)
+    infoPlist: {
+      UIBackgroundModes: ['location', 'fetch'],
+      NSLocationWhenInUseUsageDescription:
+        'O Cerberus usa sua localização para consciência situacional tática da operação.',
+      NSLocationAlwaysAndWhenInUseUsageDescription:
+        'O Cerberus reporta sua posição em segundo plano durante operações ativas.',
+    },
+  },
+  android: {
+    package: 'br.gov.pf.cerberus.agente',
+    permissions: [
+      'ACCESS_FINE_LOCATION',
+      'ACCESS_COARSE_LOCATION',
+      'ACCESS_BACKGROUND_LOCATION',
+      'FOREGROUND_SERVICE',
+      'FOREGROUND_SERVICE_LOCATION',
+    ],
+  },
+  plugins: [
+    [
+      'react-native-background-geolocation',
+      {
+        // Chave de licença do binário oficial (Starter). Vazio em modo debug/MVP.
+        license: process.env.BACKGROUND_GEOLOCATION_LICENSE ?? '',
+      },
+    ],
+    'react-native-background-fetch',
+  ],
+  extra: {
+    apiUrl: process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3000',
+    mqttWsUrl: process.env.EXPO_PUBLIC_MQTT_WS_URL ?? 'ws://localhost:9001',
+  },
+};
+
+export default config;

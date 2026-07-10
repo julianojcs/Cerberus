@@ -1,0 +1,51 @@
+/**
+ * Constantes de domínio do Cerberus — fonte única de verdade compartilhada
+ * entre API, dashboard e app móvel.
+ */
+
+/** Papéis de acesso (RBAC). */
+export const Role = {
+  /** Administração central: enxerga operações e decifra conteúdo E2EE. */
+  ADMIN: 'admin',
+  /** Agente de campo: publica telemetria apenas no próprio canal. */
+  AGENTE: 'agente',
+} as const;
+export type Role = (typeof Role)[keyof typeof Role];
+
+/** Tipos de operação suportados. */
+export const OperationType = {
+  MANDADO: 'mandado', // busca e apreensão
+  ESCOLTA: 'escolta', // comboio de viaturas
+  PROTECAO: 'protecao', // proteção de dignitários
+} as const;
+export type OperationType = (typeof OperationType)[keyof typeof OperationType];
+
+/** Ciclo de vida de uma operação. */
+export const OperationStatus = {
+  PLANEJADA: 'planejada',
+  ATIVA: 'ativa',
+  ENCERRADA: 'encerrada',
+} as const;
+export type OperationStatus = (typeof OperationStatus)[keyof typeof OperationStatus];
+
+/**
+ * Estado de movimento reportado pelo reconhecimento de atividade do dispositivo
+ * (acelerômetro/giroscópio). Dirige o gerenciamento dinâmico de energia.
+ */
+export const ActivityType = {
+  STILL: 'still',
+  ON_FOOT: 'on_foot',
+  WALKING: 'walking',
+  RUNNING: 'running',
+  IN_VEHICLE: 'in_vehicle',
+  ON_BICYCLE: 'on_bicycle',
+  UNKNOWN: 'unknown',
+} as const;
+export type ActivityType = (typeof ActivityType)[keyof typeof ActivityType];
+
+/** Tipos de mensagem tática. */
+export const MessageType = {
+  TEXT: 'text',
+  MEDIA: 'media',
+} as const;
+export type MessageType = (typeof MessageType)[keyof typeof MessageType];

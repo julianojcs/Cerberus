@@ -1,0 +1,53 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build outputs
+dist/
+build/
+.next/
+out/
+*.tsbuildinfo
+
+# Turbo
+.turbo/
+
+# Environment / secrets (NUNCA versionar segredos — só .env.example é versionado)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+
+# Expo / React Native
+apps/mobile/.expo/
+apps/mobile/.expo-shared/
+apps/mobile/android/
+apps/mobile/ios/
+*.jks
+*.p8
+*.p12
+*.mobileprovision
+*.orig.*
+
+# Testes / cobertura
+coverage/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Sistema operacional
+.DS_Store
+Thumbs.db
+
+# Editores
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# Dados locais do docker
+.docker-data/
+mongo-data/

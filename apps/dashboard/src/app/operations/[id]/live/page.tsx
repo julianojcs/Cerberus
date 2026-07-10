@@ -1,0 +1,129 @@
+'use client';
+
+import { useEffect, useMemo, useRef, useState } from 'react';
+import Link from 'next/link';
+import { useParams, useRouter } from 'next/navigation';
+import { api, type LatestPosition } from '@/lib/api';
+import { getToken } from '@/lib/auth';
+import { subscribeToOperation, type LivePosition } from '@/lib/mqtt';
+import { LiveMap, type AgentPoint } from '@/components/LiveMap';
+
+export default function LiveOperationPage() {
+  const router = useRouter();
+  const params = useParams<{ id: string }>();
+  const operationId = params.id;
+
+  const [agents, setAgents] = useState<Record<string, AgentPoint>>({});
+  const [connected, setConnected] = useState(false);
+  const lastUpdateRef = useRef<Record<string, string>>({});
+  const [, forceTick] = useState(0);
+
+  // Snapshot inicial (última posição conhecida) via REST + stream ao vivo via MQTT.
+  useEffect(() => {
+    if (!getToken()) {
+      router.replace('/login');
+      return;
+    }
+
+    api
+      .latestPositions(operationId)
+      .then((positions: LatestPosition[]) => {
+        setAgents((prev) => {
+          const next = { ...prev };
+          for (const p of positions) {
+            next[p.agentId] = {
+              agentId: p.agentId,
+              lat: p.lat,
+              lng: p.lng,
+              heading: p.heading,
+              battery: p.battery,
+              activity: p.activity,
+            };
+            lastUpdateRef.current[p.agentId] = p.capturedAt;
+          }
+          return next;
+        });
+      })
+      .catch(() => {
+        /* sem histórico ainda */
+      });
+
+    const unsubscribe = subscribeToOperation(
+      operationId,
+      (pos: LivePosition) => {
+        setConnected(true);
+        setAgents((prev) => ({
+          ...prev,
+          [pos.agentId]: {
+            agentId: pos.agentId,
+            lat: pos.lat,
+            lng: pos.lng,
+            heading: pos.heading,
+            battery: pos.battery,
+            activity: pos.activity,
+          },
+        }));
+        lastUpdateRef.current[pos.agentId] = pos.capturedAt;
+        forceTick((t) => t + 1);
+      },
+      getToken() ?? undefined,
+    );
+
+    return unsubscribe;
+  }, [operationId, router]);
+
+  const agentList = useMemo(() => Object.values(agents), [agents]);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
+      <div className="topbar">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+          <Link href="/operations" className="badge">
+            ← Operações
+          </Link>
+          <div className="brand">
+            <span className="brand-dot" />
+            Monitoramento ao vivo
+          </div>
+        </div>
+        <span className="badge" style={{ color: connected ? 'var(--ok)' : 'var(--muted)' }}>
+          {connected ? '● barramento conectado' : '○ aguardando telemetria'}
+        </span>
+      </div>
+
+      <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
+        <aside
+          style={{
+            width: 260,
+            borderRight: '1px solid var(--border)',
+            padding: 16,
+            overflowY: 'auto',
+          }}
+        >
+          <h3 style={{ marginTop: 0 }}>Agentes ({agentList.length})</h3>
+          {agentList.length === 0 && (
+            <p className="muted" style={{ fontSize: 14 }}>
+              Nenhuma posição recebida. Simule com o publish-fake-position.
+            </p>
+          )}
+          {agentList.map((a) => (
+            <div key={a.agentId} className="card" style={{ padding: 12, marginBottom: 10 }}>
+              <strong>{a.agentId}</strong>
+              <div className="muted" style={{ fontSize: 13, marginTop: 4 }}>
+                {a.lat.toFixed(5)}, {a.lng.toFixed(5)}
+              </div>
+              <div className="muted" style={{ fontSize: 13 }}>
+                bateria: {a.battery != null ? Math.round(a.battery * 100) + '%' : '—'} ·{' '}
+                {a.activity ?? '—'}
+              </div>
+            </div>
+          ))}
+        </aside>
+
+        <main style={{ flex: 1, minWidth: 0 }}>
+          <LiveMap agents={agents} />
+        </main>
+      </div>
+    </div>
+  );
+}

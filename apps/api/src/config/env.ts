@@ -1,0 +1,44 @@
+import { z } from 'zod';
+
+/**
+ * Leitura e validação de variáveis de ambiente (12-factor). O código abstrai
+ * completamente a infraestrutura: trocar MVP (Render/Atlas/HiveMQ) por
+ * produção DTI (K8s/ReplicaSet/EMQX) é apenas questão de `.env`.
+ */
+const envSchema = z.object({
+  NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+  PORT: z.coerce.number().default(3000),
+  API_HOST: z.string().default('0.0.0.0'),
+  CORS_ORIGINS: z.string().default('http://localhost:3001'),
+
+  MONGO_URI: z.string().min(1, 'MONGO_URI é obrigatório'),
+
+  MQTT_BROKER_URL: z.string().min(1, 'MQTT_BROKER_URL é obrigatório'),
+  MQTT_CLIENT_ID: z.string().default('cerberus_api_node'),
+  MQTT_USERNAME: z.string().optional(),
+  MQTT_PASSWORD: z.string().optional(),
+
+  JWT_SECRET: z.string().min(8, 'JWT_SECRET deve ter ao menos 8 caracteres'),
+  JWT_EXPIRES_IN: z.string().default('8h'),
+});
+
+export type Env = z.infer<typeof envSchema>;
+
+let cached: Env | null = null;
+
+export function loadEnv(): Env {
+  if (cached) return cached;
+  const parsed = envSchema.safeParse(process.env);
+  if (!parsed.success) {
+    const issues = parsed.error.issues.map((i) => `  - ${i.path.join('.')}: ${i.message}`).join('\n');
+    throw new Error(`Configuração de ambiente inválida:\n${issues}`);
+  }
+  cached = parsed.data;
+  return cached;
+}
+
+export function corsOrigins(env: Env): string[] {
+  return env.CORS_ORIGINS.split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
