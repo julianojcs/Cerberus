@@ -35,6 +35,12 @@ apps/mobile/ios/
 # Testes / cobertura
 coverage/
 
+# Playwright (E2E)
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+
 # Logs
 *.log
 npm-debug.log*
