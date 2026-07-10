@@ -44,4 +44,7 @@ export const api = {
   operation: (id: string) => request<Operation>(`/operations/${id}`),
   latestPositions: (operationId: string) =>
     request<LatestPosition[]>(`/operations/${operationId}/positions/latest`),
+  // Histórico da operação (trilha). Vem ordenado do mais recente para o mais antigo.
+  positionHistory: (operationId: string, limit = 2000) =>
+    request<LatestPosition[]>(`/operations/${operationId}/positions?limit=${limit}`),
 };

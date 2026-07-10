@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import maplibregl, { type Map as MlMap, type Marker } from 'maplibre-gl';
+import maplibregl, { type Map as MlMap, type Marker, type GeoJSONSource } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
 export interface AgentPoint {
@@ -13,21 +13,58 @@ export interface AgentPoint {
   activity?: string;
 }
 
+/** Trilha por agente, em ordem cronológica, no formato [lng, lat] do MapLibre. */
+export type AgentTrails = Record<string, [number, number][]>;
+
+function toFeatureCollection(trails: AgentTrails): GeoJSON.FeatureCollection {
+  return {
+    type: 'FeatureCollection',
+    features: Object.entries(trails)
+      .filter(([, points]) => points.length >= 2)
+      .map(([agentId, points]) => ({
+        type: 'Feature',
+        properties: { agentId },
+        geometry: { type: 'LineString', coordinates: points },
+      })),
+  };
+}
+
+function syncTrails(map: MlMap, trails: AgentTrails): void {
+  const source = map.getSource('trails') as GeoJSONSource | undefined;
+  source?.setData(toFeatureCollection(trails));
+}
+
 /**
  * Mapa de plotagem em tempo real. Recebe as posições correntes de cada agente
- * (mapa agentId -> ponto) e atualiza/anima os marcadores. Usa MapLibre GL com
- * tiles OSM (sem chave de API), adequado ao MVP custo-zero.
+ * (mapa agentId -> ponto) e a trilha acumulada (agentId -> pontos), atualizando
+ * marcadores e a linha de percurso. Usa MapLibre GL com tiles OSM (sem chave de
+ * API), adequado ao MVP custo-zero.
  */
-export function LiveMap({ agents }: { agents: Record<string, AgentPoint> }) {
+export function LiveMap({
+  agents,
+  trails = {},
+  showTrails = true,
+}: {
+  agents: Record<string, AgentPoint>;
+  trails?: AgentTrails;
+  showTrails?: boolean;
+}) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MlMap | null>(null);
   const markersRef = useRef<Record<string, Marker>>({});
   const fittedRef = useRef(false);
+  const styleReadyRef = useRef(false);
+  // Mantém a trilha/visibilidade correntes acessíveis ao handler de 'load'
+  // (evita closure obsoleto na inicialização assíncrona do estilo).
+  const trailsRef = useRef<AgentTrails>(trails);
+  trailsRef.current = trails;
+  const showTrailsRef = useRef(showTrails);
+  showTrailsRef.current = showTrails;
 
   // Inicializa o mapa uma única vez.
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
-    mapRef.current = new maplibregl.Map({
+    const map = new maplibregl.Map({
       container: containerRef.current,
       style: {
         version: 8,
@@ -44,9 +81,29 @@ export function LiveMap({ agents }: { agents: Record<string, AgentPoint> }) {
       center: [-43.9386, -19.9319], // Belo Horizonte
       zoom: 12,
     });
+    mapRef.current = map;
+
+    // A camada de trilha só pode ser adicionada após o estilo carregar.
+    map.on('load', () => {
+      map.addSource('trails', { type: 'geojson', data: toFeatureCollection(trailsRef.current) });
+      map.addLayer({
+        id: 'trails-line',
+        type: 'line',
+        source: 'trails',
+        layout: {
+          'line-join': 'round',
+          'line-cap': 'round',
+          visibility: showTrailsRef.current ? 'visible' : 'none',
+        },
+        paint: { 'line-color': '#c1121f', 'line-width': 3, 'line-opacity': 0.65 },
+      });
+      styleReadyRef.current = true;
+    });
+
     return () => {
-      mapRef.current?.remove();
+      map.remove();
       mapRef.current = null;
+      styleReadyRef.current = false;
     };
   }, []);
 
@@ -85,6 +142,20 @@ export function LiveMap({ agents }: { agents: Record<string, AgentPoint> }) {
       fittedRef.current = true;
     }
   }, [agents]);
+
+  // Redesenha a trilha quando novas posições chegam.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !styleReadyRef.current) return;
+    syncTrails(map, trails);
+  }, [trails]);
+
+  // Liga/desliga a exibição da rota conforme o toggle do operador.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !styleReadyRef.current) return;
+    map.setLayoutProperty('trails-line', 'visibility', showTrails ? 'visible' : 'none');
+  }, [showTrails]);
 
   return <div ref={containerRef} style={{ width: '100%', height: '100%' }} />;
 }

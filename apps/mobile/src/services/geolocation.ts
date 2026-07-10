@@ -1,6 +1,7 @@
 import BackgroundGeolocation, {
   type Location,
   type MotionActivityEvent,
+  type MotionChangeEvent,
 } from 'react-native-background-geolocation';
 import { publishPosition } from './mqtt';
 import type { PositionSample } from '../shared/contracts';
@@ -36,16 +37,43 @@ function toSample(location: Location): PositionSample {
   };
 }
 
+// --- Assinatura de posições para a própria UI do agente ---
+export type PositionListener = (sample: PositionSample) => void;
+const positionListeners = new Set<PositionListener>();
+let lastSample: PositionSample | null = null;
+
+/** Inscreve um ouvinte que recebe cada amostra publicada (para a tela do agente). */
+export function subscribePositions(listener: PositionListener): () => void {
+  positionListeners.add(listener);
+  if (lastSample) listener(lastSample);
+  return () => {
+    positionListeners.delete(listener);
+  };
+}
+
+/** Última amostra conhecida (inicializa a UI sem esperar o próximo fix). */
+export function getLastSample(): PositionSample | null {
+  return lastSample;
+}
+
+/** Publica no barramento MQTT e notifica a UI local com a mesma amostra. */
+function report(ctx: TrackingContext, sample: PositionSample): void {
+  lastSample = sample;
+  for (const listener of positionListeners) listener(sample);
+  void publishPosition(ctx.operationId, ctx.agentId, sample);
+}
+
 export async function initTracking(ctx: TrackingContext): Promise<void> {
   if (initialized) return;
 
   BackgroundGeolocation.onLocation((location: Location) => {
-    void publishPosition(ctx.operationId, ctx.agentId, toSample(location));
+    report(ctx, toSample(location));
   });
 
-  BackgroundGeolocation.onMotionChange((event: Location) => {
-    // event.isMoving indica transição parado <-> em movimento.
-    void publishPosition(ctx.operationId, ctx.agentId, toSample(event));
+  BackgroundGeolocation.onMotionChange((event: MotionChangeEvent) => {
+    // event.isMoving indica transição parado <-> em movimento; a posição
+    // vem em event.location (o evento NÃO é um Location direto como no onLocation).
+    report(ctx, toSample(event.location));
   });
 
   BackgroundGeolocation.onActivityChange((event: MotionActivityEvent) => {
@@ -53,10 +81,24 @@ export async function initTracking(ctx: TrackingContext): Promise<void> {
     void event;
   });
 
+  BackgroundGeolocation.onHeartbeat(async () => {
+    // Parado, o GPS hiberna. A cada heartbeat forçamos um fix fresco para manter
+    // posição/bateria/horário vivos no painel mesmo sem deslocamento.
+    try {
+      const location = await BackgroundGeolocation.getCurrentPosition({
+        samples: 1,
+        persist: true,
+      });
+      report(ctx, toSample(location));
+    } catch {
+      /* sem fix disponível neste ciclo — ignora */
+    }
+  });
+
   await BackgroundGeolocation.ready({
     // --- Precisão / amostragem em deslocamento ---
     desiredAccuracy: BackgroundGeolocation.DESIRED_ACCURACY_HIGH,
-    distanceFilter: 20, // metros entre amostras em movimento
+    distanceFilter: 10, // metros entre amostras em movimento (rastro mais denso)
 
     // --- Gerenciamento dinâmico de energia (parado) ---
     stopTimeout: 5, // minutos parado antes de hibernar o GPS

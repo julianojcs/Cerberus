@@ -49,6 +49,10 @@ npm-debug.log*
 .DS_Store
 Thumbs.db
 
+# Artefatos de demonstração / capturas (não versionar)
+cerberus-live-map-demo.png
+*-demo.png
+
 # Editores
 .vscode/*
 !.vscode/extensions.json
