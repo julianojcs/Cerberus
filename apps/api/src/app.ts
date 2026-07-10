@@ -10,6 +10,7 @@ import { authRoutes } from './modules/auth/routes.js';
 import { operationRoutes } from './modules/operations/routes.js';
 import { positionRoutes } from './modules/positions/routes.js';
 import { userRoutes } from './modules/users/routes.js';
+import { messageRoutes } from './modules/messages/routes.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -61,6 +62,7 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
   await app.register(userRoutes);
   await app.register(operationRoutes);
   await app.register(positionRoutes);
+  await app.register(messageRoutes);
 
   return app;
 }
