@@ -51,6 +51,10 @@ export async function operationRoutes(app: FastifyInstance): Promise<void> {
     if (!body.success) return reply.code(400).send({ error: 'Dados inválidos' });
     const claims = request.user as AuthClaims;
     const op = await Operation.create({ ...body.data, createdBy: claims.sub });
+    // O criador entra no escopo da operação — senão não conseguiria gerenciá-la
+    // nem atribuir membros. O token atual continua com o escopo antigo até um
+    // /auth/refresh (ou novo login).
+    await User.findByIdAndUpdate(claims.sub, { $addToSet: { operationIds: op._id } });
     return reply.code(201).send(serialize(op));
   });
 
