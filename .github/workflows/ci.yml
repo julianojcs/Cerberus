@@ -20,7 +20,7 @@ permissions:
 
 jobs:
   validate:
-    name: build · typecheck · test · lint
+    name: build · typecheck · test · lint · format
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -55,3 +55,39 @@ jobs:
       # Prettier — verificação de formatação (bloqueante).
       - name: Format (Prettier)
         run: npm run format:check
+
+  e2e:
+    name: e2e dashboard (Playwright)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # O `next build` do dashboard consome @cerberus/shared já compilado.
+      - name: Build shared
+        run: npm run shared:build
+
+      - name: Install Playwright browser (chromium)
+        run: npx playwright install --with-deps chromium
+
+      # O webServer do Playwright faz build+start do dashboard; o broker MQTT-WS
+      # e os mocks REST são in-process — sem backend nem Docker.
+      - name: E2E (dashboard)
+        run: npm run test:e2e --workspace @cerberus/dashboard
+
+      - name: Upload Playwright report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: apps/dashboard/playwright-report/
+          retention-days: 7
