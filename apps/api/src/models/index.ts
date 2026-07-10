@@ -77,6 +77,11 @@ const messageSchema = new Schema(
     text: String,
     ciphertext: String,
     mediaRef: String,
+    /** Geotag da mídia (onde a foto foi capturada): GeoJSON Point [lng, lat]. */
+    location: {
+      type: { type: String, enum: ['Point'] },
+      coordinates: { type: [Number] },
+    },
     capturedAt: { type: Date, required: true },
     receivedAt: { type: Date, required: true },
   },

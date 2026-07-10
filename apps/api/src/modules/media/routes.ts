@@ -33,6 +33,22 @@ export async function mediaRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(415).send({ error: 'Tipo de mídia não suportado' });
     }
 
+    // Campos de texto do multipart (vêm ANTES do arquivo no form): legenda + geotag.
+    const fields = file.fields as Record<string, { value?: unknown } | undefined>;
+    const fieldStr = (k: string): string | undefined =>
+      typeof fields[k]?.value === 'string' ? (fields[k]?.value as string) : undefined;
+    const fieldNum = (k: string): number | undefined => {
+      const n = Number(fieldStr(k));
+      return Number.isFinite(n) ? n : undefined;
+    };
+    const caption = fieldStr('caption')?.slice(0, 500);
+    const lng = fieldNum('lng');
+    const lat = fieldNum('lat');
+    const geo =
+      lng != null && lat != null && lng >= -180 && lng <= 180 && lat >= -90 && lat <= 90
+        ? { type: 'Point' as const, coordinates: [lng, lat] }
+        : undefined;
+
     const claims = request.user as AuthClaims;
     const senderId = claims.agentId ?? claims.sub;
     const now = new Date();
@@ -63,6 +79,8 @@ export async function mediaRoutes(app: FastifyInstance): Promise<void> {
       senderId,
       type: MessageType.MEDIA,
       mediaRef,
+      text: caption,
+      location: geo,
       capturedAt: now,
       receivedAt: now,
     });
@@ -86,6 +104,9 @@ export async function mediaRoutes(app: FastifyInstance): Promise<void> {
       senderId,
       type: MessageType.MEDIA,
       mediaRef,
+      text: caption,
+      lng: geo?.coordinates[0],
+      lat: geo?.coordinates[1],
       capturedAt: now.toISOString(),
     });
   });

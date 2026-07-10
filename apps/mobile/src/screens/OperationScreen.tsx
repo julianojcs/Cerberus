@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react';
 import {
   Alert,
+  Image,
   Modal,
   ScrollView,
   StyleSheet,
   Switch,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
@@ -25,7 +27,7 @@ import {
   subscribePositions,
 } from '../services/geolocation';
 import { outboxSize } from '../services/outbox';
-import { captureAndUploadPhoto } from '../services/media';
+import { pickPhoto, uploadPhoto, type PickedPhoto } from '../services/media';
 import { AgentMap, type TrackPoint } from '../components/AgentMap';
 import type { PositionSample } from '../shared/contracts';
 
@@ -68,6 +70,8 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
   const [broadcasts, setBroadcasts] = useState<BroadcastMessage[]>([]);
   const [uploading, setUploading] = useState(false);
   const [headingUp, setHeadingUp] = useState(false);
+  const [pendingPhoto, setPendingPhoto] = useState<PickedPhoto | null>(null);
+  const [caption, setCaption] = useState('');
 
   useEffect(() => {
     connectMqtt(session.token, agentId);
@@ -113,12 +117,31 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
     onLogout();
   }
 
-  async function handleSendPhoto() {
+  async function handleTakePhoto() {
     if (!operationId || uploading) return;
+    try {
+      const photo = await pickPhoto();
+      if (photo) {
+        setCaption('');
+        setPendingPhoto(photo); // abre o modal de composição
+      }
+    } catch (e) {
+      Alert.alert('Falha', e instanceof Error ? e.message : 'Não foi possível abrir a câmera.');
+    }
+  }
+
+  async function handleConfirmUpload() {
+    if (!operationId || !pendingPhoto || uploading) return;
     setUploading(true);
     try {
-      const sent = await captureAndUploadPhoto(operationId, session.token);
-      if (sent) Alert.alert('Mídia enviada', 'Foto enviada à central.');
+      await uploadPhoto(operationId, session.token, pendingPhoto, {
+        caption,
+        lat: pos?.lat ?? null, // geotag = posição atual do agente (se disponível)
+        lng: pos?.lng ?? null,
+      });
+      setPendingPhoto(null);
+      setCaption('');
+      Alert.alert('Mídia enviada', 'Foto enviada à central.');
     } catch (e) {
       Alert.alert('Falha', e instanceof Error ? e.message : 'Não foi possível enviar a foto.');
     } finally {
@@ -203,12 +226,10 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
 
         <TouchableOpacity
           style={[styles.photoBtn, (uploading || !operationId) && styles.photoBtnDisabled]}
-          onPress={handleSendPhoto}
+          onPress={handleTakePhoto}
           disabled={uploading || !operationId}
         >
-          <Text style={styles.photoBtnText}>
-            {uploading ? 'Enviando foto…' : '📷 Enviar foto à central'}
-          </Text>
+          <Text style={styles.photoBtnText}>📷 Enviar foto à central</Text>
         </TouchableOpacity>
 
         <View style={styles.card}>
@@ -296,6 +317,53 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
           </View>
         </View>
       </Modal>
+
+      <Modal
+        visible={pendingPhoto !== null}
+        animationType="slide"
+        transparent
+        onRequestClose={() => !uploading && setPendingPhoto(null)}
+      >
+        <View style={styles.composeBackdrop}>
+          <View style={styles.composeCard}>
+            <Text style={styles.label}>Enviar foto à central</Text>
+            {pendingPhoto && (
+              <Image source={{ uri: pendingPhoto.uri }} style={styles.composePreview} />
+            )}
+            <TextInput
+              style={styles.captionInput}
+              placeholder="Legenda (opcional)…"
+              placeholderTextColor="#8b9aa8"
+              value={caption}
+              onChangeText={setCaption}
+              multiline
+              maxLength={500}
+              editable={!uploading}
+            />
+            <Text style={styles.geotagHint}>
+              {pos
+                ? `📍 Geotag: ${pos.lat.toFixed(5)}, ${pos.lng.toFixed(5)}`
+                : '📍 Sem posição — ligue o reporte para geotag'}
+            </Text>
+            <View style={styles.composeActions}>
+              <TouchableOpacity
+                onPress={() => setPendingPhoto(null)}
+                disabled={uploading}
+                style={styles.composeCancel}
+              >
+                <Text style={styles.composeCancelText}>Cancelar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={handleConfirmUpload}
+                disabled={uploading}
+                style={[styles.composeSend, uploading && styles.photoBtnDisabled]}
+              >
+                <Text style={styles.photoBtnText}>{uploading ? 'Enviando…' : 'Enviar'}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </>
   );
 }
@@ -354,6 +422,48 @@ const styles = StyleSheet.create({
   },
   photoBtnDisabled: { opacity: 0.5 },
   photoBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
+  composeBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    justifyContent: 'flex-end',
+  },
+  composeCard: {
+    backgroundColor: '#141b24',
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    padding: 20,
+    paddingBottom: 32,
+  },
+  composePreview: {
+    width: '100%',
+    height: 220,
+    borderRadius: 8,
+    marginTop: 12,
+    backgroundColor: '#0b0f14',
+  },
+  captionInput: {
+    marginTop: 12,
+    minHeight: 44,
+    maxHeight: 120,
+    backgroundColor: '#0b0f14',
+    borderColor: '#263543',
+    borderWidth: 1,
+    borderRadius: 8,
+    padding: 12,
+    color: '#e6edf3',
+    fontSize: 15,
+  },
+  geotagHint: { color: '#8b9aa8', fontSize: 13, marginTop: 10 },
+  composeActions: { flexDirection: 'row', gap: 12, marginTop: 20 },
+  composeCancel: { flex: 1, alignItems: 'center', padding: 14 },
+  composeCancelText: { color: '#8b9aa8', fontWeight: '700', fontSize: 16 },
+  composeSend: {
+    flex: 2,
+    alignItems: 'center',
+    padding: 14,
+    backgroundColor: '#c1121f',
+    borderRadius: 12,
+  },
   percursoActions: { flexDirection: 'row', alignItems: 'center', gap: 16 },
   expandIcon: { color: '#8b9aa8', fontSize: 22, fontWeight: '700' },
   modalContainer: { flex: 1, backgroundColor: '#0b0f14', paddingTop: 44 },

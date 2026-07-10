@@ -32,6 +32,7 @@ export default function LiveOperationPage() {
 
   // Mídia (fotos) enviadas pelos agentes.
   const [mediaMsgs, setMediaMsgs] = useState<TacticalMessage[]>([]);
+  const [lightbox, setLightbox] = useState<TacticalMessage | null>(null);
 
   // Snapshot inicial (última posição conhecida) via REST + stream ao vivo via MQTT.
   useEffect(() => {
@@ -123,6 +124,20 @@ export default function LiveOperationPage() {
   }, [operationId, router]);
 
   const agentList = useMemo(() => Object.values(agents), [agents]);
+
+  const mediaMarkers = useMemo(
+    () =>
+      mediaMsgs
+        .filter((m) => m.lat != null && m.lng != null)
+        .map((m) => ({
+          id: m.id,
+          lat: m.lat as number,
+          lng: m.lng as number,
+          senderId: m.senderId,
+          caption: m.text,
+        })),
+    [mediaMsgs],
+  );
 
   async function sendBroadcast() {
     const text = broadcastText.trim();
@@ -245,12 +260,14 @@ export default function LiveOperationPage() {
                     key={m.id}
                     path={api.mediaPath(operationId, m.mediaRef!)}
                     alt={`Mídia de ${m.senderId}`}
+                    onClick={() => setLightbox(m)}
                     style={{
                       width: '100%',
                       height: 64,
                       objectFit: 'cover',
                       borderRadius: 6,
                       background: 'var(--border)',
+                      cursor: 'pointer',
                     }}
                   />
                 ))}
@@ -279,9 +296,79 @@ export default function LiveOperationPage() {
         </aside>
 
         <main style={{ flex: 1, minWidth: 0 }}>
-          <LiveMap agents={agents} trails={trails} showTrails={showTrails} />
+          <LiveMap
+            agents={agents}
+            trails={trails}
+            showTrails={showTrails}
+            mediaMarkers={mediaMarkers}
+            onMediaClick={(id) => setLightbox(mediaMsgs.find((m) => m.id === id) ?? null)}
+          />
         </main>
       </div>
+
+      {lightbox && (
+        <div
+          onClick={() => setLightbox(null)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.85)',
+            display: 'grid',
+            placeItems: 'center',
+            zIndex: 1000,
+            padding: 24,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: '92vw' }}
+          >
+            <AuthImage
+              path={api.mediaPath(operationId, lightbox.mediaRef!)}
+              alt={lightbox.text ?? 'mídia'}
+              style={{
+                maxWidth: '92vw',
+                maxHeight: '80vh',
+                objectFit: 'contain',
+                borderRadius: 8,
+                background: '#141b24',
+              }}
+            />
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                gap: 16,
+                color: '#fff',
+              }}
+            >
+              <div style={{ fontSize: 14 }}>
+                {lightbox.text && <div>{lightbox.text}</div>}
+                <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
+                  {lightbox.senderId}
+                  {lightbox.lat != null &&
+                    ` · 📍 ${lightbox.lat.toFixed(5)}, ${lightbox.lng?.toFixed(5)}`}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setLightbox(null)}
+                className="badge"
+                style={{
+                  cursor: 'pointer',
+                  border: '1px solid var(--border)',
+                  background: 'transparent',
+                  color: '#fff',
+                  flexShrink: 0,
+                }}
+              >
+                Fechar ✕
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

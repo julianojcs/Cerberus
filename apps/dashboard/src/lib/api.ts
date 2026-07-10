@@ -41,6 +41,8 @@ export interface TacticalMessage {
   type: string; // 'text' | 'media' | 'broadcast'
   text?: string;
   mediaRef?: string;
+  lat?: number; // geotag da mídia (onde a foto foi capturada)
+  lng?: number;
   capturedAt: string;
 }
 
