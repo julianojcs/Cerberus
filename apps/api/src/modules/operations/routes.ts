@@ -1,17 +1,33 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { OperationStatus, OperationType, Role, type AuthClaims } from '@cerberus/shared';
-import { Operation } from '../../models/index.js';
+import { Operation, User } from '../../models/index.js';
+import { assertOperationScope } from '../scope.js';
+
+const operationTypes = Object.values(OperationType) as [string, ...string[]];
+const operationStatuses = Object.values(OperationStatus) as [string, ...string[]];
 
 const createOperationSchema = z.object({
   name: z.string().min(1),
-  type: z.enum(Object.values(OperationType) as [string, ...string[]]),
-  status: z.enum(Object.values(OperationStatus) as [string, ...string[]]).optional(),
+  type: z.enum(operationTypes),
+  status: z.enum(operationStatuses).optional(),
 });
+
+/** Atualização parcial — pelo menos um campo deve ser enviado. */
+const updateOperationSchema = z
+  .object({
+    name: z.string().min(1),
+    type: z.enum(operationTypes),
+    status: z.enum(operationStatuses),
+  })
+  .partial();
+
+const memberSchema = z.object({ userId: z.string().min(1) });
 
 /**
  * CRUD de operações (missões). Cada operação é uma fronteira de isolamento
- * multitenant. Listagem e leitura são sempre filtradas pelo escopo do token.
+ * multitenant. Listagem e leitura são sempre filtradas pelo escopo do token;
+ * escrita e gestão de membros exigem papel de administração central.
  */
 export async function operationRoutes(app: FastifyInstance): Promise<void> {
   // Lista apenas as operações dentro do escopo do usuário.
@@ -23,10 +39,7 @@ export async function operationRoutes(app: FastifyInstance): Promise<void> {
 
   app.get('/operations/:id', { onRequest: [app.authenticate] }, async (request, reply) => {
     const { id } = request.params as { id: string };
-    const claims = request.user as AuthClaims;
-    if (!claims.operationIds.includes(id)) {
-      return reply.code(403).send({ error: 'Operação fora do escopo autorizado' });
-    }
+    if (!assertOperationScope(request, reply, id)) return;
     const op = await Operation.findById(id);
     if (!op) return reply.code(404).send({ error: 'Operação não encontrada' });
     return serialize(op);
@@ -40,6 +53,71 @@ export async function operationRoutes(app: FastifyInstance): Promise<void> {
     const op = await Operation.create({ ...body.data, createdBy: claims.sub });
     return reply.code(201).send(serialize(op));
   });
+
+  // Atualiza uma operação (admin + escopo).
+  app.patch(
+    '/operations/:id',
+    { onRequest: [app.requireRole(Role.ADMIN)] },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      if (!assertOperationScope(request, reply, id)) return;
+      const body = updateOperationSchema.safeParse(request.body);
+      if (!body.success || Object.keys(body.data).length === 0) {
+        return reply.code(400).send({ error: 'Dados inválidos' });
+      }
+      const op = await Operation.findByIdAndUpdate(id, { $set: body.data }, { new: true });
+      if (!op) return reply.code(404).send({ error: 'Operação não encontrada' });
+      return serialize(op);
+    },
+  );
+
+  // Lista os usuários no escopo da operação (admin + escopo).
+  app.get(
+    '/operations/:id/members',
+    { onRequest: [app.requireRole(Role.ADMIN)] },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      if (!assertOperationScope(request, reply, id)) return;
+      const users = await User.find({ operationIds: id }).lean();
+      return users.map(serializeMember);
+    },
+  );
+
+  // Atribui um usuário à operação — adiciona a operação ao escopo do usuário.
+  app.post(
+    '/operations/:id/members',
+    { onRequest: [app.requireRole(Role.ADMIN)] },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      if (!assertOperationScope(request, reply, id)) return;
+      const body = memberSchema.safeParse(request.body);
+      if (!body.success) return reply.code(400).send({ error: 'Dados inválidos' });
+      const user = await User.findByIdAndUpdate(
+        body.data.userId,
+        { $addToSet: { operationIds: id } },
+        { new: true },
+      );
+      if (!user) return reply.code(404).send({ error: 'Usuário não encontrado' });
+      return reply.code(201).send(serializeMember(user));
+    },
+  );
+
+  // Remove um usuário do escopo da operação (admin + escopo).
+  app.delete(
+    '/operations/:id/members/:userId',
+    { onRequest: [app.requireRole(Role.ADMIN)] },
+    async (request, reply) => {
+      const { id, userId } = request.params as { id: string; userId: string };
+      if (!assertOperationScope(request, reply, id)) return;
+      const user = await User.findByIdAndUpdate(
+        userId,
+        { $pull: { operationIds: id } },
+        { new: true },
+      );
+      if (!user) return reply.code(404).send({ error: 'Usuário não encontrado' });
+      return reply.code(204).send();
+    },
+  );
 }
 
 function serialize(op: InstanceType<typeof Operation>) {
@@ -49,5 +127,21 @@ function serialize(op: InstanceType<typeof Operation>) {
     type: op.type,
     status: op.status,
     createdAt: (op as unknown as { createdAt: Date }).createdAt?.toISOString(),
+  };
+}
+
+function serializeMember(u: {
+  _id: unknown;
+  username: string;
+  name: string;
+  role: string;
+  agentId?: string | null;
+}) {
+  return {
+    id: String(u._id),
+    username: u.username,
+    name: u.name,
+    role: u.role,
+    agentId: u.agentId ?? undefined,
   };
 }

@@ -12,6 +12,8 @@ let mongod: MongoMemoryServer;
 let app: FastifyInstance;
 let operationId: string;
 let token: string;
+let agentToken: string;
+let assignUserId: string;
 
 beforeAll(async () => {
   mongod = await MongoMemoryServer.create();
@@ -35,6 +37,31 @@ beforeAll(async () => {
     role: 'admin',
     operationIds: [op._id],
   });
+
+  await User.create({
+    username: 'agente01',
+    name: 'Agente de Campo',
+    passwordHash: await bcrypt.hash('cerberus123', 10),
+    role: 'agente',
+    agentId: 'AG-0456',
+    operationIds: [op._id],
+  });
+  const outsider = await User.create({
+    username: 'agente02',
+    name: 'Agente Reserva',
+    passwordHash: await bcrypt.hash('cerberus123', 10),
+    role: 'agente',
+    agentId: 'AG-0457',
+    operationIds: [],
+  });
+  assignUserId = String(outsider._id);
+
+  const agentLogin = await app.inject({
+    method: 'POST',
+    url: '/auth/login',
+    payload: { username: 'agente01', password: 'cerberus123' },
+  });
+  agentToken = agentLogin.json().token;
 
   await Position.create({
     operationId,
@@ -111,5 +138,74 @@ describe('rotas escopadas por operação', () => {
       url: `/operations/${operationId}/positions/latest`,
     });
     expect(res.statusCode).toBe(401);
+  });
+});
+
+describe('gestão de operações (admin)', () => {
+  it('admin atualiza o status da operação (PATCH)', async () => {
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/operations/${operationId}`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { status: 'encerrada' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().status).toBe('encerrada');
+  });
+
+  it('agente (não-admin) recebe 403 no PATCH', async () => {
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/operations/${operationId}`,
+      headers: { authorization: `Bearer ${agentToken}` },
+      payload: { status: 'ativa' },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('admin atribui um usuário à operação e ele aparece nos membros', async () => {
+    const add = await app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/members`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { userId: assignUserId },
+    });
+    expect(add.statusCode).toBe(201);
+
+    const list = await app.inject({
+      method: 'GET',
+      url: `/operations/${operationId}/members`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(list.statusCode).toBe(200);
+    const usernames = (list.json() as Array<{ username: string }>).map((u) => u.username);
+    expect(usernames).toContain('agente02');
+  });
+
+  it('admin remove o usuário da operação (DELETE)', async () => {
+    const del = await app.inject({
+      method: 'DELETE',
+      url: `/operations/${operationId}/members/${assignUserId}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(del.statusCode).toBe(204);
+
+    const list = await app.inject({
+      method: 'GET',
+      url: `/operations/${operationId}/members`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const usernames = (list.json() as Array<{ username: string }>).map((u) => u.username);
+    expect(usernames).not.toContain('agente02');
+  });
+
+  it('bloqueia operação fora do escopo com 403', async () => {
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/operations/000000000000000000000000',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { status: 'ativa' },
+    });
+    expect(res.statusCode).toBe(403);
   });
 });
