@@ -3,11 +3,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
-import { api, type LatestPosition } from '@/lib/api';
+import { api, type LatestPosition, type TacticalMessage } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import { subscribeToOperation, type LivePosition } from '@/lib/mqtt';
 import { LiveMap, type AgentPoint, type AgentTrails } from '@/components/LiveMap';
 import { Toggle } from '@/components/Toggle';
+import { AuthImage } from '@/components/AuthImage';
 
 /** Máximo de pontos por agente na trilha (limita memória/render). */
 const MAX_TRAIL = 500;
@@ -28,6 +29,9 @@ export default function LiveOperationPage() {
   const [broadcastText, setBroadcastText] = useState('');
   const [sending, setSending] = useState(false);
   const [broadcastMsg, setBroadcastMsg] = useState<string | null>(null);
+
+  // Mídia (fotos) enviadas pelos agentes.
+  const [mediaMsgs, setMediaMsgs] = useState<TacticalMessage[]>([]);
 
   // Snapshot inicial (última posição conhecida) via REST + stream ao vivo via MQTT.
   useEffect(() => {
@@ -76,6 +80,16 @@ export default function LiveOperationPage() {
         /* sem histórico ainda */
       });
 
+    // Mídia: carrega o histórico e faz um polling leve (o painel não assina o
+    // canal de broadcast; refaz a cada 15s para refletir novas fotos).
+    const loadMedia = () =>
+      api
+        .messages(operationId)
+        .then((msgs) => setMediaMsgs(msgs.filter((m) => m.type === 'media' && !!m.mediaRef)))
+        .catch(() => {});
+    void loadMedia();
+    const mediaTimer = setInterval(loadMedia, 15000);
+
     const unsubscribe = subscribeToOperation(
       operationId,
       (pos: LivePosition) => {
@@ -102,7 +116,10 @@ export default function LiveOperationPage() {
       getToken() ?? undefined,
     );
 
-    return unsubscribe;
+    return () => {
+      clearInterval(mediaTimer);
+      unsubscribe();
+    };
   }, [operationId, router]);
 
   const agentList = useMemo(() => Object.values(agents), [agents]);
@@ -208,6 +225,35 @@ export default function LiveOperationPage() {
               </div>
             )}
           </div>
+
+          {mediaMsgs.length > 0 && (
+            <div className="card" style={{ padding: 12, marginBottom: 16 }}>
+              <strong style={{ fontSize: 14 }}>Mídia da operação ({mediaMsgs.length})</strong>
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(3, 1fr)',
+                  gap: 6,
+                  marginTop: 8,
+                }}
+              >
+                {mediaMsgs.map((m) => (
+                  <AuthImage
+                    key={m.id}
+                    path={api.mediaPath(operationId, m.mediaRef!)}
+                    alt={`Mídia de ${m.senderId}`}
+                    style={{
+                      width: '100%',
+                      height: 64,
+                      objectFit: 'cover',
+                      borderRadius: 6,
+                      background: 'var(--border)',
+                    }}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
 
           <h3 style={{ marginTop: 0 }}>Agentes ({agentList.length})</h3>
           {agentList.length === 0 && (

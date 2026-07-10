@@ -1,7 +1,14 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import bcrypt from 'bcryptjs';
+import FormData from 'form-data';
 import type { FastifyInstance } from 'fastify';
+
+// PNG 1x1 transparente (fixture binária mínima para os testes de mídia).
+const PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQDJ/pLvAAAAAElFTkSuQmCC',
+  'base64',
+);
 
 /**
  * Testes de integração das rotas Fastify via `app.inject()` (sem abrir portas
@@ -610,5 +617,69 @@ describe('isolamento multitenant (Zero Trust)', () => {
     const texts = (msgs.json() as Array<{ text: string }>).map((m) => m.text);
     expect(texts).toContain('Bravo: perímetro seguro.');
     expect(texts).not.toContain('Alvo avistado.'); // mensagem da operação A não vaza
+  });
+});
+
+describe('mídia (GridFS)', () => {
+  let mediaRef: string;
+
+  it('agente faz upload de foto (POST /media) → 201, tipo media', async () => {
+    const form = new FormData();
+    form.append('file', PNG, { filename: 'foto.png', contentType: 'image/png' });
+    const res = await app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/media`,
+      headers: { ...form.getHeaders(), authorization: `Bearer ${agentToken}` },
+      payload: form.getBuffer(),
+    });
+    expect(res.statusCode).toBe(201);
+    const body = res.json();
+    expect(body.type).toBe('media');
+    expect(body.mediaRef).toBeTruthy();
+    mediaRef = body.mediaRef;
+  });
+
+  it('faz stream do binário (GET /media/:fileId) → 200 image/png', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/operations/${operationId}/media/${mediaRef}`,
+      headers: { authorization: `Bearer ${agentToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toContain('image/png');
+    expect(res.rawPayload.length).toBe(PNG.length);
+  });
+
+  it('rejeita tipo não suportado (415)', async () => {
+    const form = new FormData();
+    form.append('file', Buffer.from('texto'), { filename: 'a.txt', contentType: 'text/plain' });
+    const res = await app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/media`,
+      headers: { ...form.getHeaders(), authorization: `Bearer ${agentToken}` },
+      payload: form.getBuffer(),
+    });
+    expect(res.statusCode).toBe(415);
+  });
+
+  it('bloqueia upload em operação fora do escopo (403)', async () => {
+    const form = new FormData();
+    form.append('file', PNG, { filename: 'foto.png', contentType: 'image/png' });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/operations/000000000000000000000000/media',
+      headers: { ...form.getHeaders(), authorization: `Bearer ${agentToken}` },
+      payload: form.getBuffer(),
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('mídia inexistente na operação → 404', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/operations/${operationId}/media/000000000000000000000000`,
+      headers: { authorization: `Bearer ${agentToken}` },
+    });
+    expect(res.statusCode).toBe(404);
   });
 });

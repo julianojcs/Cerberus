@@ -1,5 +1,14 @@
 import { useEffect, useState } from 'react';
-import { Modal, ScrollView, StyleSheet, Switch, Text, TouchableOpacity, View } from 'react-native';
+import {
+  Alert,
+  Modal,
+  ScrollView,
+  StyleSheet,
+  Switch,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 import type { Session } from '../services/auth';
 import {
   connectMqtt,
@@ -16,6 +25,7 @@ import {
   subscribePositions,
 } from '../services/geolocation';
 import { outboxSize } from '../services/outbox';
+import { captureAndUploadPhoto } from '../services/media';
 import { AgentMap, type TrackPoint } from '../components/AgentMap';
 import type { PositionSample } from '../shared/contracts';
 
@@ -56,6 +66,7 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
   const [scrollEnabled, setScrollEnabled] = useState(true);
   const [fullscreen, setFullscreen] = useState(false);
   const [broadcasts, setBroadcasts] = useState<BroadcastMessage[]>([]);
+  const [uploading, setUploading] = useState(false);
 
   useEffect(() => {
     connectMqtt(session.token, agentId);
@@ -99,6 +110,19 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
     void stopTracking();
     disconnectMqtt();
     onLogout();
+  }
+
+  async function handleSendPhoto() {
+    if (!operationId || uploading) return;
+    setUploading(true);
+    try {
+      const sent = await captureAndUploadPhoto(operationId, session.token);
+      if (sent) Alert.alert('Mídia enviada', 'Foto enviada à central.');
+    } catch (e) {
+      Alert.alert('Falha', e instanceof Error ? e.message : 'Não foi possível enviar a foto.');
+    } finally {
+      setUploading(false);
+    }
   }
 
   return (
@@ -175,6 +199,16 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
             </Text>
           )}
         </View>
+
+        <TouchableOpacity
+          style={[styles.photoBtn, (uploading || !operationId) && styles.photoBtnDisabled]}
+          onPress={handleSendPhoto}
+          disabled={uploading || !operationId}
+        >
+          <Text style={styles.photoBtnText}>
+            {uploading ? 'Enviando foto…' : '📷 Enviar foto à central'}
+          </Text>
+        </TouchableOpacity>
 
         <View style={styles.card}>
           <Text style={styles.label}>Mensagens da central</Text>
@@ -287,6 +321,15 @@ const styles = StyleSheet.create({
   },
   broadcastText: { color: '#e6edf3', fontSize: 15, lineHeight: 20 },
   broadcastMeta: { color: '#8b9aa8', fontSize: 12, marginTop: 2 },
+  photoBtn: {
+    marginTop: 24,
+    backgroundColor: '#c1121f',
+    borderRadius: 12,
+    padding: 16,
+    alignItems: 'center',
+  },
+  photoBtnDisabled: { opacity: 0.5 },
+  photoBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
   percursoActions: { flexDirection: 'row', alignItems: 'center', gap: 16 },
   expandIcon: { color: '#8b9aa8', fontSize: 22, fontWeight: '700' },
   modalContainer: { flex: 1, backgroundColor: '#0b0f14', paddingTop: 44 },
