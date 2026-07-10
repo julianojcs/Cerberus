@@ -50,4 +50,36 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   app.get('/auth/me', { onRequest: [app.authenticate] }, async (request) => {
     return request.user;
   });
+
+  /**
+   * Re-emite o JWT com o escopo atual do usuário no banco. Necessário quando o
+   * escopo muda em sessão (ex.: admin cria/entra numa operação) — o token antigo
+   * é um snapshot do login e não reflete a mudança até um refresh.
+   */
+  app.post('/auth/refresh', { onRequest: [app.authenticate] }, async (request, reply) => {
+    const current = request.user as AuthClaims;
+    const user = await User.findById(current.sub);
+    if (!user) return reply.code(401).send({ error: 'Usuário não encontrado' });
+
+    const operationIds = (user.operationIds ?? []).map((id) => String(id));
+    const claims: AuthClaims = {
+      sub: String(user._id),
+      role: user.role as Role,
+      agentId: user.agentId ?? undefined,
+      operationIds,
+    };
+
+    const token = app.jwt.sign(claims);
+    return reply.send({
+      token,
+      user: {
+        id: String(user._id),
+        username: user.username,
+        name: user.name,
+        role: user.role,
+        agentId: user.agentId ?? undefined,
+        operationIds,
+      },
+    });
+  });
 }

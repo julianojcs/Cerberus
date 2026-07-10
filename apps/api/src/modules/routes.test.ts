@@ -208,6 +208,43 @@ describe('gestão de operações (admin)', () => {
     });
     expect(res.statusCode).toBe(403);
   });
+
+  it('criador entra no escopo após /auth/refresh (resolve o deadlock)', async () => {
+    const create = await app.inject({
+      method: 'POST',
+      url: '/operations',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'Op Criada', type: 'mandado' },
+    });
+    expect(create.statusCode).toBe(201);
+    const newOpId = create.json().id;
+
+    // Token antigo ainda não tem a nova operação no escopo.
+    const before = await app.inject({
+      method: 'GET',
+      url: `/operations/${newOpId}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(before.statusCode).toBe(403);
+
+    // Refresh re-emite o token com o escopo atualizado do banco.
+    const refreshed = await app.inject({
+      method: 'POST',
+      url: '/auth/refresh',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(refreshed.statusCode).toBe(200);
+    const newToken = refreshed.json().token;
+    expect(refreshed.json().user.operationIds).toContain(newOpId);
+
+    // Agora consegue acessar/gerenciar a operação criada.
+    const after = await app.inject({
+      method: 'GET',
+      url: `/operations/${newOpId}`,
+      headers: { authorization: `Bearer ${newToken}` },
+    });
+    expect(after.statusCode).toBe(200);
+  });
 });
 
 describe('provisionamento de usuários (admin)', () => {
