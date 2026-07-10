@@ -428,6 +428,59 @@ describe('mensagens táticas (texto)', () => {
   });
 });
 
+describe('broadcast da central (admin → agentes)', () => {
+  it('admin emite broadcast (POST /broadcast) persistido como tipo broadcast', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/broadcast`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { text: 'CENTRAL: recolher ao ponto de encontro.' },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().type).toBe('broadcast');
+
+    const hist = await app.inject({
+      method: 'GET',
+      url: `/operations/${operationId}/messages`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const broadcast = (hist.json() as Array<{ type: string; text: string }>).find(
+      (m) => m.type === 'broadcast',
+    );
+    expect(broadcast?.text).toBe('CENTRAL: recolher ao ponto de encontro.');
+  });
+
+  it('agente (não-admin) não pode emitir broadcast (403)', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/broadcast`,
+      headers: { authorization: `Bearer ${agentToken}` },
+      payload: { text: 'tentativa indevida' },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('bloqueia broadcast em operação fora do escopo (403)', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/operations/000000000000000000000000/broadcast',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { text: 'fora do escopo' },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('rejeita broadcast com texto vazio (400)', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/broadcast`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { text: '' },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+});
+
 /**
  * Núcleo Zero Trust: um portador escopado à operação A não pode ler nem escrever
  * dados de uma operação B REAL (com dados reais), e vice-versa. Prova as duas

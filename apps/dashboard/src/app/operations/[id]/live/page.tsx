@@ -24,6 +24,11 @@ export default function LiveOperationPage() {
   const lastUpdateRef = useRef<Record<string, string>>({});
   const [, forceTick] = useState(0);
 
+  // Composer de broadcast (central → agentes).
+  const [broadcastText, setBroadcastText] = useState('');
+  const [sending, setSending] = useState(false);
+  const [broadcastMsg, setBroadcastMsg] = useState<string | null>(null);
+
   // Snapshot inicial (última posição conhecida) via REST + stream ao vivo via MQTT.
   useEffect(() => {
     if (!getToken()) {
@@ -102,6 +107,22 @@ export default function LiveOperationPage() {
 
   const agentList = useMemo(() => Object.values(agents), [agents]);
 
+  async function sendBroadcast() {
+    const text = broadcastText.trim();
+    if (!text) return;
+    setSending(true);
+    setBroadcastMsg(null);
+    try {
+      await api.broadcast(operationId, text);
+      setBroadcastText('');
+      setBroadcastMsg('Broadcast enviado ✓');
+    } catch (e) {
+      setBroadcastMsg(e instanceof Error ? e.message : 'Falha ao enviar');
+    } finally {
+      setSending(false);
+    }
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
       <div className="topbar">
@@ -136,6 +157,58 @@ export default function LiveOperationPage() {
             overflowY: 'auto',
           }}
         >
+          <div className="card" style={{ padding: 12, marginBottom: 16 }}>
+            <strong style={{ fontSize: 14 }}>Broadcast à operação</strong>
+            <p className="muted" style={{ fontSize: 12, margin: '4px 0 8px' }}>
+              Diretiva da central para todos os agentes.
+            </p>
+            <textarea
+              value={broadcastText}
+              onChange={(e) => setBroadcastText(e.target.value)}
+              placeholder="Ex.: Recolher ao ponto de encontro."
+              rows={3}
+              onKeyDown={(e) => {
+                if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') void sendBroadcast();
+              }}
+              style={{
+                width: '100%',
+                resize: 'vertical',
+                background: 'var(--bg, #0b0f14)',
+                color: 'var(--text, #e6edf3)',
+                border: '1px solid var(--border)',
+                borderRadius: 8,
+                padding: 8,
+                fontSize: 13,
+                fontFamily: 'inherit',
+                boxSizing: 'border-box',
+              }}
+            />
+            <button
+              type="button"
+              onClick={() => void sendBroadcast()}
+              disabled={sending || !broadcastText.trim()}
+              style={{
+                marginTop: 8,
+                width: '100%',
+                padding: '8px 0',
+                borderRadius: 8,
+                border: 'none',
+                background: '#c1121f',
+                color: '#fff',
+                fontWeight: 700,
+                cursor: sending || !broadcastText.trim() ? 'not-allowed' : 'pointer',
+                opacity: sending || !broadcastText.trim() ? 0.5 : 1,
+              }}
+            >
+              {sending ? 'Enviando…' : 'Enviar broadcast'}
+            </button>
+            {broadcastMsg && (
+              <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+                {broadcastMsg}
+              </div>
+            )}
+          </div>
+
           <h3 style={{ marginTop: 0 }}>Agentes ({agentList.length})</h3>
           {agentList.length === 0 && (
             <p className="muted" style={{ fontSize: 14 }}>

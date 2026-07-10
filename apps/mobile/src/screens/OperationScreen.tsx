@@ -1,7 +1,13 @@
 import { useEffect, useState } from 'react';
 import { Modal, ScrollView, StyleSheet, Switch, Text, TouchableOpacity, View } from 'react-native';
 import type { Session } from '../services/auth';
-import { connectMqtt, disconnectMqtt, isConnected } from '../services/mqtt';
+import {
+  connectMqtt,
+  disconnectMqtt,
+  isConnected,
+  subscribeBroadcast,
+  type BroadcastMessage,
+} from '../services/mqtt';
 import {
   getLastSample,
   initTracking,
@@ -49,6 +55,7 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
   // receber os gestos de pinça/arraste (senão o ScrollView "rouba" o multitoque).
   const [scrollEnabled, setScrollEnabled] = useState(true);
   const [fullscreen, setFullscreen] = useState(false);
+  const [broadcasts, setBroadcasts] = useState<BroadcastMessage[]>([]);
 
   useEffect(() => {
     connectMqtt(session.token, agentId);
@@ -68,6 +75,14 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
       }),
     [],
   );
+
+  // Recebe diretivas da central (canal broadcast da operação).
+  useEffect(() => {
+    if (!operationId) return;
+    return subscribeBroadcast(operationId, (message) => {
+      setBroadcasts((prev) => [message, ...prev].slice(0, 20));
+    });
+  }, [operationId]);
 
   async function toggleTracking(value: boolean) {
     if (!operationId) return;
@@ -162,6 +177,22 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
         </View>
 
         <View style={styles.card}>
+          <Text style={styles.label}>Mensagens da central</Text>
+          {broadcasts.length === 0 ? (
+            <Text style={styles.hint}>Nenhuma diretiva recebida ainda.</Text>
+          ) : (
+            broadcasts.map((m, i) => (
+              <View key={`${m.capturedAt}-${i}`} style={styles.broadcastItem}>
+                <Text style={styles.broadcastText}>{m.text}</Text>
+                <Text style={styles.broadcastMeta}>
+                  {m.senderId} · {formatTime(m.capturedAt)}
+                </Text>
+              </View>
+            ))
+          )}
+        </View>
+
+        <View style={styles.card}>
           <View style={styles.row}>
             <Text style={styles.label}>Seu percurso</Text>
             <View style={styles.percursoActions}>
@@ -248,6 +279,14 @@ const styles = StyleSheet.create({
     marginTop: 12,
     backgroundColor: '#0b0f14',
   },
+  broadcastItem: {
+    marginTop: 12,
+    paddingLeft: 12,
+    borderLeftWidth: 3,
+    borderLeftColor: '#c1121f',
+  },
+  broadcastText: { color: '#e6edf3', fontSize: 15, lineHeight: 20 },
+  broadcastMeta: { color: '#8b9aa8', fontSize: 12, marginTop: 2 },
   percursoActions: { flexDirection: 'row', alignItems: 'center', gap: 16 },
   expandIcon: { color: '#8b9aa8', fontSize: 22, fontWeight: '700' },
   modalContainer: { flex: 1, backgroundColor: '#0b0f14', paddingTop: 44 },
