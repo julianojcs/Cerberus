@@ -1,0 +1,55 @@
+name: CI
+
+# Validação automática em PR (e em pushes para main).
+# Gates: build -> typecheck -> test (Vitest). Lint entra como informativo até o
+# ESLint do dashboard ser configurado (entrega da Fase 0 — issue #2).
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancela execuções antigas do mesmo ref quando um novo push chega.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Menor privilégio (alinhado à postura Zero Trust do projeto).
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: build · typecheck · test · lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # Workspaces: packages/*, apps/api, apps/dashboard.
+      # apps/mobile (Expo) roda fora do CI (build nativo via EAS).
+      - name: Install dependencies
+        run: npm ci
+
+      # turbo respeita a ordem de dependências (^build): compila @cerberus/shared
+      # antes das apps que o consomem.
+      - name: Build
+        run: npm run build
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test (Vitest)
+        run: npm run test
+
+      # TODO(#2): tornar bloqueante quando o ESLint estiver configurado no dashboard.
+      # Hoje `next lint` sem config de ESLint falharia; mantido informativo.
+      - name: Lint
+        run: npm run lint
+        continue-on-error: true
