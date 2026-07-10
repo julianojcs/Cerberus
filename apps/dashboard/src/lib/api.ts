@@ -8,7 +8,9 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(`${API_URL}${path}`, {
     ...init,
     headers: {
-      'Content-Type': 'application/json',
+      // Só declara JSON quando há corpo — senão o Fastify rejeita DELETE/GET sem
+      // corpo com 400 FST_ERR_CTP_EMPTY_JSON_BODY.
+      ...(init.body ? { 'Content-Type': 'application/json' } : {}),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(init.headers ?? {}),
     },
