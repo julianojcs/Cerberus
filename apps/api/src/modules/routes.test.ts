@@ -209,3 +209,118 @@ describe('gestão de operações (admin)', () => {
     expect(res.statusCode).toBe(403);
   });
 });
+
+describe('provisionamento de usuários (admin)', () => {
+  let newUserId: string;
+
+  it('admin cria um agente (POST /users) sem expor passwordHash', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/users',
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        username: 'agente99',
+        name: 'Agente Novo',
+        password: 'senha123',
+        role: 'agente',
+        agentId: 'AG-0099',
+      },
+    });
+    expect(res.statusCode).toBe(201);
+    const created = res.json();
+    newUserId = created.id;
+    expect(created.username).toBe('agente99');
+    expect(created.role).toBe('agente');
+    expect(created).not.toHaveProperty('passwordHash');
+  });
+
+  it('o novo usuário consegue autenticar (senha corretamente hasheada)', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/auth/login',
+      payload: { username: 'agente99', password: 'senha123' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().token).toBeTruthy();
+  });
+
+  it('rejeita nome de usuário duplicado com 409', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/users',
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        username: 'agente99',
+        name: 'Duplicado',
+        password: 'senha123',
+        role: 'agente',
+        agentId: 'AG-0100',
+      },
+    });
+    expect(res.statusCode).toBe(409);
+  });
+
+  it('exige agentId para agentes (400)', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/users',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { username: 'semagente', name: 'Sem Agente', password: 'senha123', role: 'agente' },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('não-admin recebe 403 ao criar usuário', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/users',
+      headers: { authorization: `Bearer ${agentToken}` },
+      payload: {
+        username: 'xyz',
+        name: 'X',
+        password: 'senha123',
+        role: 'agente',
+        agentId: 'AG-1',
+      },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('lista usuários inclui o novo (GET /users)', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/users',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const usernames = (res.json() as Array<{ username: string }>).map((u) => u.username);
+    expect(usernames).toContain('agente99');
+  });
+
+  it('admin atualiza o nome (PATCH /users/:id)', async () => {
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/users/${newUserId}`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'Agente Renomeado' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().name).toBe('Agente Renomeado');
+  });
+
+  it('admin remove o usuário (DELETE /users/:id) e depois 404', async () => {
+    const del = await app.inject({
+      method: 'DELETE',
+      url: `/users/${newUserId}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(del.statusCode).toBe(204);
+
+    const get = await app.inject({
+      method: 'GET',
+      url: `/users/${newUserId}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(get.statusCode).toBe(404);
+  });
+});
