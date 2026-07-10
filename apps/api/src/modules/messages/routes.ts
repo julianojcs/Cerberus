@@ -130,8 +130,10 @@ function serialize(m: {
   type: string;
   text?: string | null;
   mediaRef?: string | null;
+  location?: { coordinates?: number[] } | null;
   capturedAt?: Date;
 }) {
+  const coords = m.location?.coordinates;
   return {
     id: String(m._id),
     operationId: m.operationId,
@@ -139,6 +141,8 @@ function serialize(m: {
     type: m.type,
     text: m.text ?? undefined,
     mediaRef: m.mediaRef ?? undefined,
+    lng: coords?.[0],
+    lat: coords?.[1],
     capturedAt: m.capturedAt?.toISOString?.() ?? m.capturedAt,
   };
 }

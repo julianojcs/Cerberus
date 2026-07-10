@@ -16,6 +16,15 @@ export interface AgentPoint {
 /** Trilha por agente, em ordem cronológica, no formato [lng, lat] do MapLibre. */
 export type AgentTrails = Record<string, [number, number][]>;
 
+/** Mídia geolocalizada plotada no mapa (pin de câmera). */
+export interface MediaMarker {
+  id: string;
+  lng: number;
+  lat: number;
+  senderId?: string;
+  caption?: string;
+}
+
 function toFeatureCollection(trails: AgentTrails): GeoJSON.FeatureCollection {
   return {
     type: 'FeatureCollection',
@@ -44,14 +53,21 @@ export function LiveMap({
   agents,
   trails = {},
   showTrails = true,
+  mediaMarkers = [],
+  onMediaClick,
 }: {
   agents: Record<string, AgentPoint>;
   trails?: AgentTrails;
   showTrails?: boolean;
+  mediaMarkers?: MediaMarker[];
+  onMediaClick?: (id: string) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MlMap | null>(null);
   const markersRef = useRef<Record<string, Marker>>({});
+  const mediaMarkersRef = useRef<Record<string, Marker>>({});
+  const onMediaClickRef = useRef(onMediaClick);
+  onMediaClickRef.current = onMediaClick;
   const fittedRef = useRef(false);
   const styleReadyRef = useRef(false);
   // Mantém a trilha/visibilidade correntes acessíveis ao handler de 'load'
@@ -156,6 +172,35 @@ export function LiveMap({
     if (!map || !styleReadyRef.current) return;
     map.setLayoutProperty('trails-line', 'visibility', showTrails ? 'visible' : 'none');
   }, [showTrails]);
+
+  // Sincroniza marcadores de mídia (fotos geolocalizadas) — pin de câmera clicável.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const seen = new Set<string>();
+    for (const m of mediaMarkers) {
+      seen.add(m.id);
+      let marker = mediaMarkersRef.current[m.id];
+      if (!marker) {
+        const el = document.createElement('div');
+        el.textContent = '📷';
+        el.title = m.caption || m.senderId || 'mídia';
+        el.style.cssText =
+          'cursor:pointer;font-size:15px;width:26px;height:26px;display:grid;place-items:center;background:#141b24;border:2px solid #c1121f;border-radius:50%;box-shadow:0 0 6px rgba(0,0,0,.5);';
+        el.addEventListener('click', () => onMediaClickRef.current?.(m.id));
+        marker = new maplibregl.Marker({ element: el }).setLngLat([m.lng, m.lat]).addTo(map);
+        mediaMarkersRef.current[m.id] = marker;
+      } else {
+        marker.setLngLat([m.lng, m.lat]);
+      }
+    }
+    for (const id of Object.keys(mediaMarkersRef.current)) {
+      if (!seen.has(id)) {
+        mediaMarkersRef.current[id].remove();
+        delete mediaMarkersRef.current[id];
+      }
+    }
+  }, [mediaMarkers]);
 
   return <div ref={containerRef} style={{ width: '100%', height: '100%' }} />;
 }

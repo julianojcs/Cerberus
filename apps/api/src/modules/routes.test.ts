@@ -623,8 +623,12 @@ describe('isolamento multitenant (Zero Trust)', () => {
 describe('mídia (GridFS)', () => {
   let mediaRef: string;
 
-  it('agente faz upload de foto (POST /media) → 201, tipo media', async () => {
+  it('agente faz upload de foto com legenda + geotag (POST /media) → 201', async () => {
     const form = new FormData();
+    // Campos de texto ANTES do arquivo (para o multipart populá-los em file.fields).
+    form.append('caption', 'Veículo suspeito na esquina.');
+    form.append('lng', '-43.9386');
+    form.append('lat', '-19.9319');
     form.append('file', PNG, { filename: 'foto.png', contentType: 'image/png' });
     const res = await app.inject({
       method: 'POST',
@@ -636,7 +640,24 @@ describe('mídia (GridFS)', () => {
     const body = res.json();
     expect(body.type).toBe('media');
     expect(body.mediaRef).toBeTruthy();
+    expect(body.text).toBe('Veículo suspeito na esquina.');
+    expect(body.lat).toBeCloseTo(-19.9319);
+    expect(body.lng).toBeCloseTo(-43.9386);
     mediaRef = body.mediaRef;
+  });
+
+  it('histórico traz a mídia com legenda + geotag', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/operations/${operationId}/messages`,
+      headers: { authorization: `Bearer ${agentToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const media = (res.json() as Array<{ type: string; text?: string; lat?: number }>).find(
+      (m) => m.type === 'media',
+    );
+    expect(media?.text).toBe('Veículo suspeito na esquina.');
+    expect(media?.lat).toBeCloseTo(-19.9319);
   });
 
   it('faz stream do binário (GET /media/:fileId) → 200 image/png', async () => {
