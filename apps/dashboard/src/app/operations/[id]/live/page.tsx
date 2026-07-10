@@ -3,7 +3,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
-import { api, type LatestPosition, type TacticalMessage } from '@/lib/api';
+import {
+  api,
+  type LatestPosition,
+  type TacticalMessage,
+  type Geofence,
+  type GeofenceAlert,
+} from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import { subscribeToOperation, type LivePosition } from '@/lib/mqtt';
 import { LiveMap, type AgentPoint, type AgentTrails } from '@/components/LiveMap';
@@ -33,6 +39,14 @@ export default function LiveOperationPage() {
   // Mídia (fotos) enviadas pelos agentes.
   const [mediaMsgs, setMediaMsgs] = useState<TacticalMessage[]>([]);
   const [lightbox, setLightbox] = useState<TacticalMessage | null>(null);
+
+  // Geofencing.
+  const [geofences, setGeofences] = useState<Geofence[]>([]);
+  const [alerts, setAlerts] = useState<GeofenceAlert[]>([]);
+  const [placing, setPlacing] = useState(false);
+  const [pendingCenter, setPendingCenter] = useState<{ lng: number; lat: number } | null>(null);
+  const [gfName, setGfName] = useState('');
+  const [gfRadius, setGfRadius] = useState('200');
 
   // Snapshot inicial (última posição conhecida) via REST + stream ao vivo via MQTT.
   useEffect(() => {
@@ -81,15 +95,24 @@ export default function LiveOperationPage() {
         /* sem histórico ainda */
       });
 
-    // Mídia: carrega o histórico e faz um polling leve (o painel não assina o
-    // canal de broadcast; refaz a cada 15s para refletir novas fotos).
-    const loadMedia = () =>
+    // Overlays (mídia + geofences + alertas): polling leve a cada 15s (o painel
+    // não assina o canal de broadcast).
+    const loadOverlays = () => {
       api
         .messages(operationId)
         .then((msgs) => setMediaMsgs(msgs.filter((m) => m.type === 'media' && !!m.mediaRef)))
         .catch(() => {});
-    void loadMedia();
-    const mediaTimer = setInterval(loadMedia, 15000);
+      api
+        .geofences(operationId)
+        .then(setGeofences)
+        .catch(() => {});
+      api
+        .alerts(operationId)
+        .then(setAlerts)
+        .catch(() => {});
+    };
+    void loadOverlays();
+    const overlayTimer = setInterval(loadOverlays, 15000);
 
     const unsubscribe = subscribeToOperation(
       operationId,
@@ -118,7 +141,7 @@ export default function LiveOperationPage() {
     );
 
     return () => {
-      clearInterval(mediaTimer);
+      clearInterval(overlayTimer);
       unsubscribe();
     };
   }, [operationId, router]);
@@ -154,6 +177,45 @@ export default function LiveOperationPage() {
       setSending(false);
     }
   }
+
+  async function handleCreateGeofence() {
+    const radius = Number(gfRadius);
+    if (!pendingCenter || !gfName.trim() || !Number.isFinite(radius) || radius < 1) return;
+    try {
+      await api.createGeofence(operationId, {
+        name: gfName.trim(),
+        lng: pendingCenter.lng,
+        lat: pendingCenter.lat,
+        radiusMeters: radius,
+      });
+      setPendingCenter(null);
+      setPlacing(false);
+      setGfName('');
+      setGeofences(await api.geofences(operationId));
+    } catch {
+      /* criação falhou (ex.: sem permissão) */
+    }
+  }
+
+  async function handleDeleteGeofence(gid: string) {
+    try {
+      await api.deleteGeofence(operationId, gid);
+      setGeofences((prev) => prev.filter((g) => g.id !== gid));
+    } catch {
+      /* remoção falhou */
+    }
+  }
+
+  const gfInputStyle: React.CSSProperties = {
+    width: '100%',
+    background: 'var(--bg, #0b0f14)',
+    color: 'var(--text, #e6edf3)',
+    border: '1px solid var(--border)',
+    borderRadius: 6,
+    padding: 8,
+    fontSize: 13,
+    boxSizing: 'border-box',
+  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
@@ -275,6 +337,122 @@ export default function LiveOperationPage() {
             </div>
           )}
 
+          <div className="card" style={{ padding: 12, marginBottom: 16 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <strong style={{ fontSize: 14 }}>Zonas ({geofences.length})</strong>
+              <button
+                type="button"
+                onClick={() => {
+                  setPlacing((p) => !p);
+                  setPendingCenter(null);
+                }}
+                className="badge"
+                style={{
+                  cursor: 'pointer',
+                  border: '1px solid var(--border)',
+                  background: placing ? '#3fb950' : 'transparent',
+                  color: placing ? '#0b0f14' : 'var(--muted)',
+                }}
+              >
+                {placing ? 'clique no mapa…' : '+ Nova'}
+              </button>
+            </div>
+            {pendingCenter && (
+              <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <input
+                  value={gfName}
+                  onChange={(e) => setGfName(e.target.value)}
+                  placeholder="Nome da zona"
+                  style={gfInputStyle}
+                />
+                <input
+                  type="number"
+                  value={gfRadius}
+                  onChange={(e) => setGfRadius(e.target.value)}
+                  placeholder="Raio (m)"
+                  style={gfInputStyle}
+                />
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button
+                    type="button"
+                    onClick={handleCreateGeofence}
+                    style={{
+                      flex: 1,
+                      padding: 8,
+                      borderRadius: 6,
+                      border: 'none',
+                      background: '#3fb950',
+                      color: '#0b0f14',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Criar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPendingCenter(null);
+                      setPlacing(false);
+                    }}
+                    className="badge"
+                    style={{
+                      cursor: 'pointer',
+                      border: '1px solid var(--border)',
+                      background: 'transparent',
+                    }}
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            )}
+            {geofences.map((g) => (
+              <div
+                key={g.id}
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  marginTop: 8,
+                  fontSize: 13,
+                }}
+              >
+                <span>
+                  🟢 {g.name} · {g.radiusMeters} m
+                </span>
+                <button
+                  type="button"
+                  onClick={() => handleDeleteGeofence(g.id)}
+                  title="Remover"
+                  style={{
+                    cursor: 'pointer',
+                    border: 'none',
+                    background: 'transparent',
+                    color: 'var(--muted)',
+                  }}
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+          </div>
+
+          {alerts.length > 0 && (
+            <div className="card" style={{ padding: 12, marginBottom: 16 }}>
+              <strong style={{ fontSize: 14 }}>Alertas ({alerts.length})</strong>
+              {alerts.slice(0, 12).map((a) => (
+                <div key={a.id} className="muted" style={{ fontSize: 13, marginTop: 6 }}>
+                  <span style={{ color: a.type === 'enter' ? 'var(--ok)' : '#e3b341' }}>
+                    {a.type === 'enter' ? '⊕' : '⊖'}
+                  </span>{' '}
+                  {a.agentId} {a.type === 'enter' ? 'entrou em' : 'saiu de'}{' '}
+                  <strong>{a.geofenceName}</strong>
+                </div>
+              ))}
+            </div>
+          )}
+
           <h3 style={{ marginTop: 0 }}>Agentes ({agentList.length})</h3>
           {agentList.length === 0 && (
             <p className="muted" style={{ fontSize: 14 }}>
@@ -302,6 +480,10 @@ export default function LiveOperationPage() {
             showTrails={showTrails}
             mediaMarkers={mediaMarkers}
             onMediaClick={(id) => setLightbox(mediaMsgs.find((m) => m.id === id) ?? null)}
+            geofences={geofences}
+            onMapClick={(lng, lat) => {
+              if (placing) setPendingCenter({ lng, lat });
+            }}
           />
         </main>
       </div>

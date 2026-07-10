@@ -13,6 +13,7 @@ import { positionRoutes } from './modules/positions/routes.js';
 import { userRoutes } from './modules/users/routes.js';
 import { messageRoutes } from './modules/messages/routes.js';
 import { mediaRoutes } from './modules/media/routes.js';
+import { geofenceRoutes } from './modules/geofences/routes.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -68,6 +69,7 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
   await app.register(positionRoutes);
   await app.register(messageRoutes);
   await app.register(mediaRoutes);
+  await app.register(geofenceRoutes);
 
   return app;
 }

@@ -43,6 +43,44 @@ function syncTrails(map: MlMap, trails: AgentTrails): void {
   source?.setData(toFeatureCollection(trails));
 }
 
+/** Zona (geofence) circular plotada no mapa. */
+export interface GeofenceCircle {
+  id: string;
+  lng: number;
+  lat: number;
+  radiusMeters: number;
+  name: string;
+}
+
+/** Anel poligonal aproximando um círculo de `radiusMeters` (MapLibre não tem círculo em metros). */
+function circleRing(lng: number, lat: number, radiusMeters: number, points = 64): number[][] {
+  const earthR = 6371000;
+  const latR = (radiusMeters / earthR) * (180 / Math.PI);
+  const lngR = latR / Math.cos((lat * Math.PI) / 180);
+  const ring: number[][] = [];
+  for (let i = 0; i <= points; i++) {
+    const theta = (i / points) * 2 * Math.PI;
+    ring.push([lng + lngR * Math.cos(theta), lat + latR * Math.sin(theta)]);
+  }
+  return ring;
+}
+
+function geofencesFC(geofences: GeofenceCircle[]): GeoJSON.FeatureCollection {
+  return {
+    type: 'FeatureCollection',
+    features: geofences.map((g) => ({
+      type: 'Feature',
+      properties: { name: g.name },
+      geometry: { type: 'Polygon', coordinates: [circleRing(g.lng, g.lat, g.radiusMeters)] },
+    })),
+  };
+}
+
+function syncGeofences(map: MlMap, geofences: GeofenceCircle[]): void {
+  const source = map.getSource('geofences') as GeoJSONSource | undefined;
+  source?.setData(geofencesFC(geofences));
+}
+
 /**
  * Mapa de plotagem em tempo real. Recebe as posições correntes de cada agente
  * (mapa agentId -> ponto) e a trilha acumulada (agentId -> pontos), atualizando
@@ -55,12 +93,16 @@ export function LiveMap({
   showTrails = true,
   mediaMarkers = [],
   onMediaClick,
+  geofences = [],
+  onMapClick,
 }: {
   agents: Record<string, AgentPoint>;
   trails?: AgentTrails;
   showTrails?: boolean;
   mediaMarkers?: MediaMarker[];
   onMediaClick?: (id: string) => void;
+  geofences?: GeofenceCircle[];
+  onMapClick?: (lng: number, lat: number) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MlMap | null>(null);
@@ -68,6 +110,10 @@ export function LiveMap({
   const mediaMarkersRef = useRef<Record<string, Marker>>({});
   const onMediaClickRef = useRef(onMediaClick);
   onMediaClickRef.current = onMediaClick;
+  const geofencesRef = useRef<GeofenceCircle[]>(geofences);
+  geofencesRef.current = geofences;
+  const onMapClickRef = useRef(onMapClick);
+  onMapClickRef.current = onMapClick;
   const fittedRef = useRef(false);
   const styleReadyRef = useRef(false);
   // Mantém a trilha/visibilidade correntes acessíveis ao handler de 'load'
@@ -99,8 +145,26 @@ export function LiveMap({
     });
     mapRef.current = map;
 
-    // A camada de trilha só pode ser adicionada após o estilo carregar.
+    // As camadas de dados só podem ser adicionadas após o estilo carregar.
     map.on('load', () => {
+      // Geofences (embaixo): preenchimento + contorno.
+      map.addSource('geofences', {
+        type: 'geojson',
+        data: geofencesFC(geofencesRef.current),
+      });
+      map.addLayer({
+        id: 'geofences-fill',
+        type: 'fill',
+        source: 'geofences',
+        paint: { 'fill-color': '#3fb950', 'fill-opacity': 0.12 },
+      });
+      map.addLayer({
+        id: 'geofences-line',
+        type: 'line',
+        source: 'geofences',
+        paint: { 'line-color': '#3fb950', 'line-width': 2, 'line-opacity': 0.7 },
+      });
+      // Trilhas (por cima das zonas).
       map.addSource('trails', { type: 'geojson', data: toFeatureCollection(trailsRef.current) });
       map.addLayer({
         id: 'trails-line',
@@ -115,6 +179,9 @@ export function LiveMap({
       });
       styleReadyRef.current = true;
     });
+
+    // Clique no mapa (usado para posicionar uma nova geofence).
+    map.on('click', (e) => onMapClickRef.current?.(e.lngLat.lng, e.lngLat.lat));
 
     return () => {
       map.remove();
@@ -201,6 +268,13 @@ export function LiveMap({
       }
     }
   }, [mediaMarkers]);
+
+  // Redesenha as geofences (zonas) quando mudam.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !styleReadyRef.current) return;
+    syncGeofences(map, geofences);
+  }, [geofences]);
 
   return <div ref={containerRef} style={{ width: '100%', height: '100%' }} />;
 }

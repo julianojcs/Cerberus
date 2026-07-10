@@ -90,3 +90,43 @@ const messageSchema = new Schema(
 messageSchema.index({ operationId: 1, capturedAt: -1 });
 export type MessageDoc = InferSchemaType<typeof messageSchema>;
 export const MessageModel = model('Message', messageSchema);
+
+// --- Geofencing (Fase 4) ---
+const geofenceSchema = new Schema(
+  {
+    operationId: { type: String, required: true, index: true },
+    name: { type: String, required: true },
+    /** Centro da zona (círculo): GeoJSON Point [lng, lat]. */
+    center: {
+      type: { type: String, enum: ['Point'], required: true },
+      coordinates: { type: [Number], required: true },
+    },
+    radiusMeters: { type: Number, required: true, min: 1 },
+    active: { type: Boolean, default: true },
+  },
+  { timestamps: true },
+);
+geofenceSchema.index({ center: '2dsphere' });
+export type GeofenceDoc = InferSchemaType<typeof geofenceSchema>;
+export const Geofence = model('Geofence', geofenceSchema);
+
+const alertSchema = new Schema(
+  {
+    operationId: { type: String, required: true, index: true },
+    agentId: { type: String, required: true },
+    geofenceId: { type: String, required: true },
+    geofenceName: { type: String, required: true },
+    type: { type: String, enum: ['enter', 'exit'], required: true },
+    /** Local onde a transição foi detectada: GeoJSON Point [lng, lat]. */
+    location: {
+      type: { type: String, enum: ['Point'], required: true },
+      coordinates: { type: [Number], required: true },
+    },
+    capturedAt: { type: Date, required: true },
+    receivedAt: { type: Date, required: true },
+  },
+  { timestamps: false },
+);
+alertSchema.index({ operationId: 1, receivedAt: -1 });
+export type AlertDoc = InferSchemaType<typeof alertSchema>;
+export const Alert = model('Alert', alertSchema);
