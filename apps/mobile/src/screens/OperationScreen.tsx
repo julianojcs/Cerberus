@@ -48,9 +48,7 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
       <Text style={styles.brand}>CERBERUS</Text>
       <Text style={styles.agent}>{session.name}</Text>
       <Text style={styles.meta}>Agente: {agentId}</Text>
-      <Text style={styles.meta}>
-        Operação: {operationId ?? 'nenhuma atribuída'}
-      </Text>
+      <Text style={styles.meta}>Operação: {operationId ?? 'nenhuma atribuída'}</Text>
 
       <View style={styles.card}>
         <View style={styles.row}>
@@ -64,8 +62,8 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
           </Text>
         </Text>
         <Text style={styles.status}>
-          Buffer offline: <Text style={{ color: pending > 0 ? '#e3b341' : '#8b9aa8' }}>{pending}</Text>{' '}
-          posição(ões)
+          Buffer offline:{' '}
+          <Text style={{ color: pending > 0 ? '#e3b341' : '#8b9aa8' }}>{pending}</Text> posição(ões)
         </Text>
         <Text style={styles.hint}>
           Parado, o GPS hiberna (ping a cada 5 min). Em deslocamento, a taxa de amostragem sobe

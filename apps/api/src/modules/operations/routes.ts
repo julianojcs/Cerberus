@@ -33,17 +33,13 @@ export async function operationRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // Apenas administração central cria operações.
-  app.post(
-    '/operations',
-    { onRequest: [app.requireRole(Role.ADMIN)] },
-    async (request, reply) => {
-      const body = createOperationSchema.safeParse(request.body);
-      if (!body.success) return reply.code(400).send({ error: 'Dados inválidos' });
-      const claims = request.user as AuthClaims;
-      const op = await Operation.create({ ...body.data, createdBy: claims.sub });
-      return reply.code(201).send(serialize(op));
-    },
-  );
+  app.post('/operations', { onRequest: [app.requireRole(Role.ADMIN)] }, async (request, reply) => {
+    const body = createOperationSchema.safeParse(request.body);
+    if (!body.success) return reply.code(400).send({ error: 'Dados inválidos' });
+    const claims = request.user as AuthClaims;
+    const op = await Operation.create({ ...body.data, createdBy: claims.sub });
+    return reply.code(201).send(serialize(op));
+  });
 }
 
 function serialize(op: InstanceType<typeof Operation>) {

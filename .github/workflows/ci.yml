@@ -51,3 +51,7 @@ jobs:
       # ESLint flat config (typescript-eslint) — bloqueante.
       - name: Lint (ESLint)
         run: npm run lint
+
+      # Prettier — verificação de formatação (bloqueante).
+      - name: Format (Prettier)
+        run: npm run format:check

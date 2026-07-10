@@ -1,9 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  authClaimsSchema,
-  geoPointSchema,
-  positionSampleSchema,
-} from './schemas.js';
+import { authClaimsSchema, geoPointSchema, positionSampleSchema } from './schemas.js';
 
 describe('positionSampleSchema', () => {
   const valid = {
@@ -40,15 +36,15 @@ describe('positionSampleSchema', () => {
 
 describe('geoPointSchema', () => {
   it('exige a ordem GeoJSON [lng, lat]', () => {
-    expect(geoPointSchema.parse({ type: 'Point', coordinates: [-43.9, -19.9] }).coordinates).toEqual(
-      [-43.9, -19.9],
-    );
+    expect(
+      geoPointSchema.parse({ type: 'Point', coordinates: [-43.9, -19.9] }).coordinates,
+    ).toEqual([-43.9, -19.9]);
   });
 
   it('rejeita longitude inválida', () => {
-    expect(
-      geoPointSchema.safeParse({ type: 'Point', coordinates: [200, -19.9] }).success,
-    ).toBe(false);
+    expect(geoPointSchema.safeParse({ type: 'Point', coordinates: [200, -19.9] }).success).toBe(
+      false,
+    );
   });
 });
 

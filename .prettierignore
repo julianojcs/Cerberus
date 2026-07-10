@@ -1,0 +1,14 @@
+# Dependências e saídas de build
+node_modules
+**/dist
+**/build
+**/.next
+**/.turbo
+**/coverage
+
+# Lockfiles e arquivos gerados
+package-lock.json
+**/next-env.d.ts
+
+# Documentação em Markdown (prosa/tabelas com formatação manual)
+**/*.md

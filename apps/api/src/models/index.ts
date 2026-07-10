@@ -1,11 +1,5 @@
 import { Schema, model, type InferSchemaType } from 'mongoose';
-import {
-  ActivityType,
-  MessageType,
-  OperationStatus,
-  OperationType,
-  Role,
-} from '@cerberus/shared';
+import { ActivityType, MessageType, OperationStatus, OperationType, Role } from '@cerberus/shared';
 
 /* ------------------------------------------------------------------ Users */
 

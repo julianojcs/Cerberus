@@ -16,6 +16,8 @@
     "build": "turbo run build",
     "dev": "turbo run dev",
     "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "test": "turbo run test",
     "typecheck": "turbo run typecheck",
     "shared:build": "npm run build --workspace @cerberus/shared",
