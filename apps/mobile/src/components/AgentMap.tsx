@@ -26,8 +26,19 @@ const HTML = `<!DOCTYPE html>
 <body>
 <div id="map"></div>
 <script>
-  var map = L.map('map', { zoomControl: false, attributionControl: false }).setView([-19.9319, -43.9386], 15);
-  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+  var map = L.map('map', {
+    zoomControl: true,
+    attributionControl: false,
+    touchZoom: true,
+    bounceAtZoomLimits: false,
+    maxZoom: 21,
+  }).setView([-19.9319, -43.9386], 16);
+  // maxNativeZoom: 19 = último nível com tile real do OSM; acima disso o Leaflet
+  // amplia o tile (fica levemente borrado, mas permite aproximar mais a pé).
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 21,
+    maxNativeZoom: 19,
+  }).addTo(map);
   var line = L.polyline([], { color: '#c1121f', weight: 4, opacity: 0.85 }).addTo(map);
   var marker = null;
   var fitted = false;
@@ -42,9 +53,20 @@ const HTML = `<!DOCTYPE html>
     } else {
       marker.setLatLng(last);
     }
-    if (!fitted) { map.setView(last, 16); fitted = true; }
+    if (!fitted) { map.setView(last, 18); fitted = true; }
     else { map.panTo(last); }
   };
+  // Recalcula o tamanho do mapa quando o container muda de dimensão (layout tardio
+  // do WebView, rotação, tela cheia). Sem isso o Leaflet renderiza só um pedaço e
+  // não recarrega os tiles ao arrastar.
+  function fixSize() { map.invalidateSize(false); }
+  window.addEventListener('resize', fixSize);
+  if (window.ResizeObserver) {
+    try { new ResizeObserver(fixSize).observe(document.getElementById('map')); } catch (e) {}
+  }
+  map.whenReady(fixSize);
+  setTimeout(fixSize, 100);
+  setTimeout(fixSize, 400);
   if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage('ready');
 </script>
 </body>
