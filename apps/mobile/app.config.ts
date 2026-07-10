@@ -48,6 +48,13 @@ const config: ExpoConfig = {
       },
     ],
     'react-native-background-fetch',
+    [
+      'expo-image-picker',
+      {
+        cameraPermission: 'O Cerberus usa a câmera para registrar mídia tática da operação.',
+        photosPermission: 'O Cerberus acessa fotos para enviar mídia tática da operação.',
+      },
+    ],
   ],
   extra: {
     // Sem fallback: quando não definido, o app deriva o host do Metro

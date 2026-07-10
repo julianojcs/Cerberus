@@ -2,6 +2,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
+import multipart from '@fastify/multipart';
 import { corsOrigins, loadEnv, type Env } from './config/env.js';
 import mongoPlugin from './plugins/mongo.js';
 import authPlugin from './plugins/auth.js';
@@ -11,6 +12,7 @@ import { operationRoutes } from './modules/operations/routes.js';
 import { positionRoutes } from './modules/positions/routes.js';
 import { userRoutes } from './modules/users/routes.js';
 import { messageRoutes } from './modules/messages/routes.js';
+import { mediaRoutes } from './modules/media/routes.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -45,6 +47,8 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
   await app.register(helmet, { global: true });
   await app.register(cors, { origin: corsOrigins(env), credentials: true });
   await app.register(rateLimit, { max: 300, timeWindow: '1 minute' });
+  // Upload de mídia (fotos) do agente — limite de 8 MB, um arquivo por requisição.
+  await app.register(multipart, { limits: { fileSize: 8 * 1024 * 1024, files: 1 } });
 
   await app.register(mongoPlugin);
   await app.register(authPlugin);
@@ -63,6 +67,7 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
   await app.register(operationRoutes);
   await app.register(positionRoutes);
   await app.register(messageRoutes);
+  await app.register(mediaRoutes);
 
   return app;
 }

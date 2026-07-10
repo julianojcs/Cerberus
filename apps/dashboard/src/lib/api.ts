@@ -34,6 +34,30 @@ export interface LatestPosition {
   capturedAt: string;
 }
 
+export interface TacticalMessage {
+  id: string;
+  operationId: string;
+  senderId: string;
+  type: string; // 'text' | 'media' | 'broadcast'
+  text?: string;
+  mediaRef?: string;
+  capturedAt: string;
+}
+
+/**
+ * Baixa um recurso protegido (ex.: mídia do GridFS) com o Bearer token e devolve
+ * um object URL — necessário porque `<img src>` não envia o header Authorization.
+ * Quem chama deve liberar o URL com `URL.revokeObjectURL` ao desmontar.
+ */
+export async function fetchBlobUrl(path: string): Promise<string> {
+  const token = getToken();
+  const res = await fetch(`${API_URL}${path}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!res.ok) throw new Error(`Erro ${res.status}`);
+  return URL.createObjectURL(await res.blob());
+}
+
 export const api = {
   login: (username: string, password: string) =>
     request<LoginResponse>('/auth/login', {
@@ -53,4 +77,9 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ text }),
     }),
+  // Histórico de mensagens (texto/mídia/broadcast) da operação.
+  messages: (operationId: string) =>
+    request<TacticalMessage[]>(`/operations/${operationId}/messages`),
+  // Caminho da mídia no GridFS (use com fetchBlobUrl por causa do Authorization).
+  mediaPath: (operationId: string, fileId: string) => `/operations/${operationId}/media/${fileId}`,
 };
