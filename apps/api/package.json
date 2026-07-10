@@ -10,7 +10,7 @@
     "start": "node dist/server.js",
     "seed": "tsx src/scripts/seed.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "lint": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint .",
     "test": "vitest run"
   },
   "dependencies": {
