@@ -427,3 +427,135 @@ describe('mensagens táticas (texto)', () => {
     expect(res.statusCode).toBe(401);
   });
 });
+
+/**
+ * Núcleo Zero Trust: um portador escopado à operação A não pode ler nem escrever
+ * dados de uma operação B REAL (com dados reais), e vice-versa. Prova as duas
+ * garantias da regra mqtt-multitenant: (1) `assertOperationScope` bloqueia acesso
+ * fora do escopo (403 simétrico); (2) toda query filtra por `operationId`, então
+ * uma consulta escopada nunca vaza dados de outra operação.
+ */
+describe('isolamento multitenant (Zero Trust)', () => {
+  let opBId: string;
+  let tokenAlpha: string; // admin escopado SÓ à operação A (operationId)
+  let tokenBravo: string; // admin escopado SÓ à operação B (opBId)
+
+  beforeAll(async () => {
+    const { User, Operation, Position } = await import('../models/index.js');
+
+    const opB = await Operation.create({ name: 'Op Bravo', type: 'mandado', status: 'ativa' });
+    opBId = String(opB._id);
+
+    await User.create({
+      username: 'admin_alpha',
+      name: 'Central Alpha',
+      passwordHash: await bcrypt.hash('cerberus123', 10),
+      role: 'admin',
+      operationIds: [operationId], // escopo = A
+    });
+    await User.create({
+      username: 'admin_bravo',
+      name: 'Central Bravo',
+      passwordHash: await bcrypt.hash('cerberus123', 10),
+      role: 'admin',
+      operationIds: [opB._id], // escopo = B
+    });
+
+    // Posição real sob a operação B (agente distinto do AG-0456 da operação A).
+    await Position.create({
+      operationId: opBId,
+      agentId: 'AG-BRAVO',
+      location: { type: 'Point', coordinates: [-46.6333, -23.5505] }, // São Paulo
+      accuracy: 10,
+      capturedAt: new Date(),
+      receivedAt: new Date(),
+    });
+
+    const la = await app.inject({
+      method: 'POST',
+      url: '/auth/login',
+      payload: { username: 'admin_alpha', password: 'cerberus123' },
+    });
+    tokenAlpha = la.json().token;
+    const lb = await app.inject({
+      method: 'POST',
+      url: '/auth/login',
+      payload: { username: 'admin_bravo', password: 'cerberus123' },
+    });
+    tokenBravo = lb.json().token;
+
+    // Mensagem real sob a operação B (via rota, exercitando também o write path).
+    await app.inject({
+      method: 'POST',
+      url: `/operations/${opBId}/messages`,
+      headers: { authorization: `Bearer ${tokenBravo}` },
+      payload: { text: 'Bravo: perímetro seguro.' },
+    });
+  }, 60_000);
+
+  it('escopo A não acessa a operação B (GET /operations/:id → 403)', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/operations/${opBId}`,
+      headers: { authorization: `Bearer ${tokenAlpha}` },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('escopo A não lê posições da operação B (403)', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/operations/${opBId}/positions/latest`,
+      headers: { authorization: `Bearer ${tokenAlpha}` },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('escopo A não lê nem envia mensagens da operação B (403)', async () => {
+    const read = await app.inject({
+      method: 'GET',
+      url: `/operations/${opBId}/messages`,
+      headers: { authorization: `Bearer ${tokenAlpha}` },
+    });
+    expect(read.statusCode).toBe(403);
+
+    const write = await app.inject({
+      method: 'POST',
+      url: `/operations/${opBId}/messages`,
+      headers: { authorization: `Bearer ${tokenAlpha}` },
+      payload: { text: 'Injeção indevida entre operações.' },
+    });
+    expect(write.statusCode).toBe(403);
+  });
+
+  it('escopo B não acessa a operação A (403) — isolamento simétrico', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/operations/${operationId}/positions/latest`,
+      headers: { authorization: `Bearer ${tokenBravo}` },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('consulta escopada retorna SÓ os dados da própria operação (sem vazamento)', async () => {
+    const pos = await app.inject({
+      method: 'GET',
+      url: `/operations/${opBId}/positions`,
+      headers: { authorization: `Bearer ${tokenBravo}` },
+    });
+    expect(pos.statusCode).toBe(200);
+    const agents = (pos.json() as Array<{ agentId: string }>).map((p) => p.agentId);
+    expect(agents).toContain('AG-BRAVO'); // dados da própria operação
+    expect(agents).not.toContain('AG-0456'); // NÃO vaza a operação A
+
+    const msgs = await app.inject({
+      method: 'GET',
+      url: `/operations/${opBId}/messages`,
+      headers: { authorization: `Bearer ${tokenBravo}` },
+    });
+    expect(msgs.statusCode).toBe(200);
+    const texts = (msgs.json() as Array<{ text: string }>).map((m) => m.text);
+    expect(texts).toContain('Bravo: perímetro seguro.');
+    expect(texts).not.toContain('Alvo avistado.'); // mensagem da operação A não vaza
+  });
+});
