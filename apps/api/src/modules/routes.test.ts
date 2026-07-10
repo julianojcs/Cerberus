@@ -704,3 +704,92 @@ describe('mídia (GridFS)', () => {
     expect(res.statusCode).toBe(404);
   });
 });
+
+describe('geofencing + alertas', () => {
+  let geofenceId: string;
+
+  it('admin cria geofence (POST) → 201', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/geofences`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'Perímetro Alfa', lng: -43.9386, lat: -19.9319, radiusMeters: 150 },
+    });
+    expect(res.statusCode).toBe(201);
+    const g = res.json();
+    expect(g.name).toBe('Perímetro Alfa');
+    expect(g.radiusMeters).toBe(150);
+    geofenceId = g.id;
+  });
+
+  it('agente (não-admin) não cria geofence (403)', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/geofences`,
+      headers: { authorization: `Bearer ${agentToken}` },
+      payload: { name: 'x', lng: 0, lat: 0, radiusMeters: 10 },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('lista geofences inclui a criada', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/operations/${operationId}/geofences`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as Array<{ name: string }>).some((g) => g.name === 'Perímetro Alfa')).toBe(
+      true,
+    );
+  });
+
+  it('bloqueia geofences fora do escopo (403)', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/operations/000000000000000000000000/geofences',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('GET alerts retorna alertas persistidos', async () => {
+    const { Alert } = await import('../models/index.js');
+    await Alert.create({
+      operationId,
+      agentId: 'AG-0456',
+      geofenceId,
+      geofenceName: 'Perímetro Alfa',
+      type: 'enter',
+      location: { type: 'Point', coordinates: [-43.9386, -19.9319] },
+      capturedAt: new Date(),
+      receivedAt: new Date(),
+    });
+    const res = await app.inject({
+      method: 'GET',
+      url: `/operations/${operationId}/alerts`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const alerts = res.json() as Array<{ type: string; geofenceName: string }>;
+    expect(alerts.some((a) => a.type === 'enter' && a.geofenceName === 'Perímetro Alfa')).toBe(
+      true,
+    );
+  });
+
+  it('admin remove geofence (DELETE) → 204 e some da lista', async () => {
+    const del = await app.inject({
+      method: 'DELETE',
+      url: `/operations/${operationId}/geofences/${geofenceId}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(del.statusCode).toBe(204);
+
+    const list = await app.inject({
+      method: 'GET',
+      url: `/operations/${operationId}/geofences`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect((list.json() as Array<{ id: string }>).some((g) => g.id === geofenceId)).toBe(false);
+  });
+});

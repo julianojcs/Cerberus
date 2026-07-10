@@ -5,10 +5,12 @@ import {
   AgentChannel,
   bridgeIngestTopic,
   messageSchema,
+  operationBroadcastTopic,
   parseAgentTopic,
   positionSampleSchema,
 } from '@cerberus/shared';
-import { MessageModel, Position } from '../models/index.js';
+import { Alert, Geofence, MessageModel, Position } from '../models/index.js';
+import { detectGeofenceEvents } from '../modules/geofences/detect.js';
 
 /**
  * PONTE MQTT (ingest). A API conecta ao broker como cliente privilegiado,
@@ -47,7 +49,8 @@ export default fp(async function mqttPlugin(app: FastifyInstance) {
     try {
       const raw = JSON.parse(payload.toString());
       if (channel === AgentChannel.POSICAO) {
-        await persistPosition(operationId, agentId, raw);
+        const sample = await persistPosition(operationId, agentId, raw);
+        await checkGeofences(app, client, operationId, agentId, sample);
       } else if (channel === AgentChannel.MENSAGEM) {
         await persistMessage(operationId, agentId, raw);
       }
@@ -62,7 +65,11 @@ export default fp(async function mqttPlugin(app: FastifyInstance) {
   });
 });
 
-async function persistPosition(operationId: string, agentId: string, raw: unknown): Promise<void> {
+async function persistPosition(
+  operationId: string,
+  agentId: string,
+  raw: unknown,
+): Promise<{ lng: number; lat: number; capturedAt: string }> {
   const sample = positionSampleSchema.parse(raw);
   await Position.create({
     operationId,
@@ -77,6 +84,63 @@ async function persistPosition(operationId: string, agentId: string, raw: unknow
     capturedAt: new Date(sample.capturedAt),
     receivedAt: new Date(),
   });
+  return { lng: sample.lng, lat: sample.lat, capturedAt: sample.capturedAt };
+}
+
+/**
+ * Geofencing: após persistir a posição, compara com a anterior contra as zonas
+ * ativas da operação; cada transição enter/exit vira um Alert persistido +
+ * anúncio no canal broadcast (agentes/dashboard).
+ */
+async function checkGeofences(
+  app: FastifyInstance,
+  client: MqttClient,
+  operationId: string,
+  agentId: string,
+  sample: { lng: number; lat: number; capturedAt: string },
+): Promise<void> {
+  const geofences = await Geofence.find({ operationId, active: true }).lean();
+  if (geofences.length === 0) return;
+
+  const prevDocs = await Position.find({ operationId, agentId })
+    .sort({ capturedAt: -1 })
+    .skip(1) // pula a posição recém-persistida; pega a anterior
+    .limit(1)
+    .lean();
+  const prevCoords = (prevDocs[0]?.location as { coordinates?: number[] } | undefined)?.coordinates;
+  const [plng, plat] = prevCoords ?? [];
+  const prev = plng != null && plat != null ? { lng: plng, lat: plat } : null;
+
+  const events = detectGeofenceEvents({ lng: sample.lng, lat: sample.lat }, prev, geofences);
+  for (const ev of events) {
+    await Alert.create({
+      operationId,
+      agentId,
+      geofenceId: ev.geofenceId,
+      geofenceName: ev.geofenceName,
+      type: ev.type,
+      location: { type: 'Point', coordinates: [sample.lng, sample.lat] },
+      capturedAt: new Date(sample.capturedAt),
+      receivedAt: new Date(),
+    });
+    app.log.info(
+      { operationId, agentId, geofence: ev.geofenceName, type: ev.type },
+      'Geofence event',
+    );
+    if (client.connected) {
+      const verb = ev.type === 'enter' ? 'entrou em' : 'saiu de';
+      client.publish(
+        operationBroadcastTopic(operationId),
+        JSON.stringify({
+          senderId: 'GEOFENCE',
+          type: 'alert',
+          text: `${agentId} ${verb} ${ev.geofenceName}`,
+          capturedAt: sample.capturedAt,
+        }),
+        { qos: 1 },
+      );
+    }
+  }
 }
 
 async function persistMessage(operationId: string, senderId: string, raw: unknown): Promise<void> {

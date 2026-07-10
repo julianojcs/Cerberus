@@ -17,6 +17,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     const body = await res.json().catch(() => ({ error: res.statusText }));
     throw new Error(body.error ?? `Erro ${res.status}`);
   }
+  if (res.status === 204) return undefined as T; // sem corpo (ex.: DELETE)
   return res.json() as Promise<T>;
 }
 
@@ -84,4 +85,39 @@ export const api = {
     request<TacticalMessage[]>(`/operations/${operationId}/messages`),
   // Caminho da mídia no GridFS (use com fetchBlobUrl por causa do Authorization).
   mediaPath: (operationId: string, fileId: string) => `/operations/${operationId}/media/${fileId}`,
+  // --- Geofencing (Fase 4) ---
+  geofences: (operationId: string) => request<Geofence[]>(`/operations/${operationId}/geofences`),
+  createGeofence: (
+    operationId: string,
+    data: { name: string; lng: number; lat: number; radiusMeters: number },
+  ) =>
+    request<Geofence>(`/operations/${operationId}/geofences`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  deleteGeofence: (operationId: string, gid: string) =>
+    request<void>(`/operations/${operationId}/geofences/${gid}`, { method: 'DELETE' }),
+  alerts: (operationId: string) => request<GeofenceAlert[]>(`/operations/${operationId}/alerts`),
 };
+
+export interface Geofence {
+  id: string;
+  operationId: string;
+  name: string;
+  lng: number;
+  lat: number;
+  radiusMeters: number;
+  active: boolean;
+}
+
+export interface GeofenceAlert {
+  id: string;
+  operationId: string;
+  agentId: string;
+  geofenceId: string;
+  geofenceName: string;
+  type: 'enter' | 'exit';
+  lng?: number;
+  lat?: number;
+  capturedAt: string;
+}
