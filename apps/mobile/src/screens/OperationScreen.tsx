@@ -67,6 +67,7 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
   const [fullscreen, setFullscreen] = useState(false);
   const [broadcasts, setBroadcasts] = useState<BroadcastMessage[]>([]);
   const [uploading, setUploading] = useState(false);
+  const [headingUp, setHeadingUp] = useState(false);
 
   useEffect(() => {
     connectMqtt(session.token, agentId);
@@ -242,12 +243,21 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
             onTouchEnd={() => setScrollEnabled(true)}
             onTouchCancel={() => setScrollEnabled(true)}
           >
-            <AgentMap track={track} showRoute={showRoute} />
+            <AgentMap
+              track={track}
+              showRoute={showRoute}
+              headingUp={headingUp}
+              heading={pos?.heading ?? null}
+            />
+          </View>
+          <View style={[styles.row, { marginTop: 12 }]}>
+            <Text style={styles.compassLabel}>Girar com o movimento (bússola)</Text>
+            <Switch value={headingUp} onValueChange={setHeadingUp} />
           </View>
           <Text style={styles.hint}>
             {track.length > 0
               ? `${track.length} ponto(s) na sessão${showRoute ? '' : ' · rota oculta'}.`
-              : 'O trajeto aparece aqui conforme você se desloca (requer rede para os mapas).'}
+              : 'Dois dedos giram o mapa; a bússola (canto) volta ao norte. O trajeto aparece conforme você se desloca (requer rede).'}
           </Text>
         </View>
 
@@ -261,14 +271,28 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
           <View style={styles.modalBar}>
             <Text style={styles.modalTitle}>Seu percurso</Text>
             <View style={styles.percursoActions}>
-              <Switch value={showRoute} onValueChange={setShowRoute} />
+              <View style={styles.modalToggle}>
+                <Text style={styles.modalToggleLabel}>Rota</Text>
+                <Switch value={showRoute} onValueChange={setShowRoute} />
+              </View>
+              <View style={styles.modalToggle}>
+                <Text style={styles.modalToggleLabel}>Bússola</Text>
+                <Switch value={headingUp} onValueChange={setHeadingUp} />
+              </View>
               <TouchableOpacity onPress={() => setFullscreen(false)} hitSlop={8}>
                 <Text style={styles.modalClose}>Fechar ✕</Text>
               </TouchableOpacity>
             </View>
           </View>
           <View style={styles.modalMap}>
-            {fullscreen ? <AgentMap track={track} showRoute={showRoute} /> : null}
+            {fullscreen ? (
+              <AgentMap
+                track={track}
+                showRoute={showRoute}
+                headingUp={headingUp}
+                heading={pos?.heading ?? null}
+              />
+            ) : null}
           </View>
         </View>
       </Modal>
@@ -345,6 +369,9 @@ const styles = StyleSheet.create({
   modalTitle: { color: '#e6edf3', fontSize: 18, fontWeight: '700' },
   modalClose: { color: '#c1121f', fontWeight: '700', fontSize: 15 },
   modalMap: { flex: 1 },
+  modalToggle: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  modalToggleLabel: { color: '#8b9aa8', fontSize: 12 },
+  compassLabel: { color: '#e6edf3', fontSize: 14 },
   logout: { marginTop: 24, alignItems: 'center', padding: 16 },
   logoutText: { color: '#c1121f', fontWeight: '700' },
 });

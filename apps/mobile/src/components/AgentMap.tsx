@@ -11,6 +11,10 @@ export interface TrackPoint {
  * a mesma stack sem-chave do dashboard, evitando a dependência do Google Maps
  * (que exigiria API key + billing) e o conflito de play-services no Android.
  *
+ * Rotação via plugin `leaflet-rotate`: dois dedos giram o mapa (manual) e o botão
+ * de bússola reseta para o norte. O modo `headingUp` (girar com o movimento) usa
+ * o `heading` do GPS para manter a direção de deslocamento sempre para cima.
+ *
  * Os tiles do mapa exigem rede — em zona de sombra o mapa não carrega, mas o
  * bufferização de posições (outbox) continua funcionando normalmente.
  */
@@ -21,6 +25,7 @@ const HTML = `<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet-rotate@0.2.8/dist/leaflet-rotate-src.js"></script>
 <style>html,body,#map{height:100%;margin:0;background:#0b0f14}</style>
 </head>
 <body>
@@ -32,6 +37,11 @@ const HTML = `<!DOCTYPE html>
     touchZoom: true,
     bounceAtZoomLimits: false,
     maxZoom: 21,
+    // leaflet-rotate: rotação por gesto de dois dedos + botão de bússola (reset ao norte).
+    rotate: true,
+    touchRotate: true,
+    rotateControl: { closeOnZeroBearing: false, position: 'topright' },
+    bearing: 0,
   }).setView([-19.9319, -43.9386], 16);
   // maxNativeZoom: 19 = último nível com tile real do OSM; acima disso o Leaflet
   // amplia o tile (fica levemente borrado, mas permite aproximar mais a pé).
@@ -42,7 +52,7 @@ const HTML = `<!DOCTYPE html>
   var line = L.polyline([], { color: '#c1121f', weight: 4, opacity: 0.85 }).addTo(map);
   var marker = null;
   var fitted = false;
-  window.__update = function (track, showRoute) {
+  window.__update = function (track, showRoute, headingUp, heading) {
     if (!track || !track.length) return;
     var latlngs = track.map(function (p) { return [p.lat, p.lng]; });
     // O marcador (posição atual) fica sempre visível; a rota liga/desliga.
@@ -55,6 +65,12 @@ const HTML = `<!DOCTYPE html>
     }
     if (!fitted) { map.setView(last, 18); fitted = true; }
     else { map.panTo(last); }
+    // Modo bússola: alinha o topo do mapa à direção de deslocamento (heading do GPS).
+    // heading é graus horários a partir do norte; só é confiável em movimento (>= 0).
+    // Se girar ao contrário no device, troque para (360 - heading) % 360.
+    if (headingUp && typeof heading === 'number' && heading >= 0 && map.setBearing) {
+      map.setBearing(heading);
+    }
   };
   // Recalcula o tamanho do mapa quando o container muda de dimensão (layout tardio
   // do WebView, rotação, tela cheia). Sem isso o Leaflet renderiza só um pedaço e
@@ -75,17 +91,25 @@ const HTML = `<!DOCTYPE html>
 export function AgentMap({
   track,
   showRoute = true,
+  headingUp = false,
+  heading = null,
 }: {
   track: TrackPoint[];
   showRoute?: boolean;
+  headingUp?: boolean;
+  heading?: number | null;
 }) {
   const ref = useRef<WebView>(null);
   const readyRef = useRef(false);
 
   const push = useCallback(() => {
     if (!readyRef.current) return;
-    ref.current?.injectJavaScript(`window.__update(${JSON.stringify(track)}, ${showRoute}); true;`);
-  }, [track, showRoute]);
+    ref.current?.injectJavaScript(
+      `window.__update(${JSON.stringify(track)}, ${showRoute}, ${headingUp}, ${
+        typeof heading === 'number' ? heading : 'null'
+      }); true;`,
+    );
+  }, [track, showRoute, headingUp, heading]);
 
   useEffect(() => {
     push();
