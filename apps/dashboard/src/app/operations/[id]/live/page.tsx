@@ -151,6 +151,9 @@ export default function LiveOperationPage() {
             <span className="brand-dot" />
             Monitoramento ao vivo
           </div>
+          <Link href={`/operations/${operationId}/replay`} className="badge">
+            Replay ↺
+          </Link>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
           <Toggle
