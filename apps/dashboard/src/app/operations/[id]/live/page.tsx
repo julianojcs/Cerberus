@@ -6,7 +6,11 @@ import { useParams, useRouter } from 'next/navigation';
 import { api, type LatestPosition } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import { subscribeToOperation, type LivePosition } from '@/lib/mqtt';
-import { LiveMap, type AgentPoint } from '@/components/LiveMap';
+import { LiveMap, type AgentPoint, type AgentTrails } from '@/components/LiveMap';
+import { Toggle } from '@/components/Toggle';
+
+/** Máximo de pontos por agente na trilha (limita memória/render). */
+const MAX_TRAIL = 500;
 
 export default function LiveOperationPage() {
   const router = useRouter();
@@ -14,6 +18,8 @@ export default function LiveOperationPage() {
   const operationId = params.id;
 
   const [agents, setAgents] = useState<Record<string, AgentPoint>>({});
+  const [trails, setTrails] = useState<AgentTrails>({});
+  const [showTrails, setShowTrails] = useState(true);
   const [connected, setConnected] = useState(false);
   const lastUpdateRef = useRef<Record<string, string>>({});
   const [, forceTick] = useState(0);
@@ -48,6 +54,23 @@ export default function LiveOperationPage() {
         /* sem histórico ainda */
       });
 
+    // Semeia as trilhas com o histórico (vem do mais recente para o mais antigo).
+    api
+      .positionHistory(operationId)
+      .then((positions: LatestPosition[]) => {
+        const byAgent: AgentTrails = {};
+        for (let i = positions.length - 1; i >= 0; i--) {
+          const p = positions[i];
+          if (p.lat == null || p.lng == null) continue;
+          (byAgent[p.agentId] ??= []).push([p.lng, p.lat]);
+        }
+        for (const id of Object.keys(byAgent)) byAgent[id] = byAgent[id].slice(-MAX_TRAIL);
+        setTrails(byAgent);
+      })
+      .catch(() => {
+        /* sem histórico ainda */
+      });
+
     const unsubscribe = subscribeToOperation(
       operationId,
       (pos: LivePosition) => {
@@ -63,6 +86,11 @@ export default function LiveOperationPage() {
             activity: pos.activity,
           },
         }));
+        setTrails((prev) => {
+          const existing = prev[pos.agentId] ?? [];
+          const nextTrail = [...existing, [pos.lng, pos.lat] as [number, number]].slice(-MAX_TRAIL);
+          return { ...prev, [pos.agentId]: nextTrail };
+        });
         lastUpdateRef.current[pos.agentId] = pos.capturedAt;
         forceTick((t) => t + 1);
       },
@@ -86,9 +114,17 @@ export default function LiveOperationPage() {
             Monitoramento ao vivo
           </div>
         </div>
-        <span className="badge" style={{ color: connected ? 'var(--ok)' : 'var(--muted)' }}>
-          {connected ? '● barramento conectado' : '○ aguardando telemetria'}
-        </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+          <Toggle
+            checked={showTrails}
+            onChange={setShowTrails}
+            label="Rota"
+            title="Exibir/ocultar a rota (percurso) no mapa"
+          />
+          <span className="badge" style={{ color: connected ? 'var(--ok)' : 'var(--muted)' }}>
+            {connected ? '● barramento conectado' : '○ aguardando telemetria'}
+          </span>
+        </div>
       </div>
 
       <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
@@ -121,7 +157,7 @@ export default function LiveOperationPage() {
         </aside>
 
         <main style={{ flex: 1, minWidth: 0 }}>
-          <LiveMap agents={agents} />
+          <LiveMap agents={agents} trails={trails} showTrails={showTrails} />
         </main>
       </div>
     </div>
