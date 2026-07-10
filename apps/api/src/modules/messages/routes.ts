@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { MessageType, operationBroadcastTopic, type AuthClaims } from '@cerberus/shared';
+import { MessageType, Role, operationBroadcastTopic, type AuthClaims } from '@cerberus/shared';
 import { MessageModel } from '../../models/index.js';
 import { assertOperationScope } from '../scope.js';
 
@@ -68,6 +68,49 @@ export async function messageRoutes(app: FastifyInstance): Promise<void> {
           JSON.stringify({
             senderId,
             type: MessageType.TEXT,
+            text: body.data.text,
+            capturedAt: now.toISOString(),
+          }),
+          { qos: 1 },
+        );
+      }
+
+      return reply.code(201).send(serialize(msg));
+    },
+  );
+
+  // Broadcast da CENTRAL (admin) para todos os agentes da operação. Diferente do
+  // chat tático: é uma diretiva de comando. Persiste como mensagem tipo BROADCAST
+  // e publica no canal `operacao/{opId}/broadcast`, que os agentes assinam.
+  app.post(
+    '/operations/:id/broadcast',
+    { onRequest: [app.requireRole(Role.ADMIN)] },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      if (!assertOperationScope(request, reply, id)) return;
+
+      const body = sendMessageSchema.safeParse(request.body);
+      if (!body.success) return reply.code(400).send({ error: 'Dados inválidos' });
+
+      const claims = request.user as AuthClaims;
+      const senderId = claims.agentId ?? claims.sub; // operador que emitiu (auditoria)
+      const now = new Date();
+
+      const msg = await MessageModel.create({
+        operationId: id,
+        senderId,
+        type: MessageType.BROADCAST,
+        text: body.data.text,
+        capturedAt: now,
+        receivedAt: now,
+      });
+
+      if (app.mqtt?.connected) {
+        app.mqtt.publish(
+          operationBroadcastTopic(id),
+          JSON.stringify({
+            senderId,
+            type: MessageType.BROADCAST,
             text: body.data.text,
             capturedAt: now.toISOString(),
           }),

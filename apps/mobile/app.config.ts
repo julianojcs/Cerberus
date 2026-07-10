@@ -50,8 +50,10 @@ const config: ExpoConfig = {
     'react-native-background-fetch',
   ],
   extra: {
-    apiUrl: process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3000',
-    mqttWsUrl: process.env.EXPO_PUBLIC_MQTT_WS_URL ?? 'ws://localhost:9001',
+    // Sem fallback: quando não definido, o app deriva o host do Metro
+    // automaticamente (ver src/config.ts). Definir só para túnel/produção.
+    apiUrl: process.env.EXPO_PUBLIC_API_URL,
+    mqttWsUrl: process.env.EXPO_PUBLIC_MQTT_WS_URL,
   },
 };
 

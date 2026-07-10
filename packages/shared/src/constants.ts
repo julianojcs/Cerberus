@@ -47,5 +47,7 @@ export type ActivityType = (typeof ActivityType)[keyof typeof ActivityType];
 export const MessageType = {
   TEXT: 'text',
   MEDIA: 'media',
+  /** Diretiva da central para todos os agentes da operação (canal broadcast). */
+  BROADCAST: 'broadcast',
 } as const;
 export type MessageType = (typeof MessageType)[keyof typeof MessageType];

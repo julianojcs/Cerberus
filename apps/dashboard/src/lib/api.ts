@@ -47,4 +47,10 @@ export const api = {
   // Histórico da operação (trilha). Vem ordenado do mais recente para o mais antigo.
   positionHistory: (operationId: string, limit = 2000) =>
     request<LatestPosition[]>(`/operations/${operationId}/positions?limit=${limit}`),
+  // Broadcast da central (admin) para todos os agentes da operação.
+  broadcast: (operationId: string, text: string) =>
+    request<{ id: string; type: string; text?: string }>(`/operations/${operationId}/broadcast`, {
+      method: 'POST',
+      body: JSON.stringify({ text }),
+    }),
 };

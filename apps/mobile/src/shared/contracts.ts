@@ -18,6 +18,11 @@ export function agentMessageTopic(operationId: string, agentId: string): string 
   return `${TOPIC_ROOT}/${operationId}/agente/${agentId}/mensagem`;
 }
 
+/** `operacao/{operationId}/broadcast` — central → todos os agentes da operação. */
+export function operationBroadcastTopic(operationId: string): string {
+  return `${TOPIC_ROOT}/${operationId}/broadcast`;
+}
+
 export interface PositionSample {
   lat: number;
   lng: number;
