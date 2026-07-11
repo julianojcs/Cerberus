@@ -877,3 +877,58 @@ describe('geofencing + alertas', () => {
     expect((list.json() as Array<{ id: string }>).some((g) => g.id === geofenceId)).toBe(false);
   });
 });
+
+describe('configurações do sistema', () => {
+  it('GET /settings retorna os padrões (min 5, ligar rotas off)', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/settings',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ minRoutePoints: 5, connectRoutes: false });
+  });
+
+  it('GET /settings sem token → 401', async () => {
+    const res = await app.inject({ method: 'GET', url: '/settings' });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('admin altera as configurações (PATCH) e persiste', async () => {
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/settings',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { minRoutePoints: 8, connectRoutes: true },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ minRoutePoints: 8, connectRoutes: true });
+
+    const again = await app.inject({
+      method: 'GET',
+      url: '/settings',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(again.json()).toMatchObject({ minRoutePoints: 8, connectRoutes: true });
+  });
+
+  it('agente (não-admin) não altera configurações (403)', async () => {
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/settings',
+      headers: { authorization: `Bearer ${agentToken}` },
+      payload: { minRoutePoints: 1 },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('rejeita minRoutePoints inválido (400)', async () => {
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/settings',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { minRoutePoints: 0 },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+});

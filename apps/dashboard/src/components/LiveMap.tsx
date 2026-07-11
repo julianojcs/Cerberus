@@ -34,13 +34,14 @@ export interface PlottedRoute {
   id: string;
   points: [number, number][];
   color: string; // hex (cor do agente)
+  dashed?: boolean; // conector entre rotas (linha tracejada)
 }
 
-function routesFC(routes: PlottedRoute[]): GeoJSON.FeatureCollection {
+function routesFC(routes: PlottedRoute[], dashed: boolean): GeoJSON.FeatureCollection {
   return {
     type: 'FeatureCollection',
     features: routes
-      .filter((r) => r.points.length >= 2)
+      .filter((r) => !!r.dashed === dashed && r.points.length >= 2)
       .map((r) => ({
         type: 'Feature',
         properties: { color: r.color },
@@ -50,8 +51,10 @@ function routesFC(routes: PlottedRoute[]): GeoJSON.FeatureCollection {
 }
 
 function syncRoutes(map: MlMap, routes: PlottedRoute[]): void {
-  const source = map.getSource('agent-routes') as GeoJSONSource | undefined;
-  source?.setData(routesFC(routes));
+  (map.getSource('agent-routes') as GeoJSONSource | undefined)?.setData(routesFC(routes, false));
+  (map.getSource('agent-routes-dashed') as GeoJSONSource | undefined)?.setData(
+    routesFC(routes, true),
+  );
 }
 
 function toFeatureCollection(trails: AgentTrails): GeoJSON.FeatureCollection {
@@ -269,13 +272,30 @@ export function LiveMap({
         paint: { 'line-color': '#c1121f', 'line-width': 3, 'line-opacity': 0.65 },
       });
       // Rotas selecionadas por agente (por cima das trilhas), cor dirigida por dado.
-      map.addSource('agent-routes', { type: 'geojson', data: routesFC(routesRef.current) });
+      map.addSource('agent-routes', { type: 'geojson', data: routesFC(routesRef.current, false) });
       map.addLayer({
         id: 'agent-routes-line',
         type: 'line',
         source: 'agent-routes',
         layout: { 'line-join': 'round', 'line-cap': 'round' },
         paint: { 'line-color': ['get', 'color'], 'line-width': 4, 'line-opacity': 0.9 },
+      });
+      // Conectores entre rotas (opção "ligar rotas"): linha tracejada, mais fina.
+      map.addSource('agent-routes-dashed', {
+        type: 'geojson',
+        data: routesFC(routesRef.current, true),
+      });
+      map.addLayer({
+        id: 'agent-routes-dashed-line',
+        type: 'line',
+        source: 'agent-routes-dashed',
+        layout: { 'line-join': 'round', 'line-cap': 'round' },
+        paint: {
+          'line-color': ['get', 'color'],
+          'line-width': 2,
+          'line-opacity': 0.85,
+          'line-dasharray': [2, 2],
+        },
       });
       styleReadyRef.current = true;
     });
