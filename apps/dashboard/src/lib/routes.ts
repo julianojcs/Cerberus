@@ -5,6 +5,35 @@
  */
 export const TRAIL_GAP_MS = 5 * 60 * 1000; // 5 min sem posicao = quebra de rota
 
+/**
+ * Paleta de cores por agente (viva e distinguivel entre si). Evita o vermelho
+ * `#c1121f` reservado a UI ao vivo (marcador/rota atual) e ao broadcast.
+ */
+export const AGENT_PALETTE = [
+  '#3b82f6', // blue
+  '#22c55e', // green
+  '#f59e0b', // amber
+  '#a855f7', // purple
+  '#06b6d4', // cyan
+  '#ec4899', // pink
+  '#84cc16', // lime
+  '#f97316', // orange
+  '#14b8a6', // teal
+  '#6366f1', // indigo
+  '#eab308', // yellow
+  '#d946ef', // fuchsia
+];
+
+/** Atribui uma cor estavel a cada agente (ordem deterministica por id). */
+export function assignAgentColors(agentIds: string[]): Record<string, string> {
+  const ids = [...new Set(agentIds)].sort();
+  const out: Record<string, string> = {};
+  ids.forEach((id, i) => {
+    out[id] = AGENT_PALETTE[i % AGENT_PALETTE.length];
+  });
+  return out;
+}
+
 export interface TimedPoint {
   agentId: string;
   lng: number;
