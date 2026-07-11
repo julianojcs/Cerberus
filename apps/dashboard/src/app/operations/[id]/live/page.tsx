@@ -1048,8 +1048,11 @@ export default function LiveOperationPage() {
                   left: 0,
                   right: 0,
                   zIndex: 5,
+                  // Recorta só o topo (para a barra deslizar de cima); o espaço
+                  // extra embaixo evita cortar a SOMBRA da barra na base.
                   overflow: 'hidden',
                   paddingTop: 10,
+                  paddingBottom: 44,
                   pointerEvents: 'none',
                 }}
               >
@@ -1064,9 +1067,11 @@ export default function LiveOperationPage() {
                     borderRadius: 10,
                     padding: '8px 14px',
                     boxShadow: '0 6px 16px rgba(0,0,0,.45)',
-                    transform: barPinned || barHover ? 'translateY(0)' : 'translateY(-160%)',
+                    transform: barPinned || barHover ? 'translateY(0)' : 'translateY(-180%)',
                     opacity: barPinned || barHover ? 1 : 0,
-                    transition: 'transform 0.28s cubic-bezier(0.2, 0.8, 0.2, 1), opacity 0.2s ease',
+                    // "Bounce down": desce com leve overshoot (easing back) e mais devagar.
+                    transition:
+                      'transform 0.5s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.28s ease',
                     pointerEvents: barPinned || barHover ? 'auto' : 'none',
                   }}
                 >
