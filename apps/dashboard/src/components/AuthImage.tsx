@@ -50,6 +50,8 @@ export function AuthImage({
       </div>
     );
   }
-  if (!url) return <div style={{ ...style, background: 'var(--border)' }} />;
+  // Placeholder reserva um aspecto (para o masonry nao colapsar enquanto carrega);
+  // o `style` do chamador (ex.: altura fixa no lightbox) sobrescreve.
+  if (!url) return <div style={{ aspectRatio: '3 / 4', ...style, background: 'var(--border)' }} />;
   return <img src={url} alt={alt ?? 'mídia'} style={style} onClick={onClick} />;
 }

@@ -14,6 +14,14 @@
   box-sizing: border-box;
 }
 
+/* Rolagem com barra oculta (usado no sidebar — estilo jmr26). */
+.scrollhide {
+  scrollbar-width: none;
+}
+.scrollhide::-webkit-scrollbar {
+  display: none;
+}
+
 html,
 body {
   margin: 0;
