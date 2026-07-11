@@ -35,8 +35,34 @@ export function destinationPoint(
 export interface AlertFocus {
   lng: number; // ponto NA BORDA da zona (no raio centro→posição do alerta)
   lat: number;
-  bearing: number; // direção da seta (entrada = para dentro; saída = para fora)
+  bearing: number; // direção da seta (sentido do deslocamento na rota)
   type: 'enter' | 'exit';
+}
+
+/**
+ * Rumo do DESLOCAMENTO ao longo da rota no ponto mais próximo de `target` (o local
+ * do cruzamento). Usa o vetor ponto-anterior → ponto-do-cruzamento (senão o ponto
+ * seguinte). Devolve null se não houver pontos suficientes. É essa a direção da
+ * seta do alerta — o sentido em que o agente cruzou a borda, não o raio da zona.
+ */
+export function routeBearingAt(
+  routesPoints: [number, number][][],
+  target: [number, number],
+): number | null {
+  let best: { d: number; seg: [number, number][]; i: number } | null = null;
+  for (const seg of routesPoints) {
+    for (let i = 0; i < seg.length; i++) {
+      const dx = seg[i][0] - target[0];
+      const dy = seg[i][1] - target[1];
+      const d = dx * dx + dy * dy;
+      if (!best || d < best.d) best = { d, seg, i };
+    }
+  }
+  if (!best) return null;
+  const { seg, i } = best;
+  if (i > 0) return bearingDeg(seg[i - 1], seg[i]);
+  if (i + 1 < seg.length) return bearingDeg(seg[i], seg[i + 1]);
+  return null;
 }
 
 /**
