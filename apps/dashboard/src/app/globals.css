@@ -193,7 +193,6 @@ button {
   filter: none;
 }
 .pinbtn[aria-pressed='true'] {
+  /* Ativo = só o pin colorido (sem card/borda ao redor). */
   filter: none;
-  border-color: var(--border);
-  background: rgba(255, 255, 255, 0.05);
 }
