@@ -12,17 +12,49 @@ import {
 } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import { subscribeToOperation, type LivePosition } from '@/lib/mqtt';
-import { LiveMap, type AgentPoint, type AgentTrails } from '@/components/LiveMap';
+import {
+  LiveMap,
+  type AgentPoint,
+  type AgentTrails,
+  type PlottedRoute,
+} from '@/components/LiveMap';
 import { Toggle } from '@/components/Toggle';
 import { AuthImage } from '@/components/AuthImage';
 import { ResizableSidebar } from '@/components/ResizableSidebar';
 import { ColorPalettePicker } from '@/components/ColorPalettePicker';
 import { resolveColor } from '@/lib/tailwind-colors';
 import { alertBorderFocus, type AlertFocus } from '@/lib/geo';
-import { splitSegments, TRAIL_GAP_MS } from '@/lib/routes';
+import {
+  splitSegments,
+  buildRoutes,
+  assignAgentColors,
+  TRAIL_GAP_MS,
+  type Route,
+} from '@/lib/routes';
 
 /** Máximo de pontos por agente na trilha (limita memória/render). */
 const MAX_TRAIL = 500;
+/** Histórico buscado para semear trilhas e montar as rotas por agente. */
+const HISTORY_LIMIT = 5000;
+const HOUR_MS = 60 * 60 * 1000;
+
+/** Data/hora local (America/Sao_Paulo) — exibição das rotas. Dado permanece UTC. */
+function fmtDateTime(ms: number): string {
+  return new Intl.DateTimeFormat('pt-BR', {
+    timeZone: 'America/Sao_Paulo',
+    day: '2-digit',
+    month: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(ms));
+}
+
+/** Rótulo curto da janela temporal (0 = sem rotas). */
+function windowLabel(hours: number): string {
+  if (hours <= 0) return 'Sem rotas';
+  if (hours < 48) return `Últimas ${hours} h`;
+  return `Últimos ${Math.round(hours / 24)} d`;
+}
 
 export default function LiveOperationPage() {
   const router = useRouter();
@@ -35,6 +67,18 @@ export default function LiveOperationPage() {
   const [connected, setConnected] = useState(false);
   const lastUpdateRef = useRef<Record<string, string>>({});
   const [, forceTick] = useState(0);
+
+  // Rotas por agente (histórico segmentado nos gaps) + cor por agente.
+  const [routes, setRoutes] = useState<Record<string, Route[]>>({});
+  const [agentColors, setAgentColors] = useState<Record<string, string>>({});
+  const [firstTs, setFirstTs] = useState<number | null>(null);
+  // "Agora" congelado na montagem — define o teto da janela temporal.
+  const [nowTs] = useState(() => Date.now());
+  // Janela temporal (horas): 0 = nenhuma rota; máx = da 1ª plotagem até agora.
+  const [windowHours, setWindowHours] = useState(24);
+  // Rotas selecionadas para plotagem (id da rota) e agente com a lista expandida.
+  const [selectedRouteIds, setSelectedRouteIds] = useState<Set<string>>(new Set());
+  const [expandedAgent, setExpandedAgent] = useState<string | null>(null);
 
   // Composer de broadcast (central → agentes).
   const [broadcastText, setBroadcastText] = useState('');
@@ -94,21 +138,33 @@ export default function LiveOperationPage() {
         /* sem histórico ainda */
       });
 
-    // Semeia as trilhas com o histórico. Quebra em segmentos nos gaps de transmissão
-    // (posições distantes no tempo NÃO viram uma reta — evita o "pulo" no mapa).
+    // Semeia as trilhas E monta as rotas por agente a partir do histórico. Quebra em
+    // segmentos nos gaps de transmissão (posições distantes no tempo NÃO viram reta —
+    // evita o "pulo" no mapa).
     api
-      .positionHistory(operationId)
+      .positionHistory(operationId, HISTORY_LIMIT)
       .then((positions: LatestPosition[]) => {
         const byAgent: Record<string, LatestPosition[]> = {};
+        let earliest = Infinity;
         for (const p of positions) {
           if (p.lat == null || p.lng == null) continue;
           (byAgent[p.agentId] ??= []).push(p);
+          const cap = +new Date(p.capturedAt);
+          if (cap < earliest) earliest = cap;
         }
         const trails: AgentTrails = {};
         for (const [id, pts] of Object.entries(byAgent)) {
           trails[id] = splitSegments(pts).map((seg) => seg.slice(-MAX_TRAIL));
         }
         setTrails(trails);
+        setRoutes(buildRoutes(positions));
+        setAgentColors(assignAgentColors(Object.keys(byAgent)));
+        if (Number.isFinite(earliest)) {
+          setFirstTs(earliest);
+          // Janela padrão: 24 h, limitada ao intervalo real disponível.
+          const maxH = Math.max(1, Math.ceil((nowTs - earliest) / HOUR_MS));
+          setWindowHours(Math.min(24, maxH));
+        }
       })
       .catch(() => {
         /* sem histórico ainda */
@@ -175,6 +231,50 @@ export default function LiveOperationPage() {
   }, [operationId, router]);
 
   const agentList = useMemo(() => Object.values(agents), [agents]);
+
+  // Teto da janela: da 1ª plotagem até "agora". `windowStart`: início da janela.
+  const maxHours = useMemo(
+    () => (firstTs != null ? Math.max(1, Math.ceil((nowTs - firstTs) / HOUR_MS)) : 24),
+    [firstTs, nowTs],
+  );
+  const windowStart = nowTs - windowHours * HOUR_MS;
+
+  // Rotas efetivamente plotadas: selecionadas E dentro da janela temporal.
+  const plottedRoutes = useMemo<PlottedRoute[]>(() => {
+    const out: PlottedRoute[] = [];
+    for (const [agentId, rs] of Object.entries(routes)) {
+      const color = agentColors[agentId] ?? '#c1121f';
+      for (const r of rs) {
+        if (selectedRouteIds.has(r.id) && r.end >= windowStart) {
+          out.push({ id: r.id, points: r.points, color });
+        }
+      }
+    }
+    return out;
+  }, [routes, agentColors, selectedRouteIds, windowStart]);
+
+  function toggleRoute(id: string) {
+    setSelectedRouteIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  // Seleciona/limpa todas as rotas do agente que caem na janela atual.
+  function toggleAgentRoutes(agentId: string) {
+    const inWindow = (routes[agentId] ?? []).filter((r) => r.end >= windowStart);
+    const allSel = inWindow.length > 0 && inWindow.every((r) => selectedRouteIds.has(r.id));
+    setSelectedRouteIds((prev) => {
+      const next = new Set(prev);
+      for (const r of inWindow) {
+        if (allSel) next.delete(r.id);
+        else next.add(r.id);
+      }
+      return next;
+    });
+  }
 
   const mediaMarkers = useMemo(
     () =>
@@ -395,11 +495,12 @@ export default function LiveOperationPage() {
             <div className="card" style={{ padding: 12, marginBottom: 16 }}>
               <strong style={{ fontSize: 14 }}>Mídias da operação ({mediaMsgs.length})</strong>
               {/* Masonry (colunas CSS): as fotos mantêm o aspecto natural e não
-                  deformam. `columns: 150px` dá largura de coluna com min/máx
-                  implícito — o nº de colunas se adapta à largura do sidebar. */}
-              <div style={{ columns: '150px', columnGap: 6, marginTop: 8 }}>
+                  deformam. `column-width` (largura FIXA de coluna) mantém as
+                  miniaturas pequenas mesmo com poucas imagens ou sidebar largo —
+                  o nº de colunas se adapta; `maxWidth` fecha o limite superior. */}
+              <div style={{ columns: '96px', columnGap: 6, marginTop: 8 }}>
                 {mediaMsgs.map((m) => (
-                  <div key={m.id} style={{ breakInside: 'avoid', marginBottom: 6 }}>
+                  <div key={m.id} style={{ breakInside: 'avoid', marginBottom: 6, maxWidth: 130 }}>
                     <AuthImage
                       path={api.mediaPath(operationId, m.mediaRef!)}
                       alt={`Mídia de ${m.senderId}`}
@@ -628,7 +729,10 @@ export default function LiveOperationPage() {
           {alerts.length > 0 && (
             <div className="card" style={{ padding: 12, marginBottom: 16 }}>
               <strong style={{ fontSize: 14 }}>Alertas ({alerts.length})</strong>
-              <div style={{ maxHeight: 220, overflowY: 'auto', marginTop: 4 }}>
+              <div
+                className="thinscroll"
+                style={{ maxHeight: 220, overflowY: 'auto', marginTop: 4 }}
+              >
                 {alerts.map((a) => {
                   const hasLoc = a.lng != null && a.lat != null;
                   return (
@@ -669,30 +773,208 @@ export default function LiveOperationPage() {
           )}
 
           <h3 style={{ marginTop: 0 }}>Agentes ({agentList.length})</h3>
+          <p className="muted" style={{ fontSize: 12, margin: '0 0 8px' }}>
+            Selecione um agente para plotar suas rotas (cor própria). Clique no nome para ver e
+            escolher rotas individuais. Ajuste o período na barra do topo do mapa.
+          </p>
           {agentList.length === 0 && (
             <p className="muted" style={{ fontSize: 14 }}>
               Nenhuma posição recebida. Simule com o publish-fake-position.
             </p>
           )}
-          {agentList.map((a) => (
-            <div key={a.agentId} className="card" style={{ padding: 12, marginBottom: 10 }}>
-              <strong>{a.agentId}</strong>
-              <div className="muted" style={{ fontSize: 13, marginTop: 4 }}>
-                {a.lat.toFixed(5)}, {a.lng.toFixed(5)}
+          {agentList.map((a) => {
+            const color = agentColors[a.agentId] ?? '#c1121f';
+            const agentRoutes = routes[a.agentId] ?? [];
+            const inWindow = agentRoutes.filter((r) => r.end >= windowStart);
+            const selCount = inWindow.filter((r) => selectedRouteIds.has(r.id)).length;
+            const allSel = inWindow.length > 0 && selCount === inWindow.length;
+            const anySel = selCount > 0;
+            const expanded = expandedAgent === a.agentId;
+            return (
+              <div key={a.agentId}>
+                <div
+                  className="card"
+                  style={{
+                    padding: 12,
+                    marginBottom: expanded ? 0 : 10,
+                    borderLeft: `3px solid ${color}`,
+                    boxShadow: anySel ? `0 0 0 1px ${color}` : undefined,
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <button
+                      type="button"
+                      onClick={() => toggleAgentRoutes(a.agentId)}
+                      disabled={inWindow.length === 0}
+                      title={
+                        inWindow.length === 0
+                          ? 'Sem rotas na janela temporal atual'
+                          : allSel
+                            ? 'Ocultar as rotas deste agente'
+                            : 'Plotar as rotas deste agente'
+                      }
+                      style={{
+                        width: 16,
+                        height: 16,
+                        borderRadius: 4,
+                        border: `2px solid ${color}`,
+                        background: allSel ? color : anySel ? `${color}80` : 'transparent',
+                        cursor: inWindow.length === 0 ? 'not-allowed' : 'pointer',
+                        flexShrink: 0,
+                        padding: 0,
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setExpandedAgent(expanded ? null : a.agentId)}
+                      style={{
+                        flex: 1,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 6,
+                        background: 'transparent',
+                        border: 'none',
+                        color: 'inherit',
+                        cursor: 'pointer',
+                        padding: 0,
+                        textAlign: 'left',
+                        font: 'inherit',
+                      }}
+                    >
+                      <strong>{a.agentId}</strong>
+                      <span className="muted" style={{ fontSize: 12 }}>
+                        {agentRoutes.length} rota{agentRoutes.length === 1 ? '' : 's'}
+                      </span>
+                      <span className="muted" style={{ marginLeft: 'auto', fontSize: 12 }}>
+                        {expanded ? '▾' : '▸'}
+                      </span>
+                    </button>
+                  </div>
+                  <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>
+                    {a.lat.toFixed(5)}, {a.lng.toFixed(5)}
+                  </div>
+                  <div className="muted" style={{ fontSize: 13 }}>
+                    bateria: {a.battery != null ? Math.round(a.battery * 100) + '%' : '—'} ·{' '}
+                    {a.activity ?? '—'}
+                  </div>
+                </div>
+                {expanded && (
+                  <div
+                    className="card"
+                    style={{
+                      padding: 10,
+                      margin: '0 0 10px',
+                      borderLeft: `3px solid ${color}`,
+                      background: 'var(--bg)',
+                    }}
+                  >
+                    {agentRoutes.length === 0 && (
+                      <div className="muted" style={{ fontSize: 12 }}>
+                        Nenhuma rota registrada para este agente.
+                      </div>
+                    )}
+                    {agentRoutes.map((r, i) => {
+                      const outWin = r.end < windowStart;
+                      const sel = selectedRouteIds.has(r.id);
+                      return (
+                        <label
+                          key={r.id}
+                          title={
+                            outWin
+                              ? 'Fora da janela temporal atual'
+                              : 'Exibir/ocultar esta rota no mapa'
+                          }
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 8,
+                            fontSize: 12,
+                            padding: '4px 0',
+                            opacity: outWin ? 0.45 : 1,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={sel}
+                            onChange={() => toggleRoute(r.id)}
+                            style={{ accentColor: color, flexShrink: 0 }}
+                          />
+                          <span style={{ fontVariantNumeric: 'tabular-nums' }}>
+                            {fmtDateTime(r.start)} → {fmtDateTime(r.end)}
+                          </span>
+                          <span className="muted" style={{ marginLeft: 'auto', flexShrink: 0 }}>
+                            #{i + 1} · {r.points.length}p
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
-              <div className="muted" style={{ fontSize: 13 }}>
-                bateria: {a.battery != null ? Math.round(a.battery * 100) + '%' : '—'} ·{' '}
-                {a.activity ?? '—'}
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </ResizableSidebar>
 
-        <main style={{ flex: 1, minWidth: 0 }}>
+        <main style={{ flex: 1, minWidth: 0, position: 'relative' }}>
+          {/* Barra temporal (topo do mapa): define a janela das rotas plotadas.
+              0 = nenhuma rota; máximo = da 1ª plotagem da operação até agora. */}
+          {firstTs != null && (
+            <div
+              style={{
+                position: 'absolute',
+                top: 10,
+                left: '50%',
+                transform: 'translateX(-50%)',
+                zIndex: 5,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 12,
+                background: 'rgba(20,27,36,0.92)',
+                border: '1px solid var(--border)',
+                borderRadius: 10,
+                padding: '8px 14px',
+                width: 360,
+                maxWidth: 'calc(100% - 24px)',
+                boxShadow: '0 2px 12px rgba(0,0,0,.4)',
+              }}
+            >
+              <span className="muted" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
+                Período
+              </span>
+              <input
+                type="range"
+                min={0}
+                max={maxHours}
+                step={1}
+                value={Math.min(windowHours, maxHours)}
+                onChange={(e) => setWindowHours(Number(e.target.value))}
+                title={
+                  windowHours > 0
+                    ? `Rotas desde ${fmtDateTime(windowStart)} até agora`
+                    : 'Nenhuma rota exibida'
+                }
+                style={{ flex: 1, accentColor: '#c1121f' }}
+              />
+              <span
+                style={{
+                  fontSize: 12,
+                  whiteSpace: 'nowrap',
+                  fontVariantNumeric: 'tabular-nums',
+                  minWidth: 92,
+                  textAlign: 'right',
+                }}
+              >
+                {windowLabel(windowHours)}
+              </span>
+            </div>
+          )}
           <LiveMap
             agents={agents}
             trails={trails}
             showTrails={showTrails}
+            routes={plottedRoutes}
+            agentColors={agentColors}
             mediaMarkers={mediaMarkers}
             onMediaClick={(id) => setLightbox(mediaMsgs.find((m) => m.id === id) ?? null)}
             geofences={displayGeofences}

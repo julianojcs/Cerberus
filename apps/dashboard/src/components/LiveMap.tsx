@@ -29,6 +29,31 @@ export interface MediaMarker {
   caption?: string;
 }
 
+/** Rota (segmento) selecionada plotada na cor do agente. */
+export interface PlottedRoute {
+  id: string;
+  points: [number, number][];
+  color: string; // hex (cor do agente)
+}
+
+function routesFC(routes: PlottedRoute[]): GeoJSON.FeatureCollection {
+  return {
+    type: 'FeatureCollection',
+    features: routes
+      .filter((r) => r.points.length >= 2)
+      .map((r) => ({
+        type: 'Feature',
+        properties: { color: r.color },
+        geometry: { type: 'LineString', coordinates: r.points },
+      })),
+  };
+}
+
+function syncRoutes(map: MlMap, routes: PlottedRoute[]): void {
+  const source = map.getSource('agent-routes') as GeoJSONSource | undefined;
+  source?.setData(routesFC(routes));
+}
+
 function toFeatureCollection(trails: AgentTrails): GeoJSON.FeatureCollection {
   const features: GeoJSON.Feature[] = [];
   for (const [agentId, segments] of Object.entries(trails)) {
@@ -125,6 +150,8 @@ export function LiveMap({
   agents,
   trails = {},
   showTrails = true,
+  routes = [],
+  agentColors = {},
   mediaMarkers = [],
   onMediaClick,
   geofences = [],
@@ -138,6 +165,8 @@ export function LiveMap({
   agents: Record<string, AgentPoint>;
   trails?: AgentTrails;
   showTrails?: boolean;
+  routes?: PlottedRoute[];
+  agentColors?: Record<string, string>;
   mediaMarkers?: MediaMarker[];
   onMediaClick?: (id: string) => void;
   geofences?: GeofenceCircle[];
@@ -177,6 +206,10 @@ export function LiveMap({
   trailsRef.current = trails;
   const showTrailsRef = useRef(showTrails);
   showTrailsRef.current = showTrails;
+  const routesRef = useRef<PlottedRoute[]>(routes);
+  routesRef.current = routes;
+  const agentColorsRef = useRef<Record<string, string>>(agentColors);
+  agentColorsRef.current = agentColors;
 
   // Inicializa o mapa uma única vez.
   useEffect(() => {
@@ -235,6 +268,15 @@ export function LiveMap({
         },
         paint: { 'line-color': '#c1121f', 'line-width': 3, 'line-opacity': 0.65 },
       });
+      // Rotas selecionadas por agente (por cima das trilhas), cor dirigida por dado.
+      map.addSource('agent-routes', { type: 'geojson', data: routesFC(routesRef.current) });
+      map.addLayer({
+        id: 'agent-routes-line',
+        type: 'line',
+        source: 'agent-routes',
+        layout: { 'line-join': 'round', 'line-cap': 'round' },
+        paint: { 'line-color': ['get', 'color'], 'line-width': 4, 'line-opacity': 0.9 },
+      });
       styleReadyRef.current = true;
     });
 
@@ -254,18 +296,23 @@ export function LiveMap({
     if (!map) return;
 
     for (const [agentId, point] of Object.entries(agents)) {
+      const color = agentColorsRef.current[agentId] ?? '#c1121f';
       let marker = markersRef.current[agentId];
       if (!marker) {
         const el = document.createElement('div');
         el.title = agentId;
         el.style.cssText =
-          'width:18px;height:18px;border-radius:50%;background:#c1121f;border:2px solid #fff;box-shadow:0 0 8px #c1121f;';
+          'width:18px;height:18px;border-radius:50%;border:2px solid #fff;transition:background .2s;';
         marker = new maplibregl.Marker({ element: el })
           .setLngLat([point.lng, point.lat])
           .addTo(map);
         marker.setPopup(new maplibregl.Popup({ offset: 12 }));
         markersRef.current[agentId] = marker;
       }
+      // Aplica a cor do agente (mantém consistência com o card e a rota no mapa).
+      const el = marker.getElement();
+      el.style.background = color;
+      el.style.boxShadow = `0 0 8px ${color}`;
       marker.setLngLat([point.lng, point.lat]);
       marker
         .getPopup()
@@ -282,7 +329,7 @@ export function LiveMap({
       map.easeTo({ center: [first.lng, first.lat], zoom: 15 });
       fittedRef.current = true;
     }
-  }, [agents]);
+  }, [agents, agentColors]);
 
   // Redesenha a trilha quando novas posições chegam.
   useEffect(() => {
@@ -290,6 +337,13 @@ export function LiveMap({
     if (!map || !styleReadyRef.current) return;
     syncTrails(map, trails);
   }, [trails]);
+
+  // Redesenha as rotas selecionadas (cores por agente) quando a seleção muda.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !styleReadyRef.current) return;
+    syncRoutes(map, routes);
+  }, [routes]);
 
   // Liga/desliga a exibição da rota conforme o toggle do operador.
   useEffect(() => {
