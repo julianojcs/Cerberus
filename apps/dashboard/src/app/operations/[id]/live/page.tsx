@@ -18,6 +18,7 @@ import { AuthImage } from '@/components/AuthImage';
 import { ResizableSidebar } from '@/components/ResizableSidebar';
 import { ColorPalettePicker } from '@/components/ColorPalettePicker';
 import { resolveColor } from '@/lib/tailwind-colors';
+import { alertBorderFocus, type AlertFocus } from '@/lib/geo';
 
 /** Máximo de pontos por agente na trilha (limita memória/render). */
 const MAX_TRAIL = 500;
@@ -58,7 +59,7 @@ export default function LiveOperationPage() {
     radiusMeters: number;
     color: string;
   } | null>(null);
-  const [alertFocus, setAlertFocus] = useState<[number, number] | null>(null);
+  const [alertFocus, setAlertFocus] = useState<AlertFocus | null>(null);
   const [showZones, setShowZones] = useState(true);
   const [recomputing, setRecomputing] = useState(false);
 
@@ -381,8 +382,9 @@ export default function LiveOperationPage() {
             <div className="card" style={{ padding: 12, marginBottom: 16 }}>
               <strong style={{ fontSize: 14 }}>Mídias da operação ({mediaMsgs.length})</strong>
               {/* Masonry (colunas CSS): as fotos mantêm o aspecto natural e não
-                  deformam ao redimensionar o sidebar. */}
-              <div style={{ columnCount: 2, columnGap: 6, marginTop: 8 }}>
+                  deformam. `columns: 150px` dá largura de coluna com min/máx
+                  implícito — o nº de colunas se adapta à largura do sidebar. */}
+              <div style={{ columns: '150px', columnGap: 6, marginTop: 8 }}>
                 {mediaMsgs.map((m) => (
                   <div key={m.id} style={{ breakInside: 'avoid', marginBottom: 6 }}>
                     <AuthImage
@@ -620,7 +622,20 @@ export default function LiveOperationPage() {
                     <div
                       key={a.id}
                       className="muted"
-                      onClick={() => hasLoc && setAlertFocus([a.lng as number, a.lat as number])}
+                      onClick={() => {
+                        if (a.lng == null || a.lat == null) return;
+                        const zone = geofences.find((g) => g.id === a.geofenceId);
+                        setAlertFocus(
+                          zone
+                            ? alertBorderFocus(
+                                [a.lng, a.lat],
+                                [zone.lng, zone.lat],
+                                zone.radiusMeters,
+                                a.type,
+                              )
+                            : { lng: a.lng, lat: a.lat, bearing: 0, type: a.type },
+                        );
+                      }}
                       title={hasLoc ? 'Ver no mapa' : undefined}
                       style={{
                         fontSize: 13,
@@ -675,7 +690,7 @@ export default function LiveOperationPage() {
             editGeofence={editGeo}
             onGeofenceMove={(lng, lat) => setEditGeo((e) => (e ? { ...e, lng, lat } : e))}
             onGeofenceResize={(radiusMeters) => setEditGeo((e) => (e ? { ...e, radiusMeters } : e))}
-            focusPoint={alertFocus}
+            focus={alertFocus}
           />
         </main>
       </div>
