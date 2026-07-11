@@ -57,6 +57,7 @@ sob demanda.)
 | [database-models.md](.claude/rules/database-models.md) | Schemas Mongoose, índices, `.lean()`, conexão em `plugins/mongo.ts` |
 | [timezone-dates.md](.claude/rules/timezone-dates.md) | Qualquer data: `capturedAt`/`receivedAt`, UTC-first, exibição no dashboard |
 | [pt-br-content.md](.claude/rules/pt-br-content.md) | Texto voltado ao operador (UI, erros da API, validações Zod) |
+| [ui-contrast.md](.claude/rules/ui-contrast.md) | Cor de texto/contraste no dashboard dark: botões, badges, inputs, `color-scheme` |
 | [testing.md](.claude/rules/testing.md) | Testes Vitest, `app.inject()`, mocks de MQTT/Mongoose |
 | [refactoring.md](.claude/rules/refactoring.md) | Refatoração não-trivial (abrir issue antes de codar) |
 | [issue-prompts.md](.claude/rules/issue-prompts.md) | Redigir issues (anexar prompt de implementação sênior) |
