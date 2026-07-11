@@ -19,6 +19,7 @@ import { AuthImage } from '@/components/AuthImage';
 import { ResizableSidebar } from '@/components/ResizableSidebar';
 import { ColorPalettePicker } from '@/components/ColorPalettePicker';
 import { SettingsModal } from '@/components/SettingsModal';
+import { PeriodRange } from '@/components/PeriodRange';
 import { alertBorderFocus, routeBearingAt, type AlertFocus } from '@/lib/geo';
 import { resolveColor } from '@/lib/tailwind-colors';
 import { buildRoutes, assignAgentColors, type Route } from '@/lib/routes';
@@ -38,13 +39,6 @@ function fmtDateTime(ms: number): string {
   }).format(new Date(ms));
 }
 
-/** Rótulo curto da janela temporal (0 = sem rotas). */
-function windowLabel(hours: number): string {
-  if (hours <= 0) return 'Sem rotas';
-  if (hours < 48) return `Últimas ${hours} h`;
-  return `Últimos ${Math.round(hours / 24)} d`;
-}
-
 export default function LiveOperationPage() {
   const router = useRouter();
   const params = useParams<{ id: string }>();
@@ -57,10 +51,11 @@ export default function LiveOperationPage() {
   const [routes, setRoutes] = useState<Record<string, Route[]>>({});
   const [agentColors, setAgentColors] = useState<Record<string, string>>({});
   const [firstTs, setFirstTs] = useState<number | null>(null);
-  // "Agora" congelado na montagem — define o teto da janela temporal.
+  // "Agora" congelado na montagem — teto do período ajustável.
   const [nowTs] = useState(() => Date.now());
-  // Janela temporal (horas): 0 = nenhuma rota; máx = da 1ª plotagem até agora.
-  const [windowHours, setWindowHours] = useState(24);
+  // Período ajustável (início/fim em ms). Padrão: últimas 24 h COM dados.
+  const [windowStartMs, setWindowStartMs] = useState(0);
+  const [windowEndMs, setWindowEndMs] = useState(0);
   // Rotas selecionadas para plotagem (id da rota) e agente com a lista expandida.
   const [selectedRouteIds, setSelectedRouteIds] = useState<Set<string>>(new Set());
   const [expandedAgent, setExpandedAgent] = useState<string | null>(null);
@@ -141,19 +136,24 @@ export default function LiveOperationPage() {
       .then((positions: LatestPosition[]) => {
         const agentIds = new Set<string>();
         let earliest = Infinity;
+        let latest = -Infinity;
         for (const p of positions) {
           if (p.lat == null || p.lng == null) continue;
           agentIds.add(p.agentId);
           const cap = +new Date(p.capturedAt);
           if (cap < earliest) earliest = cap;
+          if (cap > latest) latest = cap;
         }
         setRoutes(buildRoutes(positions));
         setAgentColors(assignAgentColors([...agentIds]));
         if (Number.isFinite(earliest)) {
           setFirstTs(earliest);
-          // Janela padrão: 24 h, limitada ao intervalo real disponível.
-          const maxH = Math.max(1, Math.ceil((nowTs - earliest) / HOUR_MS));
-          setWindowHours(Math.min(24, maxH));
+          // Período padrão: últimas 24 h ATÉ a última transmissão (não "agora"),
+          // assim sempre cai sobre dados reais mesmo que o agente esteja offline há
+          // horas. As duas pontas podem ser ajustadas na barra.
+          const end = Number.isFinite(latest) ? latest : nowTs;
+          setWindowEndMs(end);
+          setWindowStartMs(Math.max(earliest, end - 24 * HOUR_MS));
         }
       })
       .catch(() => {
@@ -206,12 +206,11 @@ export default function LiveOperationPage() {
 
   const agentList = useMemo(() => Object.values(agents), [agents]);
 
-  // Teto da janela: da 1ª plotagem até "agora". `windowStart`: início da janela.
-  const maxHours = useMemo(
-    () => (firstTs != null ? Math.max(1, Math.ceil((nowTs - firstTs) / HOUR_MS)) : 24),
-    [firstTs, nowTs],
-  );
-  const windowStart = nowTs - windowHours * HOUR_MS;
+  // Limites do período ajustável: da 1ª plotagem até "agora".
+  const rangeMin = firstTs ?? nowTs - 24 * HOUR_MS;
+  const rangeMax = nowTs;
+  // Rota dentro do período se SOBREPÕE o intervalo [início, fim].
+  const inWindow = (r: Route) => r.end >= windowStartMs && r.start <= windowEndMs;
 
   // Rotas exibíveis: descarta as com menos de `minRoutePoints` pontos (trechos
   // insignificantes que só poluem a lista). É a base para cards, lista e plotagem.
@@ -223,14 +222,16 @@ export default function LiveOperationPage() {
     return out;
   }, [routes, settings.minRoutePoints]);
 
-  // Rotas efetivamente plotadas: selecionadas E dentro da janela temporal. Com a
-  // opção "ligar rotas", adiciona conectores tracejados entre rotas consecutivas.
+  // Rotas efetivamente plotadas: selecionadas E dentro do período. Com a opção
+  // "ligar rotas", adiciona conectores tracejados entre rotas consecutivas.
   const plottedRoutes = useMemo<PlottedRoute[]>(() => {
     const out: PlottedRoute[] = [];
     for (const [agentId, rs] of Object.entries(visibleRoutes)) {
       const color = agentColors[agentId] ?? '#c1121f';
       const shown = rs
-        .filter((r) => selectedRouteIds.has(r.id) && r.end >= windowStart)
+        .filter(
+          (r) => selectedRouteIds.has(r.id) && r.end >= windowStartMs && r.start <= windowEndMs,
+        )
         .sort((a, b) => a.start - b.start);
       for (const r of shown) out.push({ id: r.id, points: r.points, color });
       if (settings.connectRoutes) {
@@ -249,7 +250,14 @@ export default function LiveOperationPage() {
       }
     }
     return out;
-  }, [visibleRoutes, agentColors, selectedRouteIds, windowStart, settings.connectRoutes]);
+  }, [
+    visibleRoutes,
+    agentColors,
+    selectedRouteIds,
+    windowStartMs,
+    windowEndMs,
+    settings.connectRoutes,
+  ]);
 
   function toggleRoute(id: string) {
     setSelectedRouteIds((prev) => {
@@ -260,13 +268,14 @@ export default function LiveOperationPage() {
     });
   }
 
-  // Seleciona/limpa todas as rotas do agente que caem na janela atual.
+  // Seleciona/limpa todas as rotas do agente que caem no período atual.
   function toggleAgentRoutes(agentId: string) {
-    const inWindow = (visibleRoutes[agentId] ?? []).filter((r) => r.end >= windowStart);
-    const allSel = inWindow.length > 0 && inWindow.every((r) => selectedRouteIds.has(r.id));
+    const routesInWindow = (visibleRoutes[agentId] ?? []).filter(inWindow);
+    const allSel =
+      routesInWindow.length > 0 && routesInWindow.every((r) => selectedRouteIds.has(r.id));
     setSelectedRouteIds((prev) => {
       const next = new Set(prev);
-      for (const r of inWindow) {
+      for (const r of routesInWindow) {
         if (allSel) next.delete(r.id);
         else next.add(r.id);
       }
@@ -801,9 +810,9 @@ export default function LiveOperationPage() {
           {agentList.map((a) => {
             const color = agentColors[a.agentId] ?? '#c1121f';
             const agentRoutes = visibleRoutes[a.agentId] ?? [];
-            const inWindow = agentRoutes.filter((r) => r.end >= windowStart);
-            const selCount = inWindow.filter((r) => selectedRouteIds.has(r.id)).length;
-            const allSel = inWindow.length > 0 && selCount === inWindow.length;
+            const routesInWindow = agentRoutes.filter(inWindow);
+            const selCount = routesInWindow.filter((r) => selectedRouteIds.has(r.id)).length;
+            const allSel = routesInWindow.length > 0 && selCount === routesInWindow.length;
             const anySel = selCount > 0;
             const expanded = expandedAgent === a.agentId;
             return (
@@ -821,10 +830,10 @@ export default function LiveOperationPage() {
                     <button
                       type="button"
                       onClick={() => toggleAgentRoutes(a.agentId)}
-                      disabled={inWindow.length === 0}
+                      disabled={routesInWindow.length === 0}
                       title={
-                        inWindow.length === 0
-                          ? 'Sem rotas na janela temporal atual'
+                        routesInWindow.length === 0
+                          ? 'Sem rotas no período atual'
                           : allSel
                             ? 'Ocultar as rotas deste agente'
                             : 'Plotar as rotas deste agente'
@@ -835,7 +844,7 @@ export default function LiveOperationPage() {
                         borderRadius: 4,
                         border: `2px solid ${color}`,
                         background: allSel ? color : anySel ? `${color}80` : 'transparent',
-                        cursor: inWindow.length === 0 ? 'not-allowed' : 'pointer',
+                        cursor: routesInWindow.length === 0 ? 'not-allowed' : 'pointer',
                         flexShrink: 0,
                         padding: 0,
                       }}
@@ -890,15 +899,13 @@ export default function LiveOperationPage() {
                       </div>
                     )}
                     {agentRoutes.map((r, i) => {
-                      const outWin = r.end < windowStart;
+                      const outWin = !inWindow(r);
                       const sel = selectedRouteIds.has(r.id);
                       return (
                         <label
                           key={r.id}
                           title={
-                            outWin
-                              ? 'Fora da janela temporal atual'
-                              : 'Exibir/ocultar esta rota no mapa'
+                            outWin ? 'Fora do período atual' : 'Exibir/ocultar esta rota no mapa'
                           }
                           style={{
                             display: 'flex',
@@ -933,15 +940,16 @@ export default function LiveOperationPage() {
         </ResizableSidebar>
 
         <main style={{ flex: 1, minWidth: 0, position: 'relative' }}>
-          {/* Barra temporal (topo do mapa): define a janela das rotas plotadas.
-              0 = nenhuma rota; máximo = da 1ª plotagem da operação até agora. */}
+          {/* Barra de período (topo do mapa): DOIS controles (início e fim) definem
+              o intervalo das rotas plotadas. Ocupa toda a largura do topo, com
+              margens laterais iguais à de topo (10px). Padrão: últimas 24 h com dados. */}
           {firstTs != null && (
             <div
               style={{
                 position: 'absolute',
                 top: 10,
-                left: '50%',
-                transform: 'translateX(-50%)',
+                left: 10,
+                right: 10,
                 zIndex: 5,
                 display: 'flex',
                 alignItems: 'center',
@@ -950,38 +958,44 @@ export default function LiveOperationPage() {
                 border: '1px solid var(--border)',
                 borderRadius: 10,
                 padding: '8px 14px',
-                width: 360,
-                maxWidth: 'calc(100% - 24px)',
                 boxShadow: '0 2px 12px rgba(0,0,0,.4)',
               }}
             >
               <span className="muted" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
                 Período
               </span>
-              <input
-                type="range"
-                min={0}
-                max={maxHours}
-                step={1}
-                value={Math.min(windowHours, maxHours)}
-                onChange={(e) => setWindowHours(Number(e.target.value))}
-                title={
-                  windowHours > 0
-                    ? `Rotas desde ${fmtDateTime(windowStart)} até agora`
-                    : 'Nenhuma rota exibida'
-                }
-                style={{ flex: 1, accentColor: '#c1121f' }}
+              <span
+                style={{
+                  fontSize: 11,
+                  whiteSpace: 'nowrap',
+                  fontVariantNumeric: 'tabular-nums',
+                  minWidth: 78,
+                  textAlign: 'right',
+                }}
+                title="Início do período"
+              >
+                {fmtDateTime(windowStartMs)}
+              </span>
+              <PeriodRange
+                min={rangeMin}
+                max={rangeMax}
+                start={windowStartMs}
+                end={windowEndMs}
+                onChange={(s, e) => {
+                  setWindowStartMs(s);
+                  setWindowEndMs(e);
+                }}
               />
               <span
                 style={{
-                  fontSize: 12,
+                  fontSize: 11,
                   whiteSpace: 'nowrap',
                   fontVariantNumeric: 'tabular-nums',
-                  minWidth: 92,
-                  textAlign: 'right',
+                  minWidth: 78,
                 }}
+                title="Fim do período"
               >
-                {windowLabel(windowHours)}
+                {fmtDateTime(windowEndMs)}
               </span>
             </div>
           )}
