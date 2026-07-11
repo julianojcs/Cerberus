@@ -15,6 +15,9 @@ import { subscribeToOperation, type LivePosition } from '@/lib/mqtt';
 import { LiveMap, type AgentPoint, type AgentTrails } from '@/components/LiveMap';
 import { Toggle } from '@/components/Toggle';
 import { AuthImage } from '@/components/AuthImage';
+import { ResizableSidebar } from '@/components/ResizableSidebar';
+import { ColorPalettePicker } from '@/components/ColorPalettePicker';
+import { resolveColor } from '@/lib/tailwind-colors';
 
 /** Máximo de pontos por agente na trilha (limita memória/render). */
 const MAX_TRAIL = 500;
@@ -47,11 +50,13 @@ export default function LiveOperationPage() {
   const [pendingCenter, setPendingCenter] = useState<{ lng: number; lat: number } | null>(null);
   const [gfName, setGfName] = useState('');
   const [gfRadius, setGfRadius] = useState('200');
+  const [gfColor, setGfColor] = useState('green');
   const [editGeo, setEditGeo] = useState<{
     id: string;
     lng: number;
     lat: number;
     radiusMeters: number;
+    color: string;
   } | null>(null);
   const [alertFocus, setAlertFocus] = useState<[number, number] | null>(null);
 
@@ -169,31 +174,34 @@ export default function LiveOperationPage() {
     [mediaMsgs],
   );
 
-  // Zonas exibidas no mapa: valores ao vivo da zona em edição + preview da nova zona.
+  // Zonas exibidas no mapa: cor resolvida (familia->hex), valores ao vivo da zona
+  // em edicao e preview da nova zona (com a cor escolhida).
   const displayGeofences = useMemo(() => {
-    let base = geofences;
-    if (editGeo) {
-      base = geofences.map((g) =>
-        g.id === editGeo.id
-          ? { ...g, lng: editGeo.lng, lat: editGeo.lat, radiusMeters: editGeo.radiusMeters }
-          : g,
-      );
-    }
+    const base = geofences.map((g) => {
+      const e = editGeo?.id === g.id ? editGeo : null;
+      return {
+        id: g.id,
+        name: g.name,
+        lng: e ? e.lng : g.lng,
+        lat: e ? e.lat : g.lat,
+        radiusMeters: e ? e.radiusMeters : g.radiusMeters,
+        color: resolveColor(e ? e.color : g.color),
+      };
+    });
     if (!pendingCenter) return base;
     const r = Number(gfRadius);
     return [
       ...base,
       {
         id: '__preview__',
-        operationId,
         name: '(nova zona)',
         lng: pendingCenter.lng,
         lat: pendingCenter.lat,
         radiusMeters: Number.isFinite(r) && r > 0 ? r : 100,
-        active: true,
+        color: resolveColor(gfColor),
       },
     ];
-  }, [geofences, pendingCenter, gfRadius, operationId, editGeo]);
+  }, [geofences, pendingCenter, gfRadius, gfColor, editGeo]);
 
   async function sendBroadcast() {
     const text = broadcastText.trim();
@@ -220,6 +228,7 @@ export default function LiveOperationPage() {
         lng: pendingCenter.lng,
         lat: pendingCenter.lat,
         radiusMeters: radius,
+        color: gfColor,
       });
       setPendingCenter(null);
       setPlacing(false);
@@ -243,7 +252,7 @@ export default function LiveOperationPage() {
   function startEdit(g: Geofence) {
     setPlacing(false);
     setPendingCenter(null);
-    setEditGeo({ id: g.id, lng: g.lng, lat: g.lat, radiusMeters: g.radiusMeters });
+    setEditGeo({ id: g.id, lng: g.lng, lat: g.lat, radiusMeters: g.radiusMeters, color: g.color });
   }
 
   async function saveEdit() {
@@ -253,6 +262,7 @@ export default function LiveOperationPage() {
         lng: editGeo.lng,
         lat: editGeo.lat,
         radiusMeters: editGeo.radiusMeters,
+        color: editGeo.color,
       });
       setGeofences(await api.geofences(operationId));
     } catch {
@@ -301,14 +311,7 @@ export default function LiveOperationPage() {
       </div>
 
       <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
-        <aside
-          style={{
-            width: 260,
-            borderRight: '1px solid var(--border)',
-            padding: 16,
-            overflowY: 'auto',
-          }}
-        >
+        <ResizableSidebar storageKey="cerberus_live_sidebar_w" defaultWidth={260}>
           <div className="card" style={{ padding: 12, marginBottom: 16 }}>
             <strong style={{ fontSize: 14 }}>Broadcast à operação</strong>
             <p className="muted" style={{ fontSize: 12, margin: '4px 0 8px' }}>
@@ -427,6 +430,7 @@ export default function LiveOperationPage() {
                   placeholder="Raio (m)"
                   style={gfInputStyle}
                 />
+                <ColorPalettePicker value={gfColor} onChange={setGfColor} />
                 <div style={{ display: 'flex', gap: 6 }}>
                   <button
                     type="button"
@@ -477,7 +481,18 @@ export default function LiveOperationPage() {
                 }}
               >
                 <span style={{ color: editGeo?.id === g.id ? 'var(--ok)' : undefined }}>
-                  🟢 {g.name} · {editGeo?.id === g.id ? editGeo.radiusMeters : g.radiusMeters} m
+                  <span
+                    style={{
+                      display: 'inline-block',
+                      width: 10,
+                      height: 10,
+                      borderRadius: '50%',
+                      background: resolveColor(editGeo?.id === g.id ? editGeo.color : g.color),
+                      marginRight: 6,
+                      verticalAlign: 'middle',
+                    }}
+                  />
+                  {g.name} · {editGeo?.id === g.id ? editGeo.radiusMeters : g.radiusMeters} m
                 </span>
                 <span style={{ display: 'flex', gap: 10 }}>
                   <button
@@ -514,6 +529,12 @@ export default function LiveOperationPage() {
                 <div className="muted" style={{ fontSize: 12 }}>
                   Arraste o <strong>centro</strong> (mover) ou a <strong>borda</strong>{' '}
                   (redimensionar). Raio: {editGeo.radiusMeters} m
+                </div>
+                <div style={{ marginTop: 8 }}>
+                  <ColorPalettePicker
+                    value={editGeo.color}
+                    onChange={(c) => setEditGeo((e) => (e ? { ...e, color: c } : e))}
+                  />
                 </div>
                 <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
                   <button
@@ -597,7 +618,7 @@ export default function LiveOperationPage() {
               </div>
             </div>
           ))}
-        </aside>
+        </ResizableSidebar>
 
         <main style={{ flex: 1, minWidth: 0 }}>
           <LiveMap

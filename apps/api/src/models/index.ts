@@ -102,6 +102,8 @@ const geofenceSchema = new Schema(
       coordinates: { type: [Number], required: true },
     },
     radiusMeters: { type: Number, required: true, min: 1 },
+    /** Cor PRIMARIA da zona: token de familia da paleta Tailwind (ex.: 'green'). */
+    color: { type: String, default: 'green' },
     active: { type: Boolean, default: true },
   },
   { timestamps: true },

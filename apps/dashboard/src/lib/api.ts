@@ -97,7 +97,7 @@ export const api = {
   geofences: (operationId: string) => request<Geofence[]>(`/operations/${operationId}/geofences`),
   createGeofence: (
     operationId: string,
-    data: { name: string; lng: number; lat: number; radiusMeters: number },
+    data: { name: string; lng: number; lat: number; radiusMeters: number; color?: string },
   ) =>
     request<Geofence>(`/operations/${operationId}/geofences`, {
       method: 'POST',
@@ -106,7 +106,7 @@ export const api = {
   patchGeofence: (
     operationId: string,
     gid: string,
-    data: Partial<{ name: string; lng: number; lat: number; radiusMeters: number }>,
+    data: Partial<{ name: string; lng: number; lat: number; radiusMeters: number; color: string }>,
   ) =>
     request<Geofence>(`/operations/${operationId}/geofences/${gid}`, {
       method: 'PATCH',
@@ -124,6 +124,7 @@ export interface Geofence {
   lng: number;
   lat: number;
   radiusMeters: number;
+  color: string; // token de familia Tailwind (ex.: 'green')
   active: boolean;
 }
 
