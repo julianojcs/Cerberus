@@ -42,6 +42,19 @@ export type PositionListener = (sample: PositionSample) => void;
 const positionListeners = new Set<PositionListener>();
 let lastSample: PositionSample | null = null;
 
+// Compartilhamento com a central. Quando FALSE, o rastreamento continua atualizando
+// o mapa/UI do agente, mas NADA é publicado no barramento (modo local/privado).
+let shareLocation = true;
+
+/** Liga/desliga a publicação das posições no barramento (sem parar o rastreamento). */
+export function setShareLocation(value: boolean): void {
+  shareLocation = value;
+}
+
+export function isSharingLocation(): boolean {
+  return shareLocation;
+}
+
 /** Inscreve um ouvinte que recebe cada amostra publicada (para a tela do agente). */
 export function subscribePositions(listener: PositionListener): () => void {
   positionListeners.add(listener);
@@ -56,11 +69,28 @@ export function getLastSample(): PositionSample | null {
   return lastSample;
 }
 
-/** Publica no barramento MQTT e notifica a UI local com a mesma amostra. */
+/** Notifica a UI local e, SE o compartilhamento estiver ligado, publica no barramento. */
 function report(ctx: TrackingContext, sample: PositionSample): void {
   lastSample = sample;
   for (const listener of positionListeners) listener(sample);
-  void publishPosition(ctx.operationId, ctx.agentId, sample);
+  if (shareLocation) void publishPosition(ctx.operationId, ctx.agentId, sample);
+}
+
+/**
+ * Obtém UMA posição sob demanda (ex.: botão "centralizar"), independentemente de o
+ * rastreamento estar ligado ou de estar compartilhando. Garante o `ready()` do
+ * plugin, NÃO publica no barramento e NÃO acrescenta ponto à trilha (só devolve).
+ */
+export async function getCurrentPositionOnce(ctx: TrackingContext): Promise<PositionSample | null> {
+  try {
+    await initTracking(ctx); // idempotente: garante ready() + permissões
+    const location = await BackgroundGeolocation.getCurrentPosition({ samples: 1, persist: false });
+    const sample = toSample(location);
+    lastSample = sample;
+    return sample;
+  } catch {
+    return null;
+  }
 }
 
 export async function initTracking(ctx: TrackingContext): Promise<void> {
