@@ -59,6 +59,41 @@ e Fast Refresh viajam por WiFi.
 Descubra o IP do celular em _Configurações → Wi‑Fi → (rede) → Avançado_, ou
 `adb shell ip -f inet addr show wlan0`.
 
+## Solução de problemas ("não conecta pela WiFi")
+
+- **Vários adaptadores → Metro anuncia o IP errado.** Se o PC tem Docker/WSL/VPN, o
+  Metro pode anunciar um IP virtual (ex.: `172.x`/`10.x`) que o celular **não
+  alcança**. Force o IP da WiFi real:
+
+  ```powershell
+  # PowerShell (na pasta apps/mobile). Troque pelo IP da SUA WiFi:
+  $env:REACT_NATIVE_PACKAGER_HOSTNAME="192.168.1.71"; npm start
+  ```
+
+  ```bash
+  # Git Bash:
+  REACT_NATIVE_PACKAGER_HOSTNAME=192.168.1.71 npm start
+  ```
+
+  Descubra o IP com `ipconfig` (a linha "Endereço IPv4" do adaptador Wi‑Fi). Como o
+  app deriva a API/MQTT do IP do Metro, isso conserta as duas conexões de uma vez.
+
+- **Trocou de rede WiFi?** O IP do PC muda → **reinicie o Metro** (e refaça o
+  `REACT_NATIVE_PACKAGER_HOSTNAME` com o novo IP). Se usa ADB por WiFi, o IP do
+  celular também muda → `adb connect <novo-ip>:5555` de novo.
+
+- **Rede com isolamento de clientes (AP isolation).** WiFi corporativa/de convidados
+  costuma bloquear celular↔PC. Sintoma: `ping <ip-do-PC>` falha do celular. Saídas:
+  usar o **hotspot do celular** (o PC entra nele), um roteador doméstico, ou
+  `npm run start:tunnel` (Expo Tunnel, via internet — mais lento).
+
+- **`expo run:android` diz "No Android connected device found".** Esse comando
+  **compila e instala** o app nativo e precisa de um device **no ADB** (`adb devices`
+  não pode estar vazio) — não basta a mesma WiFi. Conecte por USB (uma vez) ou por
+  ADB‑WiFi (acima) e rode `npm run android`. Precisa de um build nativo novo sempre
+  que um **módulo nativo** muda (ex.: `expo-notifications`); depois de instalado, o
+  dia a dia (JS) roda só com `npm start` pela WiFi.
+
 ## Notificação em segundo plano
 
 Com o **Rastreamento (GPS) ligado**, o app roda como *foreground service* e fica
