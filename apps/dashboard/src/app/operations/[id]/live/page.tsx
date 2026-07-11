@@ -495,11 +495,12 @@ export default function LiveOperationPage() {
             <div className="card" style={{ padding: 12, marginBottom: 16 }}>
               <strong style={{ fontSize: 14 }}>Mídias da operação ({mediaMsgs.length})</strong>
               {/* Masonry (colunas CSS): as fotos mantêm o aspecto natural e não
-                  deformam. 5 colunas fixas → cada imagem ~20% da largura do card
-                  (mín. = máx.), acompanhando a largura do sidebar ao redimensionar. */}
-              <div style={{ columnCount: 5, columnGap: 6, marginTop: 8 }}>
+                  deformam. `column-width` (largura FIXA de coluna) mantém as
+                  miniaturas pequenas mesmo com poucas imagens ou sidebar largo —
+                  o nº de colunas se adapta; `maxWidth` fecha o limite superior. */}
+              <div style={{ columns: '96px', columnGap: 6, marginTop: 8 }}>
                 {mediaMsgs.map((m) => (
-                  <div key={m.id} style={{ breakInside: 'avoid', marginBottom: 6 }}>
+                  <div key={m.id} style={{ breakInside: 'avoid', marginBottom: 6, maxWidth: 130 }}>
                     <AuthImage
                       path={api.mediaPath(operationId, m.mediaRef!)}
                       alt={`Mídia de ${m.senderId}`}
@@ -728,7 +729,10 @@ export default function LiveOperationPage() {
           {alerts.length > 0 && (
             <div className="card" style={{ padding: 12, marginBottom: 16 }}>
               <strong style={{ fontSize: 14 }}>Alertas ({alerts.length})</strong>
-              <div style={{ maxHeight: 220, overflowY: 'auto', marginTop: 4 }}>
+              <div
+                className="thinscroll"
+                style={{ maxHeight: 220, overflowY: 'auto', marginTop: 4 }}
+              >
                 {alerts.map((a) => {
                   const hasLoc = a.lng != null && a.lat != null;
                   return (

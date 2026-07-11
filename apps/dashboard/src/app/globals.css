@@ -22,6 +22,26 @@
   display: none;
 }
 
+/* Barra de rolagem fina no tom do tema (evita a barra branca padrão). */
+.thinscroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.thinscroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.thinscroll::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+}
+.thinscroll::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
+}
+.thinscroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
 html,
 body {
   margin: 0;
