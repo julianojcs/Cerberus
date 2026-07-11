@@ -121,6 +121,7 @@ export function LiveMap({
   mediaMarkers = [],
   onMediaClick,
   geofences = [],
+  showGeofences = true,
   onMapClick,
   editGeofence = null,
   onGeofenceMove,
@@ -133,6 +134,7 @@ export function LiveMap({
   mediaMarkers?: MediaMarker[];
   onMediaClick?: (id: string) => void;
   geofences?: GeofenceCircle[];
+  showGeofences?: boolean;
   onMapClick?: (lng: number, lat: number) => void;
   editGeofence?: EditGeofence | null;
   onGeofenceMove?: (lng: number, lat: number) => void;
@@ -147,6 +149,8 @@ export function LiveMap({
   onMediaClickRef.current = onMediaClick;
   const geofencesRef = useRef<GeofenceCircle[]>(geofences);
   geofencesRef.current = geofences;
+  const showGeofencesRef = useRef(showGeofences);
+  showGeofencesRef.current = showGeofences;
   const onMapClickRef = useRef(onMapClick);
   onMapClickRef.current = onMapClick;
   // Handles de edição de geofence (centro = mover; borda = redimensionar).
@@ -195,16 +199,19 @@ export function LiveMap({
         type: 'geojson',
         data: geofencesFC(geofencesRef.current),
       });
+      const geoVisibility = showGeofencesRef.current ? 'visible' : 'none';
       map.addLayer({
         id: 'geofences-fill',
         type: 'fill',
         source: 'geofences',
+        layout: { visibility: geoVisibility },
         paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.12 },
       });
       map.addLayer({
         id: 'geofences-line',
         type: 'line',
         source: 'geofences',
+        layout: { visibility: geoVisibility },
         paint: { 'line-color': ['get', 'color'], 'line-width': 2, 'line-opacity': 0.7 },
       });
       // Trilhas (por cima das zonas).
@@ -371,6 +378,15 @@ export function LiveMap({
       editEdgeRef.current = null;
     };
   }, [editGeofence?.id]);
+
+  // Liga/desliga a exibição das zonas.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !styleReadyRef.current) return;
+    const v = showGeofences ? 'visible' : 'none';
+    map.setLayoutProperty('geofences-fill', 'visibility', v);
+    map.setLayoutProperty('geofences-line', 'visibility', v);
+  }, [showGeofences]);
 
   // Voa até um ponto (ex.: ao clicar num alerta) para mostrar onde ocorreu.
   useEffect(() => {
