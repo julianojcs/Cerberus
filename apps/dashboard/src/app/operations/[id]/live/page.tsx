@@ -59,6 +59,8 @@ export default function LiveOperationPage() {
     color: string;
   } | null>(null);
   const [alertFocus, setAlertFocus] = useState<[number, number] | null>(null);
+  const [showZones, setShowZones] = useState(true);
+  const [recomputing, setRecomputing] = useState(false);
 
   // Snapshot inicial (última posição conhecida) via REST + stream ao vivo via MQTT.
   useEffect(() => {
@@ -271,6 +273,17 @@ export default function LiveOperationPage() {
     setEditGeo(null);
   }
 
+  async function handleRecompute() {
+    setRecomputing(true);
+    try {
+      await api.recomputeAlerts(operationId);
+      setAlerts(await api.alerts(operationId));
+    } catch {
+      /* recálculo falhou */
+    }
+    setRecomputing(false);
+  }
+
   const gfInputStyle: React.CSSProperties = {
     width: '100%',
     background: 'var(--bg, #0b0f14)',
@@ -396,24 +409,39 @@ export default function LiveOperationPage() {
           )}
 
           <div className="card" style={{ padding: 12, marginBottom: 16 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                gap: 8,
+              }}
+            >
               <strong style={{ fontSize: 14 }}>Zonas ({geofences.length})</strong>
-              <button
-                type="button"
-                onClick={() => {
-                  setPlacing((p) => !p);
-                  setPendingCenter(null);
-                }}
-                className="badge"
-                style={{
-                  cursor: 'pointer',
-                  border: '1px solid var(--border)',
-                  background: placing ? '#3fb950' : 'transparent',
-                  color: placing ? '#0b0f14' : 'var(--muted)',
-                }}
-              >
-                {placing ? 'clique no mapa…' : '+ Nova'}
-              </button>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <Toggle
+                  checked={showZones}
+                  onChange={setShowZones}
+                  label="Exibir"
+                  title="Exibir/ocultar as zonas no mapa"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPlacing((p) => !p);
+                    setPendingCenter(null);
+                  }}
+                  className="badge"
+                  style={{
+                    cursor: 'pointer',
+                    border: '1px solid var(--border)',
+                    background: placing ? '#3fb950' : 'transparent',
+                    color: placing ? '#0b0f14' : 'var(--muted)',
+                  }}
+                >
+                  {placing ? 'clique no mapa…' : '+ Nova'}
+                </button>
+              </div>
             </div>
             {pendingCenter && (
               <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -568,6 +596,22 @@ export default function LiveOperationPage() {
                 </div>
               </div>
             )}
+            <button
+              type="button"
+              onClick={handleRecompute}
+              disabled={recomputing}
+              title="Reprocessa o histórico de posições e regenera os alertas de entrada/saída"
+              className="badge"
+              style={{
+                marginTop: 10,
+                width: '100%',
+                cursor: recomputing ? 'wait' : 'pointer',
+                border: '1px solid var(--border)',
+                background: 'transparent',
+              }}
+            >
+              {recomputing ? 'Recalculando…' : '↻ Recalcular alertas do histórico'}
+            </button>
           </div>
 
           {alerts.length > 0 && (
@@ -628,6 +672,7 @@ export default function LiveOperationPage() {
             mediaMarkers={mediaMarkers}
             onMediaClick={(id) => setLightbox(mediaMsgs.find((m) => m.id === id) ?? null)}
             geofences={displayGeofences}
+            showGeofences={showZones}
             onMapClick={(lng, lat) => {
               if (placing) setPendingCenter({ lng, lat });
             }}

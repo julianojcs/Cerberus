@@ -2,7 +2,8 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { Types } from 'mongoose';
 import { Role } from '@cerberus/shared';
-import { Alert, Geofence } from '../../models/index.js';
+import { Alert, Geofence, GeofenceMembership, Position } from '../../models/index.js';
+import { detectGeofenceEvents } from './detect.js';
 import { assertOperationScope } from '../scope.js';
 
 // Cor = token de familia da paleta Tailwind (o dashboard restringe as opcoes).
@@ -108,6 +109,62 @@ export async function geofenceRoutes(app: FastifyInstance): Promise<void> {
       const res = await Geofence.deleteOne({ _id: gid, operationId: id });
       if (res.deletedCount === 0) return reply.code(404).send({ error: 'Geofence não encontrada' });
       return reply.code(204).send();
+    },
+  );
+
+  // Recalcula os alertas reprocessando TODO o histórico de posições contra as
+  // zonas ativas (replay). Útil após criar/mover zonas: gera os alertas de
+  // entrada/saída que ocorreram no passado. Admin, escopado.
+  app.post(
+    '/operations/:id/geofences/recompute',
+    { onRequest: [app.requireRole(Role.ADMIN)] },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      if (!assertOperationScope(request, reply, id)) return;
+
+      // Recomeça do zero para o replay ser determinístico.
+      await Alert.deleteMany({ operationId: id });
+      await GeofenceMembership.deleteMany({ operationId: id });
+
+      const geofences = await Geofence.find({ operationId: id, active: true }).lean();
+      if (geofences.length === 0) return { alertsCreated: 0 };
+
+      const positions = await Position.find({ operationId: id }).sort({ capturedAt: 1 }).lean();
+      const stateByAgent: Record<string, Record<string, boolean>> = {};
+      const alerts: Record<string, unknown>[] = [];
+
+      for (const p of positions) {
+        const coords = (p.location as { coordinates?: number[] } | undefined)?.coordinates;
+        const [lng, lat] = coords ?? [];
+        if (lng == null || lat == null) continue;
+        const insideBefore = (stateByAgent[p.agentId] ??= {});
+        const events = detectGeofenceEvents({ lng, lat }, insideBefore, geofences);
+        for (const ev of events) {
+          insideBefore[ev.geofenceId] = ev.inside;
+          alerts.push({
+            operationId: id,
+            agentId: p.agentId,
+            geofenceId: ev.geofenceId,
+            geofenceName: ev.geofenceName,
+            type: ev.type,
+            location: { type: 'Point', coordinates: [lng, lat] },
+            capturedAt: p.capturedAt,
+            receivedAt: new Date(),
+          });
+        }
+      }
+      if (alerts.length > 0) await Alert.insertMany(alerts);
+
+      // Persiste o estado final de pertencimento (para a detecção ao vivo continuar).
+      const memberships: Record<string, unknown>[] = [];
+      for (const [agentId, map] of Object.entries(stateByAgent)) {
+        for (const [geofenceId, inside] of Object.entries(map)) {
+          memberships.push({ operationId: id, agentId, geofenceId, inside, updatedAt: new Date() });
+        }
+      }
+      if (memberships.length > 0) await GeofenceMembership.insertMany(memberships);
+
+      return { alertsCreated: alerts.length };
     },
   );
 

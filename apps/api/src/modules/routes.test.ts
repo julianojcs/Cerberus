@@ -808,6 +808,59 @@ describe('geofencing + alertas', () => {
     expect(res.statusCode).toBe(403);
   });
 
+  it('recalcula alertas do histórico (replay) → enter + exit', async () => {
+    const { Geofence, Position } = await import('../models/index.js');
+    await Geofence.create({
+      operationId,
+      name: 'ZonaReplay',
+      center: { type: 'Point', coordinates: [-43.9, -19.9] },
+      radiusMeters: 150,
+      color: 'blue',
+    });
+    // Dentro → depois longe (fora): deve gerar enter e exit para AG-REPLAY.
+    await Position.create({
+      operationId,
+      agentId: 'AG-REPLAY',
+      location: { type: 'Point', coordinates: [-43.9, -19.9] },
+      capturedAt: new Date('2026-07-11T10:00:00Z'),
+      receivedAt: new Date(),
+    });
+    await Position.create({
+      operationId,
+      agentId: 'AG-REPLAY',
+      location: { type: 'Point', coordinates: [-43.8, -19.8] },
+      capturedAt: new Date('2026-07-11T10:01:00Z'),
+      receivedAt: new Date(),
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/geofences/recompute`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().alertsCreated).toBeGreaterThanOrEqual(2);
+
+    const alerts = await app.inject({
+      method: 'GET',
+      url: `/operations/${operationId}/alerts`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const mine = (alerts.json() as Array<{ type: string; agentId: string }>)
+      .filter((a) => a.agentId === 'AG-REPLAY')
+      .map((a) => a.type);
+    expect(mine).toEqual(expect.arrayContaining(['enter', 'exit']));
+  });
+
+  it('agente (não-admin) não recalcula alertas (403)', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/geofences/recompute`,
+      headers: { authorization: `Bearer ${agentToken}` },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
   it('admin remove geofence (DELETE) → 204 e some da lista', async () => {
     const del = await app.inject({
       method: 'DELETE',

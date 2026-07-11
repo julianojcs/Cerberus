@@ -115,6 +115,11 @@ export const api = {
   deleteGeofence: (operationId: string, gid: string) =>
     request<void>(`/operations/${operationId}/geofences/${gid}`, { method: 'DELETE' }),
   alerts: (operationId: string) => request<GeofenceAlert[]>(`/operations/${operationId}/alerts`),
+  // Reprocessa o histórico de posições contra as zonas atuais e regenera os alertas.
+  recomputeAlerts: (operationId: string) =>
+    request<{ alertsCreated: number }>(`/operations/${operationId}/geofences/recompute`, {
+      method: 'POST',
+    }),
 };
 
 export interface Geofence {

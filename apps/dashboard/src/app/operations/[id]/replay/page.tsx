@@ -3,9 +3,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
-import { api, type LatestPosition } from '@/lib/api';
+import { api, type LatestPosition, type Geofence } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import { LiveMap, type AgentPoint, type AgentTrails } from '@/components/LiveMap';
+import { Toggle } from '@/components/Toggle';
+import { resolveColor } from '@/lib/tailwind-colors';
 
 const SPEEDS = [10, 60, 300];
 const TICK_MS = 200; // intervalo real entre passos da reprodução
@@ -38,6 +40,8 @@ export default function ReplayPage() {
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(60);
   const [loading, setLoading] = useState(true);
+  const [geofences, setGeofences] = useState<Geofence[]>([]);
+  const [showZones, setShowZones] = useState(true);
 
   useEffect(() => {
     if (!getToken()) {
@@ -57,7 +61,24 @@ export default function ReplayPage() {
         /* sem histórico */
       })
       .finally(() => setLoading(false));
+    api
+      .geofences(operationId)
+      .then(setGeofences)
+      .catch(() => {});
   }, [operationId, router]);
+
+  const geoCircles = useMemo(
+    () =>
+      geofences.map((g) => ({
+        id: g.id,
+        name: g.name,
+        lng: g.lng,
+        lat: g.lat,
+        radiusMeters: g.radiusMeters,
+        color: resolveColor(g.color),
+      })),
+    [geofences],
+  );
 
   const [t0, tN] = useMemo<[number, number]>(() => {
     if (!history.length) return [0, 0];
@@ -100,6 +121,7 @@ export default function ReplayPage() {
   }, [history, t]);
 
   const atEnd = t >= tN && tN > 0;
+  const pct = tN > t0 ? ((t - t0) / (tN - t0)) * 100 : 0;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
@@ -113,13 +135,27 @@ export default function ReplayPage() {
             Replay histórico
           </div>
         </div>
-        <span className="badge" style={{ color: 'var(--muted)' }}>
-          {loading ? 'carregando…' : `${history.length} posição(ões)`}
-        </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+          <Toggle
+            checked={showZones}
+            onChange={setShowZones}
+            label="Zonas"
+            title="Exibir/ocultar as zonas no mapa"
+          />
+          <span className="badge" style={{ color: 'var(--muted)' }}>
+            {loading ? 'carregando…' : `${history.length} posição(ões)`}
+          </span>
+        </div>
       </div>
 
       <main style={{ flex: 1, minHeight: 0 }}>
-        <LiveMap agents={agents} trails={trails} showTrails />
+        <LiveMap
+          agents={agents}
+          trails={trails}
+          showTrails
+          geofences={geoCircles}
+          showGeofences={showZones}
+        />
       </main>
 
       <div
@@ -156,25 +192,40 @@ export default function ReplayPage() {
           {playing ? '❚❚' : atEnd ? '↻' : '▶'}
         </button>
 
-        <input
-          type="range"
-          min={t0}
-          max={tN || 1}
-          value={t}
-          onChange={(e) => {
-            setPlaying(false);
-            setT(Number(e.target.value));
-          }}
-          disabled={history.length === 0}
-          style={{ flex: 1, minWidth: 160, accentColor: '#c1121f' }}
-        />
-
-        <span
-          className="muted"
-          style={{ fontSize: 13, fontVariantNumeric: 'tabular-nums', minWidth: 150 }}
-        >
-          {fmt(t)}
-        </span>
+        <div style={{ flex: 1, minWidth: 200, position: 'relative', paddingTop: 26 }}>
+          {history.length > 0 && (
+            <div
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: `${pct}%`,
+                transform: 'translateX(-50%)',
+                whiteSpace: 'nowrap',
+                fontSize: 12,
+                fontVariantNumeric: 'tabular-nums',
+                background: '#141b24',
+                border: '1px solid var(--border)',
+                borderRadius: 6,
+                padding: '2px 6px',
+                pointerEvents: 'none',
+              }}
+            >
+              {fmt(t)}
+            </div>
+          )}
+          <input
+            type="range"
+            min={t0}
+            max={tN || 1}
+            value={t}
+            onChange={(e) => {
+              setPlaying(false);
+              setT(Number(e.target.value));
+            }}
+            disabled={history.length === 0}
+            style={{ width: '100%', accentColor: '#c1121f' }}
+          />
+        </div>
 
         <div style={{ display: 'flex', gap: 4 }}>
           {SPEEDS.map((s) => (
