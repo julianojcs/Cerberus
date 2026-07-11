@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import {
@@ -12,29 +12,16 @@ import {
 } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import { subscribeToOperation, type LivePosition } from '@/lib/mqtt';
-import {
-  LiveMap,
-  type AgentPoint,
-  type AgentTrails,
-  type PlottedRoute,
-} from '@/components/LiveMap';
+import { LiveMap, type AgentPoint, type PlottedRoute } from '@/components/LiveMap';
 import { Toggle } from '@/components/Toggle';
 import { AuthImage } from '@/components/AuthImage';
 import { ResizableSidebar } from '@/components/ResizableSidebar';
 import { ColorPalettePicker } from '@/components/ColorPalettePicker';
+import { alertBorderFocus, routeBearingAt, type AlertFocus } from '@/lib/geo';
 import { resolveColor } from '@/lib/tailwind-colors';
-import { alertBorderFocus, type AlertFocus } from '@/lib/geo';
-import {
-  splitSegments,
-  buildRoutes,
-  assignAgentColors,
-  TRAIL_GAP_MS,
-  type Route,
-} from '@/lib/routes';
+import { buildRoutes, assignAgentColors, type Route } from '@/lib/routes';
 
-/** Máximo de pontos por agente na trilha (limita memória/render). */
-const MAX_TRAIL = 500;
-/** Histórico buscado para semear trilhas e montar as rotas por agente. */
+/** Histórico buscado para montar as rotas por agente. */
 const HISTORY_LIMIT = 5000;
 const HOUR_MS = 60 * 60 * 1000;
 
@@ -62,11 +49,7 @@ export default function LiveOperationPage() {
   const operationId = params.id;
 
   const [agents, setAgents] = useState<Record<string, AgentPoint>>({});
-  const [trails, setTrails] = useState<AgentTrails>({});
-  const [showTrails, setShowTrails] = useState(true);
   const [connected, setConnected] = useState(false);
-  const lastUpdateRef = useRef<Record<string, string>>({});
-  const [, forceTick] = useState(0);
 
   // Rotas por agente (histórico segmentado nos gaps) + cor por agente.
   const [routes, setRoutes] = useState<Record<string, Route[]>>({});
@@ -129,7 +112,6 @@ export default function LiveOperationPage() {
               battery: p.battery,
               activity: p.activity,
             };
-            lastUpdateRef.current[p.agentId] = p.capturedAt;
           }
           return next;
         });
@@ -138,27 +120,22 @@ export default function LiveOperationPage() {
         /* sem histórico ainda */
       });
 
-    // Semeia as trilhas E monta as rotas por agente a partir do histórico. Quebra em
-    // segmentos nos gaps de transmissão (posições distantes no tempo NÃO viram reta —
-    // evita o "pulo" no mapa).
+    // Monta as rotas por agente a partir do histórico (segmentadas nos gaps de
+    // transmissão). O trajeto é exibido SOMENTE pela seleção de rotas por agente —
+    // não há trilha "ao vivo" duplicando as rotas no mapa.
     api
       .positionHistory(operationId, HISTORY_LIMIT)
       .then((positions: LatestPosition[]) => {
-        const byAgent: Record<string, LatestPosition[]> = {};
+        const agentIds = new Set<string>();
         let earliest = Infinity;
         for (const p of positions) {
           if (p.lat == null || p.lng == null) continue;
-          (byAgent[p.agentId] ??= []).push(p);
+          agentIds.add(p.agentId);
           const cap = +new Date(p.capturedAt);
           if (cap < earliest) earliest = cap;
         }
-        const trails: AgentTrails = {};
-        for (const [id, pts] of Object.entries(byAgent)) {
-          trails[id] = splitSegments(pts).map((seg) => seg.slice(-MAX_TRAIL));
-        }
-        setTrails(trails);
         setRoutes(buildRoutes(positions));
-        setAgentColors(assignAgentColors(Object.keys(byAgent)));
+        setAgentColors(assignAgentColors([...agentIds]));
         if (Number.isFinite(earliest)) {
           setFirstTs(earliest);
           // Janela padrão: 24 h, limitada ao intervalo real disponível.
@@ -203,22 +180,6 @@ export default function LiveOperationPage() {
             activity: pos.activity,
           },
         }));
-        setTrails((prev) => {
-          const segments = prev[pos.agentId] ?? [];
-          const point: [number, number] = [pos.lng, pos.lat];
-          // `lastUpdateRef` ainda tem a captura ANTERIOR (só atualiza abaixo).
-          const lastCap = lastUpdateRef.current[pos.agentId];
-          const gap = lastCap ? +new Date(pos.capturedAt) - +new Date(lastCap) : Infinity;
-          if (segments.length === 0 || gap > TRAIL_GAP_MS) {
-            // Sem transmissão por um bom tempo → começa uma nova rota (sem reta ligando).
-            return { ...prev, [pos.agentId]: [...segments, [point]] };
-          }
-          const lastSeg = segments[segments.length - 1];
-          const nextSeg = [...lastSeg, point].slice(-MAX_TRAIL);
-          return { ...prev, [pos.agentId]: [...segments.slice(0, -1), nextSeg] };
-        });
-        lastUpdateRef.current[pos.agentId] = pos.capturedAt;
-        forceTick((t) => t + 1);
       },
       getToken() ?? undefined,
       setConnected,
@@ -425,12 +386,6 @@ export default function LiveOperationPage() {
           </Link>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-          <Toggle
-            checked={showTrails}
-            onChange={setShowTrails}
-            label="Rota"
-            title="Exibir/ocultar a rota (percurso) no mapa"
-          />
           <span className="badge" style={{ color: connected ? 'var(--ok)' : 'var(--muted)' }}>
             {connected ? '● barramento conectado' : '○ aguardando telemetria'}
           </span>
@@ -495,12 +450,11 @@ export default function LiveOperationPage() {
             <div className="card" style={{ padding: 12, marginBottom: 16 }}>
               <strong style={{ fontSize: 14 }}>Mídias da operação ({mediaMsgs.length})</strong>
               {/* Masonry (colunas CSS): as fotos mantêm o aspecto natural e não
-                  deformam. `column-width` (largura FIXA de coluna) mantém as
-                  miniaturas pequenas mesmo com poucas imagens ou sidebar largo —
-                  o nº de colunas se adapta; `maxWidth` fecha o limite superior. */}
-              <div style={{ columns: '96px', columnGap: 6, marginTop: 8 }}>
+                  deformam. `column-width: 32px` mantém as miniaturas bem pequenas
+                  (o nº de colunas se adapta à largura do sidebar). */}
+              <div style={{ columns: '32px', columnGap: 4, marginTop: 8 }}>
                 {mediaMsgs.map((m) => (
-                  <div key={m.id} style={{ breakInside: 'avoid', marginBottom: 6, maxWidth: 130 }}>
+                  <div key={m.id} style={{ breakInside: 'avoid', marginBottom: 4 }}>
                     <AuthImage
                       path={api.mediaPath(operationId, m.mediaRef!)}
                       alt={`Mídia de ${m.senderId}`}
@@ -509,7 +463,7 @@ export default function LiveOperationPage() {
                         width: '100%',
                         height: 'auto',
                         display: 'block',
-                        borderRadius: 6,
+                        borderRadius: 3,
                         background: 'var(--border)',
                         cursor: 'pointer',
                       }}
@@ -742,16 +696,28 @@ export default function LiveOperationPage() {
                       onClick={() => {
                         if (a.lng == null || a.lat == null) return;
                         const zone = geofences.find((g) => g.id === a.geofenceId);
-                        setAlertFocus(
-                          zone
-                            ? alertBorderFocus(
-                                [a.lng, a.lat],
-                                [zone.lng, zone.lat],
-                                zone.radiusMeters,
-                                a.type,
-                              )
-                            : { lng: a.lng, lat: a.lat, bearing: 0, type: a.type },
+                        // Direção da seta = sentido do deslocamento na rota no cruzamento
+                        // (não o raio da zona). Fallback: radial, se a rota não for achada.
+                        const travel = routeBearingAt(
+                          (routes[a.agentId] ?? []).map((r) => r.points),
+                          [a.lng, a.lat],
                         );
+                        if (zone) {
+                          const f = alertBorderFocus(
+                            [a.lng, a.lat],
+                            [zone.lng, zone.lat],
+                            zone.radiusMeters,
+                            a.type,
+                          );
+                          setAlertFocus(travel != null ? { ...f, bearing: travel } : f);
+                        } else {
+                          setAlertFocus({
+                            lng: a.lng,
+                            lat: a.lat,
+                            bearing: travel ?? 0,
+                            type: a.type,
+                          });
+                        }
                       }}
                       title={hasLoc ? 'Ver no mapa' : undefined}
                       style={{
@@ -971,8 +937,6 @@ export default function LiveOperationPage() {
           )}
           <LiveMap
             agents={agents}
-            trails={trails}
-            showTrails={showTrails}
             routes={plottedRoutes}
             agentColors={agentColors}
             mediaMarkers={mediaMarkers}
