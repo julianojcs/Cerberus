@@ -777,6 +777,30 @@ describe('geofencing + alertas', () => {
     );
   });
 
+  it('admin edita geofence (PATCH: mover + redimensionar)', async () => {
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/operations/${operationId}/geofences/${geofenceId}`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { lng: -43.94, lat: -19.95, radiusMeters: 300 },
+    });
+    expect(res.statusCode).toBe(200);
+    const g = res.json();
+    expect(g.radiusMeters).toBe(300);
+    expect(g.lat).toBeCloseTo(-19.95);
+    expect(g.lng).toBeCloseTo(-43.94);
+  });
+
+  it('agente (não-admin) não edita geofence (403)', async () => {
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/operations/${operationId}/geofences/${geofenceId}`,
+      headers: { authorization: `Bearer ${agentToken}` },
+      payload: { radiusMeters: 500 },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
   it('admin remove geofence (DELETE) → 204 e some da lista', async () => {
     const del = await app.inject({
       method: 'DELETE',

@@ -81,6 +81,32 @@ function syncGeofences(map: MlMap, geofences: GeofenceCircle[]): void {
   source?.setData(geofencesFC(geofences));
 }
 
+/** Geofence em edição (valores ao vivo enquanto se arrasta os handles). */
+export interface EditGeofence {
+  id: string;
+  lng: number;
+  lat: number;
+  radiusMeters: number;
+}
+
+const EARTH_R = 6371000;
+
+function haversineMeters(a: [number, number], b: [number, number]): number {
+  const toRad = (d: number): number => (d * Math.PI) / 180;
+  const dLat = toRad(b[1] - a[1]);
+  const dLng = toRad(b[0] - a[0]);
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(a[1])) * Math.cos(toRad(b[1])) * Math.sin(dLng / 2) ** 2;
+  return 2 * EARTH_R * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+/** Ponto a `meters` a leste de (lng, lat) — usado como handle de borda (redimensionar). */
+function eastPoint(lng: number, lat: number, meters: number): [number, number] {
+  const dLng = ((meters / (EARTH_R * Math.cos((lat * Math.PI) / 180))) * 180) / Math.PI;
+  return [lng + dLng, lat];
+}
+
 /**
  * Mapa de plotagem em tempo real. Recebe as posições correntes de cada agente
  * (mapa agentId -> ponto) e a trilha acumulada (agentId -> pontos), atualizando
@@ -95,6 +121,9 @@ export function LiveMap({
   onMediaClick,
   geofences = [],
   onMapClick,
+  editGeofence = null,
+  onGeofenceMove,
+  onGeofenceResize,
 }: {
   agents: Record<string, AgentPoint>;
   trails?: AgentTrails;
@@ -103,6 +132,9 @@ export function LiveMap({
   onMediaClick?: (id: string) => void;
   geofences?: GeofenceCircle[];
   onMapClick?: (lng: number, lat: number) => void;
+  editGeofence?: EditGeofence | null;
+  onGeofenceMove?: (lng: number, lat: number) => void;
+  onGeofenceResize?: (radiusMeters: number) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MlMap | null>(null);
@@ -114,6 +146,14 @@ export function LiveMap({
   geofencesRef.current = geofences;
   const onMapClickRef = useRef(onMapClick);
   onMapClickRef.current = onMapClick;
+  // Handles de edição de geofence (centro = mover; borda = redimensionar).
+  const editCenterRef = useRef<Marker | null>(null);
+  const editEdgeRef = useRef<Marker | null>(null);
+  const draggingRef = useRef<'center' | 'edge' | null>(null);
+  const editGeoRef = useRef<EditGeofence | null>(editGeofence);
+  editGeoRef.current = editGeofence;
+  const editCbRef = useRef({ move: onGeofenceMove, resize: onGeofenceResize });
+  editCbRef.current = { move: onGeofenceMove, resize: onGeofenceResize };
   const fittedRef = useRef(false);
   const styleReadyRef = useRef(false);
   // Mantém a trilha/visibilidade correntes acessíveis ao handler de 'load'
@@ -275,6 +315,72 @@ export function LiveMap({
     if (!map || !styleReadyRef.current) return;
     syncGeofences(map, geofences);
   }, [geofences]);
+
+  // Cria/remove os handles arrastáveis ao entrar/sair do modo de edição.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    editCenterRef.current?.remove();
+    editEdgeRef.current?.remove();
+    editCenterRef.current = null;
+    editEdgeRef.current = null;
+    if (!editGeofence) return;
+
+    // Centro — arrastar para MOVER a zona.
+    const cEl = document.createElement('div');
+    cEl.title = 'Arraste para mover a zona';
+    cEl.style.cssText =
+      'cursor:move;width:20px;height:20px;border-radius:50%;background:#3fb950;border:3px solid #fff;box-shadow:0 0 6px rgba(0,0,0,.6);';
+    const center = new maplibregl.Marker({ element: cEl, draggable: true })
+      .setLngLat([editGeofence.lng, editGeofence.lat])
+      .addTo(map);
+    center.on('dragstart', () => (draggingRef.current = 'center'));
+    center.on('drag', () => {
+      const { lng, lat } = center.getLngLat();
+      editCbRef.current.move?.(lng, lat);
+    });
+    center.on('dragend', () => (draggingRef.current = null));
+    editCenterRef.current = center;
+
+    // Borda — arrastar para REDIMENSIONAR o raio.
+    const eEl = document.createElement('div');
+    eEl.title = 'Arraste para redimensionar';
+    eEl.style.cssText =
+      'cursor:ew-resize;width:16px;height:16px;border-radius:50%;background:#fff;border:3px solid #3fb950;box-shadow:0 0 6px rgba(0,0,0,.6);';
+    const edge = new maplibregl.Marker({ element: eEl, draggable: true })
+      .setLngLat(eastPoint(editGeofence.lng, editGeofence.lat, editGeofence.radiusMeters))
+      .addTo(map);
+    edge.on('dragstart', () => (draggingRef.current = 'edge'));
+    edge.on('drag', () => {
+      const cur = editGeoRef.current;
+      if (!cur) return;
+      const e = edge.getLngLat();
+      const r = haversineMeters([cur.lng, cur.lat], [e.lng, e.lat]);
+      editCbRef.current.resize?.(Math.max(1, Math.round(r)));
+    });
+    edge.on('dragend', () => (draggingRef.current = null));
+    editEdgeRef.current = edge;
+
+    return () => {
+      center.remove();
+      edge.remove();
+      editCenterRef.current = null;
+      editEdgeRef.current = null;
+    };
+  }, [editGeofence?.id]);
+
+  // Reposiciona os handles conforme os valores mudam (sem brigar com o arraste em curso).
+  useEffect(() => {
+    if (!editGeofence) return;
+    if (draggingRef.current !== 'center') {
+      editCenterRef.current?.setLngLat([editGeofence.lng, editGeofence.lat]);
+    }
+    if (draggingRef.current !== 'edge') {
+      editEdgeRef.current?.setLngLat(
+        eastPoint(editGeofence.lng, editGeofence.lat, editGeofence.radiusMeters),
+      );
+    }
+  }, [editGeofence]);
 
   return <div ref={containerRef} style={{ width: '100%', height: '100%' }} />;
 }
