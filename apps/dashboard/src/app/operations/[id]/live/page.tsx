@@ -9,6 +9,7 @@ import {
   type TacticalMessage,
   type Geofence,
   type GeofenceAlert,
+  type Settings,
 } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import { subscribeToOperation, type LivePosition } from '@/lib/mqtt';
@@ -17,6 +18,7 @@ import { Toggle } from '@/components/Toggle';
 import { AuthImage } from '@/components/AuthImage';
 import { ResizableSidebar } from '@/components/ResizableSidebar';
 import { ColorPalettePicker } from '@/components/ColorPalettePicker';
+import { SettingsModal } from '@/components/SettingsModal';
 import { alertBorderFocus, routeBearingAt, type AlertFocus } from '@/lib/geo';
 import { resolveColor } from '@/lib/tailwind-colors';
 import { buildRoutes, assignAgentColors, type Route } from '@/lib/routes';
@@ -63,6 +65,10 @@ export default function LiveOperationPage() {
   const [selectedRouteIds, setSelectedRouteIds] = useState<Set<string>>(new Set());
   const [expandedAgent, setExpandedAgent] = useState<string | null>(null);
 
+  // Configurações do sistema (padrões enquanto não carrega) + modal.
+  const [settings, setSettings] = useState<Settings>({ minRoutePoints: 5, connectRoutes: false });
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
   // Composer de broadcast (central → agentes).
   const [broadcastText, setBroadcastText] = useState('');
   const [sending, setSending] = useState(false);
@@ -97,6 +103,13 @@ export default function LiveOperationPage() {
       router.replace('/login');
       return;
     }
+
+    api
+      .settings()
+      .then(setSettings)
+      .catch(() => {
+        /* mantém os padrões */
+      });
 
     api
       .latestPositions(operationId)
@@ -200,19 +213,43 @@ export default function LiveOperationPage() {
   );
   const windowStart = nowTs - windowHours * HOUR_MS;
 
-  // Rotas efetivamente plotadas: selecionadas E dentro da janela temporal.
+  // Rotas exibíveis: descarta as com menos de `minRoutePoints` pontos (trechos
+  // insignificantes que só poluem a lista). É a base para cards, lista e plotagem.
+  const visibleRoutes = useMemo(() => {
+    const out: Record<string, Route[]> = {};
+    for (const [agentId, rs] of Object.entries(routes)) {
+      out[agentId] = rs.filter((r) => r.points.length >= settings.minRoutePoints);
+    }
+    return out;
+  }, [routes, settings.minRoutePoints]);
+
+  // Rotas efetivamente plotadas: selecionadas E dentro da janela temporal. Com a
+  // opção "ligar rotas", adiciona conectores tracejados entre rotas consecutivas.
   const plottedRoutes = useMemo<PlottedRoute[]>(() => {
     const out: PlottedRoute[] = [];
-    for (const [agentId, rs] of Object.entries(routes)) {
+    for (const [agentId, rs] of Object.entries(visibleRoutes)) {
       const color = agentColors[agentId] ?? '#c1121f';
-      for (const r of rs) {
-        if (selectedRouteIds.has(r.id) && r.end >= windowStart) {
-          out.push({ id: r.id, points: r.points, color });
+      const shown = rs
+        .filter((r) => selectedRouteIds.has(r.id) && r.end >= windowStart)
+        .sort((a, b) => a.start - b.start);
+      for (const r of shown) out.push({ id: r.id, points: r.points, color });
+      if (settings.connectRoutes) {
+        for (let i = 0; i + 1 < shown.length; i++) {
+          const from = shown[i].points[shown[i].points.length - 1];
+          const to = shown[i + 1].points[0];
+          if (from && to) {
+            out.push({
+              id: `${shown[i].id}~${shown[i + 1].id}`,
+              points: [from, to],
+              color,
+              dashed: true,
+            });
+          }
         }
       }
     }
     return out;
-  }, [routes, agentColors, selectedRouteIds, windowStart]);
+  }, [visibleRoutes, agentColors, selectedRouteIds, windowStart, settings.connectRoutes]);
 
   function toggleRoute(id: string) {
     setSelectedRouteIds((prev) => {
@@ -225,7 +262,7 @@ export default function LiveOperationPage() {
 
   // Seleciona/limpa todas as rotas do agente que caem na janela atual.
   function toggleAgentRoutes(agentId: string) {
-    const inWindow = (routes[agentId] ?? []).filter((r) => r.end >= windowStart);
+    const inWindow = (visibleRoutes[agentId] ?? []).filter((r) => r.end >= windowStart);
     const allSel = inWindow.length > 0 && inWindow.every((r) => selectedRouteIds.has(r.id));
     setSelectedRouteIds((prev) => {
       const next = new Set(prev);
@@ -386,6 +423,19 @@ export default function LiveOperationPage() {
           </Link>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+          <button
+            type="button"
+            onClick={() => setSettingsOpen(true)}
+            className="badge"
+            title="Configurações do sistema"
+            style={{
+              cursor: 'pointer',
+              border: '1px solid var(--border)',
+              background: 'transparent',
+            }}
+          >
+            ⚙ Configurações
+          </button>
           <span className="badge" style={{ color: connected ? 'var(--ok)' : 'var(--muted)' }}>
             {connected ? '● barramento conectado' : '○ aguardando telemetria'}
           </span>
@@ -750,7 +800,7 @@ export default function LiveOperationPage() {
           )}
           {agentList.map((a) => {
             const color = agentColors[a.agentId] ?? '#c1121f';
-            const agentRoutes = routes[a.agentId] ?? [];
+            const agentRoutes = visibleRoutes[a.agentId] ?? [];
             const inWindow = agentRoutes.filter((r) => r.end >= windowStart);
             const selCount = inWindow.filter((r) => selectedRouteIds.has(r.id)).length;
             const allSel = inWindow.length > 0 && selCount === inWindow.length;
@@ -953,6 +1003,14 @@ export default function LiveOperationPage() {
           />
         </main>
       </div>
+
+      {settingsOpen && (
+        <SettingsModal
+          initial={settings}
+          onClose={() => setSettingsOpen(false)}
+          onSaved={setSettings}
+        />
+      )}
 
       {lightbox && (
         <div

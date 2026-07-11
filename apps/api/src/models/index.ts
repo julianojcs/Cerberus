@@ -151,3 +151,23 @@ const geofenceMembershipSchema = new Schema(
 geofenceMembershipSchema.index({ operationId: 1, agentId: 1, geofenceId: 1 }, { unique: true });
 export type GeofenceMembershipDoc = InferSchemaType<typeof geofenceMembershipSchema>;
 export const GeofenceMembership = model('GeofenceMembership', geofenceMembershipSchema);
+
+/* -------------------------------------------------------------- Settings */
+
+/**
+ * Configurações do sistema (documento único/global). Ajustes básicos de exibição
+ * definidos pelo admin. O campo `key` é fixo ('system') e único, garantindo o
+ * padrão singleton (um único documento).
+ */
+const settingsSchema = new Schema(
+  {
+    key: { type: String, default: 'system', unique: true },
+    /** Nº mínimo de pontos para uma rota ser listada/plotada (descarta trechos insignificantes). */
+    minRoutePoints: { type: Number, default: 5, min: 1 },
+    /** Ligar rotas: desenha uma linha do último ponto de uma rota ao primeiro da próxima. */
+    connectRoutes: { type: Boolean, default: false },
+  },
+  { timestamps: true },
+);
+export type SettingsDoc = InferSchemaType<typeof settingsSchema>;
+export const Settings = model('Settings', settingsSchema);

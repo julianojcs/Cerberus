@@ -120,7 +120,18 @@ export const api = {
     request<{ alertsCreated: number }>(`/operations/${operationId}/geofences/recompute`, {
       method: 'POST',
     }),
+  // Configurações globais do sistema (leitura autenticada; escrita restrita a admin).
+  settings: () => request<Settings>('/settings'),
+  patchSettings: (data: Partial<Settings>) =>
+    request<Settings>('/settings', { method: 'PATCH', body: JSON.stringify(data) }),
 };
+
+export interface Settings {
+  /** Nº mínimo de pontos para uma rota ser listada/plotada. */
+  minRoutePoints: number;
+  /** Ligar rotas: linha do último ponto de uma rota ao primeiro da próxima. */
+  connectRoutes: boolean;
+}
 
 export interface Geofence {
   id: string;
