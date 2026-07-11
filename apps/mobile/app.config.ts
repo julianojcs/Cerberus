@@ -37,6 +37,7 @@ const config: ExpoConfig = {
       'ACCESS_BACKGROUND_LOCATION',
       'FOREGROUND_SERVICE',
       'FOREGROUND_SERVICE_LOCATION',
+      'POST_NOTIFICATIONS',
     ],
   },
   plugins: [
@@ -48,6 +49,7 @@ const config: ExpoConfig = {
       },
     ],
     'react-native-background-fetch',
+    'expo-notifications',
     [
       'expo-image-picker',
       {
