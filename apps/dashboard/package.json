@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@cerberus/shared": "*",
+    "animate.css": "^4.1.1",
     "maplibre-gl": "^4.7.1",
     "mqtt": "^5.10.3",
     "next": "^15.1.3",

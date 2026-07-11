@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import 'animate.css/animate.min.css';
 import './globals.css';
 
 export const metadata: Metadata = {

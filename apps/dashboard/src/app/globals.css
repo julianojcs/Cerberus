@@ -192,6 +192,25 @@ button {
 .pinbtn:hover {
   filter: none;
 }
+
+/* Botão de mapa cujo rótulo só aparece no hover (mostra só o ícone em repouso). */
+.maplabelbtn .maplabel {
+  max-width: 0;
+  margin-left: 0;
+  opacity: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  transition:
+    max-width 0.25s ease,
+    opacity 0.2s ease,
+    margin-left 0.25s ease;
+}
+.maplabelbtn:hover .maplabel,
+.maplabelbtn:focus-visible .maplabel {
+  max-width: 160px;
+  margin-left: 6px;
+  opacity: 1;
+}
 .pinbtn[aria-pressed='true'] {
   /* Ativo = só o pin colorido (sem card/borda ao redor). */
   filter: none;
