@@ -164,6 +164,7 @@ export function LiveMap({
   onGeofenceMove,
   onGeofenceResize,
   focus = null,
+  fitNonce = 0,
 }: {
   agents: Record<string, AgentPoint>;
   trails?: AgentTrails;
@@ -179,6 +180,8 @@ export function LiveMap({
   onGeofenceMove?: (lng: number, lat: number) => void;
   onGeofenceResize?: (radiusMeters: number) => void;
   focus?: { lng: number; lat: number; bearing: number; type: 'enter' | 'exit' } | null;
+  /** Muda de valor → o mapa enquadra (fitBounds) todas as rotas plotadas. */
+  fitNonce?: number;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MlMap | null>(null);
@@ -364,6 +367,16 @@ export function LiveMap({
     if (!map || !styleReadyRef.current) return;
     syncRoutes(map, routes);
   }, [routes]);
+
+  // Enquadra (fitBounds) todas as rotas plotadas quando `fitNonce` muda.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !fitNonce) return;
+    const pts = routesRef.current.flatMap((r) => r.points);
+    if (pts.length === 0) return;
+    const bounds = pts.reduce((b, p) => b.extend(p), new maplibregl.LngLatBounds(pts[0], pts[0]));
+    map.fitBounds(bounds, { padding: 60, maxZoom: 16, duration: 600 });
+  }, [fitNonce]);
 
   // Liga/desliga a exibição da rota conforme o toggle do operador.
   useEffect(() => {

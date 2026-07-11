@@ -43,13 +43,18 @@ export default function LiveOperationPage() {
   const router = useRouter();
   const params = useParams<{ id: string }>();
   const operationId = params.id;
+  const colorsKey = `cerberus_agent_colors:${operationId}`;
 
   const [agents, setAgents] = useState<Record<string, AgentPoint>>({});
   const [connected, setConnected] = useState(false);
 
-  // Histórico cru + cor por agente. As rotas são DERIVADAS (com o gap configurável).
+  // Histórico cru. As rotas são DERIVADAS (com o gap configurável).
   const [rawPositions, setRawPositions] = useState<LatestPosition[]>([]);
-  const [agentColors, setAgentColors] = useState<Record<string, string>>({});
+  // Cor por agente: token auto-atribuído + override escolhido pelo admin (localStorage).
+  const [agentColorTokens, setAgentColorTokens] = useState<Record<string, string>>({});
+  const [agentColorOverrides, setAgentColorOverrides] = useState<Record<string, string>>({});
+  // Sinal para o mapa enquadrar (fitBounds) todas as rotas plotadas.
+  const [fitNonce, setFitNonce] = useState(0);
   const [firstTs, setFirstTs] = useState<number | null>(null);
   // "Agora" congelado na montagem — teto do período ajustável.
   const [nowTs] = useState(() => Date.now());
@@ -100,10 +105,17 @@ export default function LiveOperationPage() {
   const [showZones, setShowZones] = useState(true);
   const [recomputing, setRecomputing] = useState(false);
 
-  // Preferência de "pin" da barra (lida só no cliente — evita mismatch de SSR).
+  // Preferências lidas do localStorage (só no cliente — evita mismatch de SSR):
+  // pin da barra + cores escolhidas por agente para esta operação.
   useEffect(() => {
     setBarPinned(localStorage.getItem('cerberus_period_pinned') === '1');
-  }, []);
+    try {
+      const raw = localStorage.getItem(colorsKey);
+      if (raw) setAgentColorOverrides(JSON.parse(raw) as Record<string, string>);
+    } catch {
+      /* preferência corrompida — ignora */
+    }
+  }, [colorsKey]);
 
   // Snapshot inicial (última posição conhecida) via REST + stream ao vivo via MQTT.
   useEffect(() => {
@@ -158,7 +170,7 @@ export default function LiveOperationPage() {
           if (cap > latest) latest = cap;
         }
         setRawPositions(positions);
-        setAgentColors(assignAgentColors([...agentIds]));
+        setAgentColorTokens(assignAgentColors([...agentIds]));
         if (Number.isFinite(earliest)) {
           setFirstTs(earliest);
           // Período padrão: últimas 24 h ATÉ a última transmissão (não "agora"),
@@ -218,6 +230,28 @@ export default function LiveOperationPage() {
   }, [operationId, router]);
 
   const agentList = useMemo(() => Object.values(agents), [agents]);
+
+  // Cor efetiva (hex) por agente: override do admin quando houver, senão o token
+  // auto-atribuído — resolvida para hex (usada no marcador, na rota e no card).
+  const agentColors = useMemo(() => {
+    const out: Record<string, string> = {};
+    const ids = new Set([...Object.keys(agentColorTokens), ...Object.keys(agentColorOverrides)]);
+    for (const id of ids) out[id] = resolveColor(agentColorOverrides[id] ?? agentColorTokens[id]);
+    return out;
+  }, [agentColorTokens, agentColorOverrides]);
+
+  // Define a cor (token de família) de um agente e persiste por operação.
+  function setAgentColor(agentId: string, token: string) {
+    setAgentColorOverrides((prev) => {
+      const next = { ...prev, [agentId]: token };
+      try {
+        localStorage.setItem(colorsKey, JSON.stringify(next));
+      } catch {
+        /* storage cheio/indisponível — mantém em memória */
+      }
+      return next;
+    });
+  }
 
   // Limites do período ajustável: da 1ª plotagem até "agora".
   const rangeMin = firstTs ?? nowTs - 24 * HOUR_MS;
@@ -912,6 +946,24 @@ export default function LiveOperationPage() {
                       background: 'var(--bg)',
                     }}
                   >
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 8,
+                        marginBottom: 10,
+                        paddingBottom: 10,
+                        borderBottom: '1px solid var(--border)',
+                      }}
+                    >
+                      <span style={{ fontSize: 12, whiteSpace: 'nowrap' }}>Cor do agente</span>
+                      <ColorPalettePicker
+                        value={
+                          agentColorOverrides[a.agentId] ?? agentColorTokens[a.agentId] ?? 'blue'
+                        }
+                        onChange={(token) => setAgentColor(a.agentId, token)}
+                      />
+                    </div>
                     {agentRoutes.length === 0 && (
                       <div className="muted" style={{ fontSize: 12 }}>
                         Nenhuma rota registrada para este agente.
@@ -1072,10 +1124,42 @@ export default function LiveOperationPage() {
               </div>
             </>
           )}
+          {/* Botão: enquadra o mapa em TODAS as rotas plotadas (fit bounds). */}
+          <button
+            type="button"
+            onClick={() => setFitNonce((n) => n + 1)}
+            disabled={plottedRoutes.length === 0}
+            title={
+              plottedRoutes.length === 0
+                ? 'Selecione rotas para enquadrar'
+                : 'Enquadrar todas as rotas visíveis'
+            }
+            style={{
+              position: 'absolute',
+              bottom: 12,
+              left: 12,
+              zIndex: 5,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              padding: '6px 10px',
+              borderRadius: 8,
+              border: '1px solid var(--border)',
+              background: 'rgba(20,27,36,0.92)',
+              color: 'var(--text)',
+              boxShadow: '0 2px 12px rgba(0,0,0,.4)',
+              cursor: plottedRoutes.length === 0 ? 'not-allowed' : 'pointer',
+              opacity: plottedRoutes.length === 0 ? 0.5 : 1,
+              fontSize: 13,
+            }}
+          >
+            ⤢ Enquadrar rotas
+          </button>
           <LiveMap
             agents={agents}
             routes={plottedRoutes}
             agentColors={agentColors}
+            fitNonce={fitNonce}
             mediaMarkers={mediaMarkers}
             onMediaClick={(id) => setLightbox(mediaMsgs.find((m) => m.id === id) ?? null)}
             geofences={displayGeofences}
