@@ -8,6 +8,7 @@ import {
   View,
 } from 'react-native';
 import { login, type Session } from '../services/auth';
+import { config } from '../config';
 
 export function LoginScreen({ onLogin }: { onLogin: (session: Session) => void }) {
   const [username, setUsername] = useState('agente01');
@@ -59,6 +60,12 @@ export function LoginScreen({ onLogin }: { onLogin: (session: Session) => void }
           <Text style={styles.buttonText}>Entrar</Text>
         )}
       </TouchableOpacity>
+
+      {/* Endereço do servidor em uso — ajuda a diagnosticar conexão (IP do Metro).
+          Se aparecer um IP virtual (172.x/10.x) e o login falhar por "Network
+          request failed", force o IP da WiFi (REACT_NATIVE_PACKAGER_HOSTNAME) ou
+          defina EXPO_PUBLIC_API_URL. Ver docs/mobile-dev-wifi.md. */}
+      <Text style={styles.server}>Servidor: {config.apiUrl}</Text>
     </View>
   );
 }
@@ -85,4 +92,5 @@ const styles = StyleSheet.create({
   },
   buttonText: { color: '#fff', fontWeight: '700', fontSize: 16 },
   error: { color: '#ff6b6b', marginBottom: 8 },
+  server: { color: '#5b6b7a', fontSize: 12, textAlign: 'center', marginTop: 20 },
 });
