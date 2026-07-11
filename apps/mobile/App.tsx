@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { BackHandler } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { LoginScreen } from './src/screens/LoginScreen';
@@ -27,9 +28,19 @@ export default function App() {
     };
   }, []);
 
-  async function handleLogout() {
+  // Logado: o botão "voltar" NÃO fecha o app — ele segue em execução (na barra de
+  // notificações). Para encerrar de fato, o usuário usa o botão "Sair".
+  useEffect(() => {
+    if (!session) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => true);
+    return () => sub.remove();
+  }, [session]);
+
+  // Botão "Sair": encerra a sessão e FECHA o aplicativo (única forma de sair).
+  async function handleExit() {
+    await hideAppRunningNotification();
     await logout();
-    setSession(null);
+    BackHandler.exitApp();
   }
 
   if (!ready) return null;
@@ -38,7 +49,7 @@ export default function App() {
     <SafeAreaProvider>
       <StatusBar style="light" />
       {session ? (
-        <OperationScreen session={session} onLogout={handleLogout} />
+        <OperationScreen session={session} onLogout={handleExit} />
       ) : (
         <LoginScreen onLogin={setSession} />
       )}

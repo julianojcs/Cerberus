@@ -146,9 +146,19 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
   }
 
   function handleLogout() {
-    void stopTracking();
-    disconnectMqtt();
-    onLogout();
+    // "Sair" é a ÚNICA forma de encerrar o app — confirma para evitar saída acidental.
+    Alert.alert('Sair do Cerberus', 'Encerrar a sessão e fechar o aplicativo?', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Sair',
+        style: 'destructive',
+        onPress: () => {
+          void stopTracking();
+          disconnectMqtt();
+          onLogout();
+        },
+      },
+    ]);
   }
 
   async function handleTakePhoto() {
