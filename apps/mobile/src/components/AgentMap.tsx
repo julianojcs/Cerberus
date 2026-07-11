@@ -51,7 +51,20 @@ const HTML = `<!DOCTYPE html>
   }).addTo(map);
   var line = L.polyline([], { color: '#c1121f', weight: 4, opacity: 0.85 }).addTo(map);
   var marker = null;
+  var meMarker = null;
   var fitted = false;
+  // Centraliza na posição do agente (sob demanda), mesmo sem transmitir. Mostra um
+  // marcador azul "eu" — distinto do marcador vermelho da trilha transmitida.
+  window.__focus = function (lat, lng) {
+    if (typeof lat !== 'number' || typeof lng !== 'number') return;
+    if (!meMarker) {
+      meMarker = L.circleMarker([lat, lng], { radius: 8, color: '#fff', weight: 2, fillColor: '#2f81f7', fillOpacity: 1 }).addTo(map);
+    } else {
+      meMarker.setLatLng([lat, lng]);
+    }
+    map.setView([lat, lng], Math.max(map.getZoom(), 17));
+    fitted = true;
+  };
   window.__update = function (track, showRoute, headingUp, heading) {
     if (!track || !track.length) return;
     var latlngs = track.map(function (p) { return [p.lat, p.lng]; });
@@ -93,14 +106,18 @@ export function AgentMap({
   showRoute = true,
   headingUp = false,
   heading = null,
+  focus = null,
 }: {
   track: TrackPoint[];
   showRoute?: boolean;
   headingUp?: boolean;
   heading?: number | null;
+  /** Centralizar o mapa na posição do agente; `nonce` muda a cada acionamento. */
+  focus?: { lat: number; lng: number; nonce: number } | null;
 }) {
   const ref = useRef<WebView>(null);
   const readyRef = useRef(false);
+  const focusNonceRef = useRef(0);
 
   const push = useCallback(() => {
     if (!readyRef.current) return;
@@ -111,14 +128,26 @@ export function AgentMap({
     );
   }, [track, showRoute, headingUp, heading]);
 
+  // Centraliza quando o `nonce` do focus muda (evita recentralizar em cada render).
+  const pushFocus = useCallback(() => {
+    if (!readyRef.current || !focus || focus.nonce === focusNonceRef.current) return;
+    focusNonceRef.current = focus.nonce;
+    ref.current?.injectJavaScript(`window.__focus(${focus.lat}, ${focus.lng}); true;`);
+  }, [focus]);
+
   useEffect(() => {
     push();
   }, [push]);
+
+  useEffect(() => {
+    pushFocus();
+  }, [pushFocus]);
 
   const onMessage = (event: WebViewMessageEvent) => {
     if (event.nativeEvent.data === 'ready') {
       readyRef.current = true;
       push();
+      pushFocus();
     }
   };
 

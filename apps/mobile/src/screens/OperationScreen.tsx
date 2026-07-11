@@ -20,8 +20,10 @@ import {
   type BroadcastMessage,
 } from '../services/mqtt';
 import {
+  getCurrentPositionOnce,
   getLastSample,
   initTracking,
+  setShareLocation,
   startTracking,
   stopTracking,
   subscribePositions,
@@ -58,11 +60,15 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
   const agentId = session.agentId ?? session.userId;
 
   const [tracking, setTracking] = useState(false);
+  const [share, setShare] = useState(true);
   const [connected, setConnected] = useState(false);
   const [pending, setPending] = useState(0);
   const [pos, setPos] = useState<PositionSample | null>(getLastSample());
   const [track, setTrack] = useState<TrackPoint[]>([]);
   const [showRoute, setShowRoute] = useState(true);
+  const [centering, setCentering] = useState(false);
+  // Centralizar o mapa no agente sob demanda (nonce muda a cada toque).
+  const [focus, setFocus] = useState<{ lat: number; lng: number; nonce: number } | null>(null);
   // Enquanto o dedo está sobre o mapa, travamos o scroll da tela para o Leaflet
   // receber os gestos de pinça/arraste (senão o ScrollView "rouba" o multitoque).
   const [scrollEnabled, setScrollEnabled] = useState(true);
@@ -109,6 +115,34 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
       await stopTracking();
     }
     setTracking(value);
+  }
+
+  // Compartilhar ou não com a central. Desligado, o GPS continua alimentando o mapa
+  // do app, mas nada é publicado no barramento (rastreamento local/privado).
+  function toggleShare(value: boolean) {
+    setShareLocation(value);
+    setShare(value);
+  }
+
+  // Centraliza o mapa na localização do agente, mesmo que não esteja transmitindo:
+  // usa a última posição conhecida ou busca um fix sob demanda.
+  async function handleCenter() {
+    if (!operationId || centering) return;
+    setCentering(true);
+    try {
+      const target = pos ?? (await getCurrentPositionOnce({ operationId, agentId }));
+      if (target) {
+        setPos((p) => p ?? target);
+        setFocus({ lat: target.lat, lng: target.lng, nonce: Date.now() });
+      } else {
+        Alert.alert(
+          'Sem posição',
+          'Não foi possível obter a localização. Verifique o GPS e as permissões.',
+        );
+      }
+    } finally {
+      setCentering(false);
+    }
   }
 
   function handleLogout() {
@@ -163,8 +197,12 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
 
         <View style={styles.card}>
           <View style={styles.row}>
-            <Text style={styles.label}>Reporte de posição</Text>
+            <Text style={styles.label}>Rastreamento (GPS)</Text>
             <Switch value={tracking} onValueChange={toggleTracking} disabled={!operationId} />
+          </View>
+          <View style={[styles.row, { marginTop: 12 }]}>
+            <Text style={styles.compassLabel}>Compartilhar com a central</Text>
+            <Switch value={share} onValueChange={toggleShare} />
           </View>
           <Text style={styles.status}>
             Barramento:{' '}
@@ -178,8 +216,9 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
             posição(ões)
           </Text>
           <Text style={styles.hint}>
-            Parado, o GPS hiberna (ping a cada 5 min). Em deslocamento, a taxa de amostragem sobe
-            automaticamente.
+            {share
+              ? 'Parado, o GPS hiberna (ping a cada 5 min). Em deslocamento, a taxa de amostragem sobe automaticamente.'
+              : 'Compartilhamento desligado: sua posição fica só neste app (mapa e percurso) — nada é enviado à central.'}
           </Text>
         </View>
 
@@ -269,7 +308,16 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
               showRoute={showRoute}
               headingUp={headingUp}
               heading={pos?.heading ?? null}
+              focus={focus}
             />
+            <TouchableOpacity
+              style={styles.centerBtn}
+              onPress={handleCenter}
+              disabled={centering}
+              hitSlop={8}
+            >
+              <Text style={styles.centerBtnText}>{centering ? '…' : '◎'}</Text>
+            </TouchableOpacity>
           </View>
           <View style={[styles.row, { marginTop: 12 }]}>
             <Text style={styles.compassLabel}>Girar com o movimento (bússola)</Text>
@@ -307,12 +355,23 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
           </View>
           <View style={styles.modalMap}>
             {fullscreen ? (
-              <AgentMap
-                track={track}
-                showRoute={showRoute}
-                headingUp={headingUp}
-                heading={pos?.heading ?? null}
-              />
+              <>
+                <AgentMap
+                  track={track}
+                  showRoute={showRoute}
+                  headingUp={headingUp}
+                  heading={pos?.heading ?? null}
+                  focus={focus}
+                />
+                <TouchableOpacity
+                  style={styles.centerBtn}
+                  onPress={handleCenter}
+                  disabled={centering}
+                  hitSlop={8}
+                >
+                  <Text style={styles.centerBtnText}>{centering ? '…' : '◎'}</Text>
+                </TouchableOpacity>
+              </>
             ) : null}
           </View>
         </View>
@@ -466,6 +525,20 @@ const styles = StyleSheet.create({
   },
   percursoActions: { flexDirection: 'row', alignItems: 'center', gap: 16 },
   expandIcon: { color: '#8b9aa8', fontSize: 22, fontWeight: '700' },
+  centerBtn: {
+    position: 'absolute',
+    bottom: 12,
+    right: 12,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: 'rgba(20,27,36,0.92)',
+    borderColor: '#263543',
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  centerBtnText: { color: '#2f81f7', fontSize: 22, fontWeight: '700', lineHeight: 26 },
   modalContainer: { flex: 1, backgroundColor: '#0b0f14', paddingTop: 44 },
   modalBar: {
     flexDirection: 'row',
