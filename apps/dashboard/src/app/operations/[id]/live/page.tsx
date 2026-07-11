@@ -117,7 +117,6 @@ export default function LiveOperationPage() {
     const unsubscribe = subscribeToOperation(
       operationId,
       (pos: LivePosition) => {
-        setConnected(true);
         setAgents((prev) => ({
           ...prev,
           [pos.agentId]: {
@@ -138,6 +137,7 @@ export default function LiveOperationPage() {
         forceTick((t) => t + 1);
       },
       getToken() ?? undefined,
+      setConnected,
     );
 
     return () => {
@@ -161,6 +161,24 @@ export default function LiveOperationPage() {
         })),
     [mediaMsgs],
   );
+
+  // Zonas exibidas no mapa + preview da nova zona (círculo ao vivo no ponto clicado).
+  const displayGeofences = useMemo(() => {
+    if (!pendingCenter) return geofences;
+    const r = Number(gfRadius);
+    return [
+      ...geofences,
+      {
+        id: '__preview__',
+        operationId,
+        name: '(nova zona)',
+        lng: pendingCenter.lng,
+        lat: pendingCenter.lat,
+        radiusMeters: Number.isFinite(r) && r > 0 ? r : 100,
+        active: true,
+      },
+    ];
+  }, [geofences, pendingCenter, gfRadius, operationId]);
 
   async function sendBroadcast() {
     const text = broadcastText.trim();
@@ -376,6 +394,8 @@ export default function LiveOperationPage() {
                   <button
                     type="button"
                     onClick={handleCreateGeofence}
+                    disabled={!gfName.trim()}
+                    title={!gfName.trim() ? 'Informe um nome para a zona' : 'Criar zona'}
                     style={{
                       flex: 1,
                       padding: 8,
@@ -384,7 +404,8 @@ export default function LiveOperationPage() {
                       background: '#3fb950',
                       color: '#0b0f14',
                       fontWeight: 700,
-                      cursor: 'pointer',
+                      cursor: gfName.trim() ? 'pointer' : 'not-allowed',
+                      opacity: gfName.trim() ? 1 : 0.5,
                     }}
                   >
                     Criar
@@ -480,7 +501,7 @@ export default function LiveOperationPage() {
             showTrails={showTrails}
             mediaMarkers={mediaMarkers}
             onMediaClick={(id) => setLightbox(mediaMsgs.find((m) => m.id === id) ?? null)}
-            geofences={geofences}
+            geofences={displayGeofences}
             onMapClick={(lng, lat) => {
               if (placing) setPendingCenter({ lng, lat });
             }}

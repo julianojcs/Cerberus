@@ -1,5 +1,5 @@
 import type { LoginResponse, Operation } from '@cerberus/shared';
-import { getToken } from './auth';
+import { clearSession, getToken } from './auth';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3000';
 
@@ -16,6 +16,12 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     },
   });
   if (!res.ok) {
+    // Sessão expirada/inválida: limpa e volta ao login (senão a tela ficaria
+    // vazia sem avisar que o usuário está deslogado).
+    if (res.status === 401 && typeof window !== 'undefined') {
+      clearSession();
+      if (!window.location.pathname.startsWith('/login')) window.location.href = '/login';
+    }
     const body = await res.json().catch(() => ({ error: res.statusText }));
     throw new Error(body.error ?? `Erro ${res.status}`);
   }
