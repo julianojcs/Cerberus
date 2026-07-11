@@ -1129,9 +1129,11 @@ export default function LiveOperationPage() {
               </div>
             </>
           )}
-          {/* Botão: enquadra o mapa em TODAS as rotas plotadas (fit bounds). */}
+          {/* Botão: enquadra o mapa em TODAS as rotas plotadas (fit bounds). O
+              rótulo só aparece no hover (em repouso mostra só o ícone). */}
           <button
             type="button"
+            className="maplabelbtn"
             onClick={() => setFitNonce((n) => n + 1)}
             disabled={plottedRoutes.length === 0}
             title={
@@ -1146,7 +1148,6 @@ export default function LiveOperationPage() {
               zIndex: 5,
               display: 'flex',
               alignItems: 'center',
-              gap: 6,
               padding: '6px 10px',
               borderRadius: 8,
               border: '1px solid var(--border)',
@@ -1158,7 +1159,8 @@ export default function LiveOperationPage() {
               fontSize: 13,
             }}
           >
-            ⤢ Enquadrar rotas
+            <span>⤢</span>
+            <span className="maplabel">Enquadrar rotas</span>
           </button>
           <LiveMap
             agents={agents}
@@ -1191,6 +1193,7 @@ export default function LiveOperationPage() {
       {lightbox && (
         <div
           onClick={() => setLightbox(null)}
+          className="animate__animated animate__fadeIn animate__faster"
           style={{
             position: 'fixed',
             inset: 0,

@@ -77,6 +77,7 @@ export function SettingsModal({
   return (
     <div
       onClick={onClose}
+      className="animate__animated animate__fadeIn animate__faster"
       style={{
         position: 'fixed',
         inset: 0,
@@ -89,7 +90,7 @@ export function SettingsModal({
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="card"
+        className="card animate__animated animate__zoomIn animate__faster"
         style={{ width: 420, maxWidth: '92vw', padding: 20 }}
       >
         <div
