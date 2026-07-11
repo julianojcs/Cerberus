@@ -61,3 +61,6 @@ cerberus-live-map-demo.png
 # Dados locais do docker
 .docker-data/
 mongo-data/
+
+# Playwright MCP (inspeção manual)
+.playwright-mcp/

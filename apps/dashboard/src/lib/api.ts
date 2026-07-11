@@ -103,6 +103,15 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(data),
     }),
+  patchGeofence: (
+    operationId: string,
+    gid: string,
+    data: Partial<{ name: string; lng: number; lat: number; radiusMeters: number }>,
+  ) =>
+    request<Geofence>(`/operations/${operationId}/geofences/${gid}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
   deleteGeofence: (operationId: string, gid: string) =>
     request<void>(`/operations/${operationId}/geofences/${gid}`, { method: 'DELETE' }),
   alerts: (operationId: string) => request<GeofenceAlert[]>(`/operations/${operationId}/alerts`),

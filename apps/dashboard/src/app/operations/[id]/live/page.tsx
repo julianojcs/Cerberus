@@ -47,6 +47,12 @@ export default function LiveOperationPage() {
   const [pendingCenter, setPendingCenter] = useState<{ lng: number; lat: number } | null>(null);
   const [gfName, setGfName] = useState('');
   const [gfRadius, setGfRadius] = useState('200');
+  const [editGeo, setEditGeo] = useState<{
+    id: string;
+    lng: number;
+    lat: number;
+    radiusMeters: number;
+  } | null>(null);
 
   // Snapshot inicial (última posição conhecida) via REST + stream ao vivo via MQTT.
   useEffect(() => {
@@ -162,12 +168,20 @@ export default function LiveOperationPage() {
     [mediaMsgs],
   );
 
-  // Zonas exibidas no mapa + preview da nova zona (círculo ao vivo no ponto clicado).
+  // Zonas exibidas no mapa: valores ao vivo da zona em edição + preview da nova zona.
   const displayGeofences = useMemo(() => {
-    if (!pendingCenter) return geofences;
+    let base = geofences;
+    if (editGeo) {
+      base = geofences.map((g) =>
+        g.id === editGeo.id
+          ? { ...g, lng: editGeo.lng, lat: editGeo.lat, radiusMeters: editGeo.radiusMeters }
+          : g,
+      );
+    }
+    if (!pendingCenter) return base;
     const r = Number(gfRadius);
     return [
-      ...geofences,
+      ...base,
       {
         id: '__preview__',
         operationId,
@@ -178,7 +192,7 @@ export default function LiveOperationPage() {
         active: true,
       },
     ];
-  }, [geofences, pendingCenter, gfRadius, operationId]);
+  }, [geofences, pendingCenter, gfRadius, operationId, editGeo]);
 
   async function sendBroadcast() {
     const text = broadcastText.trim();
@@ -219,9 +233,31 @@ export default function LiveOperationPage() {
     try {
       await api.deleteGeofence(operationId, gid);
       setGeofences((prev) => prev.filter((g) => g.id !== gid));
+      if (editGeo?.id === gid) setEditGeo(null);
     } catch {
       /* remoção falhou */
     }
+  }
+
+  function startEdit(g: Geofence) {
+    setPlacing(false);
+    setPendingCenter(null);
+    setEditGeo({ id: g.id, lng: g.lng, lat: g.lat, radiusMeters: g.radiusMeters });
+  }
+
+  async function saveEdit() {
+    if (!editGeo) return;
+    try {
+      await api.patchGeofence(operationId, editGeo.id, {
+        lng: editGeo.lng,
+        lat: editGeo.lat,
+        radiusMeters: editGeo.radiusMeters,
+      });
+      setGeofences(await api.geofences(operationId));
+    } catch {
+      /* edição falhou */
+    }
+    setEditGeo(null);
   }
 
   const gfInputStyle: React.CSSProperties = {
@@ -439,24 +475,77 @@ export default function LiveOperationPage() {
                   fontSize: 13,
                 }}
               >
-                <span>
-                  🟢 {g.name} · {g.radiusMeters} m
+                <span style={{ color: editGeo?.id === g.id ? 'var(--ok)' : undefined }}>
+                  🟢 {g.name} · {editGeo?.id === g.id ? editGeo.radiusMeters : g.radiusMeters} m
                 </span>
-                <button
-                  type="button"
-                  onClick={() => handleDeleteGeofence(g.id)}
-                  title="Remover"
-                  style={{
-                    cursor: 'pointer',
-                    border: 'none',
-                    background: 'transparent',
-                    color: 'var(--muted)',
-                  }}
-                >
-                  ✕
-                </button>
+                <span style={{ display: 'flex', gap: 10 }}>
+                  <button
+                    type="button"
+                    onClick={() => startEdit(g)}
+                    title="Editar (mover/redimensionar)"
+                    style={{
+                      cursor: 'pointer',
+                      border: 'none',
+                      background: 'transparent',
+                      color: 'var(--muted)',
+                    }}
+                  >
+                    ✎
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteGeofence(g.id)}
+                    title="Remover"
+                    style={{
+                      cursor: 'pointer',
+                      border: 'none',
+                      background: 'transparent',
+                      color: 'var(--muted)',
+                    }}
+                  >
+                    ✕
+                  </button>
+                </span>
               </div>
             ))}
+            {editGeo && (
+              <div style={{ marginTop: 12, borderTop: '1px solid var(--border)', paddingTop: 10 }}>
+                <div className="muted" style={{ fontSize: 12 }}>
+                  Arraste o <strong>centro</strong> (mover) ou a <strong>borda</strong>{' '}
+                  (redimensionar). Raio: {editGeo.radiusMeters} m
+                </div>
+                <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+                  <button
+                    type="button"
+                    onClick={saveEdit}
+                    style={{
+                      flex: 1,
+                      padding: 8,
+                      borderRadius: 6,
+                      border: 'none',
+                      background: '#3fb950',
+                      color: '#0b0f14',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Salvar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditGeo(null)}
+                    className="badge"
+                    style={{
+                      cursor: 'pointer',
+                      border: '1px solid var(--border)',
+                      background: 'transparent',
+                    }}
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
 
           {alerts.length > 0 && (
@@ -505,6 +594,9 @@ export default function LiveOperationPage() {
             onMapClick={(lng, lat) => {
               if (placing) setPendingCenter({ lng, lat });
             }}
+            editGeofence={editGeo}
+            onGeofenceMove={(lng, lat) => setEditGeo((e) => (e ? { ...e, lng, lat } : e))}
+            onGeofenceResize={(radiusMeters) => setEditGeo((e) => (e ? { ...e, radiusMeters } : e))}
           />
         </main>
       </div>

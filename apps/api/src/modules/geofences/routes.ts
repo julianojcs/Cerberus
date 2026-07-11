@@ -12,6 +12,13 @@ const createSchema = z.object({
   radiusMeters: z.number().min(1).max(100000),
 });
 
+const patchSchema = z.object({
+  name: z.string().min(1).max(120).optional(),
+  lng: z.number().min(-180).max(180).optional(),
+  lat: z.number().min(-90).max(90).optional(),
+  radiusMeters: z.number().min(1).max(100000).optional(),
+});
+
 /**
  * Geofencing (Fase 4): zonas circulares por operação. A criação/remoção é
  * restrita a admin; a listagem e os alertas são escopados por operação. A
@@ -46,6 +53,36 @@ export async function geofenceRoutes(app: FastifyInstance): Promise<void> {
       if (!assertOperationScope(request, reply, id)) return;
       const docs = await Geofence.find({ operationId: id }).lean();
       return docs.map(serializeGeofence);
+    },
+  );
+
+  // Editar geofence (mover centro / redimensionar raio / renomear) — admin.
+  app.patch(
+    '/operations/:id/geofences/:gid',
+    { onRequest: [app.requireRole(Role.ADMIN)] },
+    async (request, reply) => {
+      const { id, gid } = request.params as { id: string; gid: string };
+      if (!assertOperationScope(request, reply, id)) return;
+      if (!Types.ObjectId.isValid(gid)) {
+        return reply.code(400).send({ error: 'Identificador inválido' });
+      }
+      const body = patchSchema.safeParse(request.body);
+      if (!body.success) return reply.code(400).send({ error: 'Dados inválidos' });
+
+      const update: Record<string, unknown> = {};
+      if (body.data.name !== undefined) update.name = body.data.name;
+      if (body.data.radiusMeters !== undefined) update.radiusMeters = body.data.radiusMeters;
+      if (body.data.lng !== undefined && body.data.lat !== undefined) {
+        update.center = { type: 'Point', coordinates: [body.data.lng, body.data.lat] };
+      }
+
+      const g = await Geofence.findOneAndUpdate(
+        { _id: gid, operationId: id },
+        { $set: update },
+        { new: true },
+      );
+      if (!g) return reply.code(404).send({ error: 'Geofence não encontrada' });
+      return serializeGeofence(g.toObject());
     },
   );
 
