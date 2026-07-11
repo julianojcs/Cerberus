@@ -13,8 +13,12 @@ export interface AgentPoint {
   activity?: string;
 }
 
-/** Trilha por agente, em ordem cronológica, no formato [lng, lat] do MapLibre. */
-export type AgentTrails = Record<string, [number, number][]>;
+/**
+ * Trilha por agente: LISTA DE SEGMENTOS (cada um em ordem cronológica, [lng, lat]).
+ * A quebra em segmentos evita ligar por uma reta dois pontos separados por um gap
+ * de transmissão (o "pulo" que não aconteceu de verdade).
+ */
+export type AgentTrails = Record<string, [number, number][][]>;
 
 /** Mídia geolocalizada plotada no mapa (pin de câmera). */
 export interface MediaMarker {
@@ -26,16 +30,19 @@ export interface MediaMarker {
 }
 
 function toFeatureCollection(trails: AgentTrails): GeoJSON.FeatureCollection {
-  return {
-    type: 'FeatureCollection',
-    features: Object.entries(trails)
-      .filter(([, points]) => points.length >= 2)
-      .map(([agentId, points]) => ({
-        type: 'Feature',
-        properties: { agentId },
-        geometry: { type: 'LineString', coordinates: points },
-      })),
-  };
+  const features: GeoJSON.Feature[] = [];
+  for (const [agentId, segments] of Object.entries(trails)) {
+    for (const seg of segments) {
+      if (seg.length >= 2) {
+        features.push({
+          type: 'Feature',
+          properties: { agentId },
+          geometry: { type: 'LineString', coordinates: seg },
+        });
+      }
+    }
+  }
+  return { type: 'FeatureCollection', features };
 }
 
 function syncTrails(map: MlMap, trails: AgentTrails): void {

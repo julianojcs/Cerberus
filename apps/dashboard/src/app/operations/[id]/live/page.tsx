@@ -19,6 +19,7 @@ import { ResizableSidebar } from '@/components/ResizableSidebar';
 import { ColorPalettePicker } from '@/components/ColorPalettePicker';
 import { resolveColor } from '@/lib/tailwind-colors';
 import { alertBorderFocus, type AlertFocus } from '@/lib/geo';
+import { splitSegments, TRAIL_GAP_MS } from '@/lib/routes';
 
 /** Máximo de pontos por agente na trilha (limita memória/render). */
 const MAX_TRAIL = 500;
@@ -93,18 +94,21 @@ export default function LiveOperationPage() {
         /* sem histórico ainda */
       });
 
-    // Semeia as trilhas com o histórico (vem do mais recente para o mais antigo).
+    // Semeia as trilhas com o histórico. Quebra em segmentos nos gaps de transmissão
+    // (posições distantes no tempo NÃO viram uma reta — evita o "pulo" no mapa).
     api
       .positionHistory(operationId)
       .then((positions: LatestPosition[]) => {
-        const byAgent: AgentTrails = {};
-        for (let i = positions.length - 1; i >= 0; i--) {
-          const p = positions[i];
+        const byAgent: Record<string, LatestPosition[]> = {};
+        for (const p of positions) {
           if (p.lat == null || p.lng == null) continue;
-          (byAgent[p.agentId] ??= []).push([p.lng, p.lat]);
+          (byAgent[p.agentId] ??= []).push(p);
         }
-        for (const id of Object.keys(byAgent)) byAgent[id] = byAgent[id].slice(-MAX_TRAIL);
-        setTrails(byAgent);
+        const trails: AgentTrails = {};
+        for (const [id, pts] of Object.entries(byAgent)) {
+          trails[id] = splitSegments(pts).map((seg) => seg.slice(-MAX_TRAIL));
+        }
+        setTrails(trails);
       })
       .catch(() => {
         /* sem histórico ainda */
@@ -144,9 +148,18 @@ export default function LiveOperationPage() {
           },
         }));
         setTrails((prev) => {
-          const existing = prev[pos.agentId] ?? [];
-          const nextTrail = [...existing, [pos.lng, pos.lat] as [number, number]].slice(-MAX_TRAIL);
-          return { ...prev, [pos.agentId]: nextTrail };
+          const segments = prev[pos.agentId] ?? [];
+          const point: [number, number] = [pos.lng, pos.lat];
+          // `lastUpdateRef` ainda tem a captura ANTERIOR (só atualiza abaixo).
+          const lastCap = lastUpdateRef.current[pos.agentId];
+          const gap = lastCap ? +new Date(pos.capturedAt) - +new Date(lastCap) : Infinity;
+          if (segments.length === 0 || gap > TRAIL_GAP_MS) {
+            // Sem transmissão por um bom tempo → começa uma nova rota (sem reta ligando).
+            return { ...prev, [pos.agentId]: [...segments, [point]] };
+          }
+          const lastSeg = segments[segments.length - 1];
+          const nextSeg = [...lastSeg, point].slice(-MAX_TRAIL);
+          return { ...prev, [pos.agentId]: [...segments.slice(0, -1), nextSeg] };
         });
         lastUpdateRef.current[pos.agentId] = pos.capturedAt;
         forceTick((t) => t + 1);

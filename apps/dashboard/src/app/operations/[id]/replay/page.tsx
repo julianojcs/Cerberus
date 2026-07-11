@@ -8,6 +8,7 @@ import { getToken } from '@/lib/auth';
 import { LiveMap, type AgentPoint, type AgentTrails } from '@/components/LiveMap';
 import { Toggle } from '@/components/Toggle';
 import { resolveColor } from '@/lib/tailwind-colors';
+import { splitSegments } from '@/lib/routes';
 
 const SPEEDS = [10, 60, 300];
 const TICK_MS = 200; // intervalo real entre passos da reprodução
@@ -101,10 +102,13 @@ export default function ReplayPage() {
     return () => clearInterval(id);
   }, [playing, speed, tN, history.length]);
 
-  // Estado do mapa (posições correntes + trilhas) até o instante `t`.
+  // Estado do mapa (posições correntes + trilhas) até o instante `t`. As trilhas são
+  // quebradas em segmentos nos gaps de transmissão: o trecho sem sinal (o "pulo")
+  // não é desenhado como caminho percorrido — a rota só vai até a última posição
+  // efetivamente transmitida antes do gap.
   const { agents, trails } = useMemo(() => {
     const agents: Record<string, AgentPoint> = {};
-    const trails: AgentTrails = {};
+    const perAgent: Record<string, LatestPosition[]> = {};
     for (const p of history) {
       if (+new Date(p.capturedAt) > t) break; // history é asc
       agents[p.agentId] = {
@@ -115,8 +119,10 @@ export default function ReplayPage() {
         battery: p.battery,
         activity: p.activity,
       };
-      (trails[p.agentId] ??= []).push([p.lng, p.lat]);
+      (perAgent[p.agentId] ??= []).push(p);
     }
+    const trails: AgentTrails = {};
+    for (const [id, pts] of Object.entries(perAgent)) trails[id] = splitSegments(pts);
     return { agents, trails };
   }, [history, t]);
 
