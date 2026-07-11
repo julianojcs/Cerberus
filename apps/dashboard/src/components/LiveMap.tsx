@@ -126,7 +126,7 @@ export function LiveMap({
   editGeofence = null,
   onGeofenceMove,
   onGeofenceResize,
-  focusPoint = null,
+  focus = null,
 }: {
   agents: Record<string, AgentPoint>;
   trails?: AgentTrails;
@@ -139,7 +139,7 @@ export function LiveMap({
   editGeofence?: EditGeofence | null;
   onGeofenceMove?: (lng: number, lat: number) => void;
   onGeofenceResize?: (radiusMeters: number) => void;
-  focusPoint?: [number, number] | null;
+  focus?: { lng: number; lat: number; bearing: number; type: 'enter' | 'exit' } | null;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MlMap | null>(null);
@@ -389,28 +389,29 @@ export function LiveMap({
     map.setLayoutProperty('geofences-line', 'visibility', v);
   }, [showGeofences]);
 
-  // Voa até um ponto (ex.: ao clicar num alerta) e MARCA onde ocorreu com um anel.
+  // Ao clicar num alerta: voa até a BORDA da zona e planta uma SETA rotacionada
+  // indicando a direção (entrada = para dentro; saída = para fora).
   useEffect(() => {
     const map = mapRef.current;
-    if (!map) return;
-    if (!focusPoint) {
-      focusMarkerRef.current?.remove();
-      focusMarkerRef.current = null;
-      return;
-    }
-    map.flyTo({ center: focusPoint, zoom: 16 });
-    if (!focusMarkerRef.current) {
-      const el = document.createElement('div');
-      el.title = 'Ponto do alerta (cruzamento da borda)';
-      el.style.cssText =
-        'width:22px;height:22px;border-radius:50%;border:3px solid #e3b341;background:rgba(227,179,65,0.3);box-shadow:0 0 12px #e3b341;';
-      focusMarkerRef.current = new maplibregl.Marker({ element: el })
-        .setLngLat(focusPoint)
-        .addTo(map);
-    } else {
-      focusMarkerRef.current.setLngLat(focusPoint);
-    }
-  }, [focusPoint]);
+    focusMarkerRef.current?.remove();
+    focusMarkerRef.current = null;
+    if (!map || !focus) return;
+    map.flyTo({ center: [focus.lng, focus.lat], zoom: 16 });
+    const color = focus.type === 'enter' ? '#3fb950' : '#e3b341';
+    const el = document.createElement('div');
+    el.title = focus.type === 'enter' ? 'Entrada na zona' : 'Saída da zona';
+    // Seta apontando para cima (norte); a rotação do Marker a alinha ao rumo.
+    el.innerHTML =
+      `<svg width="30" height="30" viewBox="0 0 24 24" fill="${color}" stroke="#0b0f14" ` +
+      `stroke-width="1.5" stroke-linejoin="round"><path d="M12 2 L20 21 L12 16 L4 21 Z"/></svg>`;
+    focusMarkerRef.current = new maplibregl.Marker({
+      element: el,
+      rotation: focus.bearing,
+      rotationAlignment: 'map',
+    })
+      .setLngLat([focus.lng, focus.lat])
+      .addTo(map);
+  }, [focus]);
 
   // Reposiciona os handles conforme os valores mudam (sem brigar com o arraste em curso).
   useEffect(() => {
