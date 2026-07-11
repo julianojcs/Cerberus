@@ -4,16 +4,22 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import type { Operation } from '@cerberus/shared';
-import { api } from '@/lib/api';
+import { api, type Settings } from '@/lib/api';
 import { clearSession, getToken, getUser } from '@/lib/auth';
+import { SettingsModal } from '@/components/SettingsModal';
 
 export default function OperationsPage() {
   const router = useRouter();
   const [operations, setOperations] = useState<Operation[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [settings, setSettings] = useState<Settings>({ minRoutePoints: 5, connectRoutes: false });
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  // Usuário lido do localStorage só no cliente (evita mismatch de hidratação SSR).
+  const [user, setUser] = useState<ReturnType<typeof getUser>>(null);
 
   useEffect(() => {
+    setUser(getUser());
     if (!getToken()) {
       router.replace('/login');
       return;
@@ -23,14 +29,18 @@ export default function OperationsPage() {
       .then(setOperations)
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
+    api
+      .settings()
+      .then(setSettings)
+      .catch(() => {
+        /* mantém os padrões */
+      });
   }, [router]);
 
   function logout() {
     clearSession();
     router.replace('/login');
   }
-
-  const user = getUser();
 
   return (
     <div>
@@ -41,11 +51,28 @@ export default function OperationsPage() {
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <span className="muted">{user?.name}</span>
+          <button
+            type="button"
+            className="btn"
+            style={{ background: 'var(--panel-2)' }}
+            onClick={() => setSettingsOpen(true)}
+            title="Configurações do sistema"
+          >
+            ⚙ Configurações
+          </button>
           <button className="btn" style={{ background: 'var(--panel-2)' }} onClick={logout}>
             Sair
           </button>
         </div>
       </div>
+
+      {settingsOpen && (
+        <SettingsModal
+          initial={settings}
+          onClose={() => setSettingsOpen(false)}
+          onSaved={setSettings}
+        />
+      )}
 
       <div style={{ padding: 24, maxWidth: 900, margin: '0 auto' }}>
         <h2>Operações</h2>
