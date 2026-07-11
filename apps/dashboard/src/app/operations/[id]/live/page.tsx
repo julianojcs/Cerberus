@@ -379,30 +379,26 @@ export default function LiveOperationPage() {
 
           {mediaMsgs.length > 0 && (
             <div className="card" style={{ padding: 12, marginBottom: 16 }}>
-              <strong style={{ fontSize: 14 }}>Mídia da operação ({mediaMsgs.length})</strong>
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(3, 1fr)',
-                  gap: 6,
-                  marginTop: 8,
-                }}
-              >
+              <strong style={{ fontSize: 14 }}>Mídias da operação ({mediaMsgs.length})</strong>
+              {/* Masonry (colunas CSS): as fotos mantêm o aspecto natural e não
+                  deformam ao redimensionar o sidebar. */}
+              <div style={{ columnCount: 2, columnGap: 6, marginTop: 8 }}>
                 {mediaMsgs.map((m) => (
-                  <AuthImage
-                    key={m.id}
-                    path={api.mediaPath(operationId, m.mediaRef!)}
-                    alt={`Mídia de ${m.senderId}`}
-                    onClick={() => setLightbox(m)}
-                    style={{
-                      width: '100%',
-                      height: 64,
-                      objectFit: 'cover',
-                      borderRadius: 6,
-                      background: 'var(--border)',
-                      cursor: 'pointer',
-                    }}
-                  />
+                  <div key={m.id} style={{ breakInside: 'avoid', marginBottom: 6 }}>
+                    <AuthImage
+                      path={api.mediaPath(operationId, m.mediaRef!)}
+                      alt={`Mídia de ${m.senderId}`}
+                      onClick={() => setLightbox(m)}
+                      style={{
+                        width: '100%',
+                        height: 'auto',
+                        display: 'block',
+                        borderRadius: 6,
+                        background: 'var(--border)',
+                        cursor: 'pointer',
+                      }}
+                    />
+                  </div>
                 ))}
               </div>
             </div>

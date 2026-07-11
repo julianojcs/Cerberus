@@ -157,6 +157,7 @@ export function LiveMap({
   const editCenterRef = useRef<Marker | null>(null);
   const editEdgeRef = useRef<Marker | null>(null);
   const draggingRef = useRef<'center' | 'edge' | null>(null);
+  const focusMarkerRef = useRef<Marker | null>(null);
   const editGeoRef = useRef<EditGeofence | null>(editGeofence);
   editGeoRef.current = editGeofence;
   const editCbRef = useRef({ move: onGeofenceMove, resize: onGeofenceResize });
@@ -388,11 +389,27 @@ export function LiveMap({
     map.setLayoutProperty('geofences-line', 'visibility', v);
   }, [showGeofences]);
 
-  // Voa até um ponto (ex.: ao clicar num alerta) para mostrar onde ocorreu.
+  // Voa até um ponto (ex.: ao clicar num alerta) e MARCA onde ocorreu com um anel.
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !focusPoint) return;
+    if (!map) return;
+    if (!focusPoint) {
+      focusMarkerRef.current?.remove();
+      focusMarkerRef.current = null;
+      return;
+    }
     map.flyTo({ center: focusPoint, zoom: 16 });
+    if (!focusMarkerRef.current) {
+      const el = document.createElement('div');
+      el.title = 'Ponto do alerta (cruzamento da borda)';
+      el.style.cssText =
+        'width:22px;height:22px;border-radius:50%;border:3px solid #e3b341;background:rgba(227,179,65,0.3);box-shadow:0 0 12px #e3b341;';
+      focusMarkerRef.current = new maplibregl.Marker({ element: el })
+        .setLngLat(focusPoint)
+        .addTo(map);
+    } else {
+      focusMarkerRef.current.setLngLat(focusPoint);
+    }
   }, [focusPoint]);
 
   // Reposiciona os handles conforme os valores mudam (sem brigar com o arraste em curso).
