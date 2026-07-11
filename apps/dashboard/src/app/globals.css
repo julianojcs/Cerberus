@@ -103,6 +103,9 @@ a {
 button {
   cursor: pointer;
   font: inherit;
+  /* Herdar a cor do texto: sem isto o botão usa a cor padrão do navegador
+     (`buttontext`, escura) e some no tema escuro. Ver .claude/rules/ui-contrast.md. */
+  color: inherit;
 }
 
 .btn {
@@ -169,4 +172,28 @@ button {
   font-size: 12px;
   background: var(--panel-2);
   border: 1px solid var(--border);
+}
+
+/* Botão de "pin" (fixar a barra de período): desativado em tons de cinza, ativo
+   colorido; o hover pré-visualiza o estado ativo (colorido). */
+.pinbtn {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 3px 8px;
+  line-height: 1;
+  font-size: 15px;
+  filter: grayscale(1) opacity(0.5);
+  transition:
+    filter 0.15s ease,
+    border-color 0.15s ease,
+    background 0.15s ease;
+}
+.pinbtn:hover {
+  filter: none;
+}
+.pinbtn[aria-pressed='true'] {
+  filter: none;
+  border-color: var(--border);
+  background: rgba(255, 255, 255, 0.05);
 }

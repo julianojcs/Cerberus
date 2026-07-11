@@ -966,105 +966,111 @@ export default function LiveOperationPage() {
           }}
           onMouseLeave={() => setBarHover(false)}
         >
-          {/* Alça sutil quando a barra está oculta — indica a área para revelar. */}
-          {firstTs != null && !(barPinned || barHover) && (
-            <div
-              style={{
-                position: 'absolute',
-                top: 6,
-                left: '50%',
-                transform: 'translateX(-50%)',
-                zIndex: 5,
-                width: 56,
-                height: 5,
-                borderRadius: 3,
-                background: 'rgba(255,255,255,0.28)',
-                pointerEvents: 'none',
-              }}
-            />
-          )}
-          {/* Barra de período (topo do mapa): DOIS controles (início e fim) definem
-              o intervalo das rotas plotadas. Ocupa toda a largura do topo, com
-              margens laterais iguais à de topo (10px). Aparece ao passar o cursor no
-              topo; o "pin" a mantém fixa. Padrão: últimas 24 h com dados. */}
-          {firstTs != null && (barPinned || barHover) && (
-            <div
-              style={{
-                position: 'absolute',
-                top: 10,
-                left: 10,
-                right: 10,
-                zIndex: 5,
-                display: 'flex',
-                alignItems: 'center',
-                gap: 12,
-                background: 'rgba(20,27,36,0.92)',
-                border: '1px solid var(--border)',
-                borderRadius: 10,
-                padding: '8px 14px',
-                boxShadow: '0 2px 12px rgba(0,0,0,.4)',
-              }}
-            >
-              <span className="muted" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
-                Período
-              </span>
-              <span
+          {/* Barra de período (topo do mapa): DOIS controles (início e fim) definem o
+              intervalo das rotas plotadas. Fica OCULTA e DESCE do topo quando o cursor
+              passa na faixa superior; o "pin" a mantém fixa. O wrapper com overflow
+              hidden faz a barra deslizar de cima para baixo. Padrão: últimas 24 h. */}
+          {firstTs != null && (
+            <>
+              {/* Alça sutil quando oculta — indica a área para revelar. */}
+              <div
                 style={{
-                  fontSize: 11,
-                  whiteSpace: 'nowrap',
-                  fontVariantNumeric: 'tabular-nums',
-                  minWidth: 78,
-                  textAlign: 'right',
-                }}
-                title="Início do período"
-              >
-                {fmtDateTime(windowStartMs)}
-              </span>
-              <PeriodRange
-                min={rangeMin}
-                max={rangeMax}
-                start={windowStartMs}
-                end={windowEndMs}
-                onChange={(s, e) => {
-                  setWindowStartMs(s);
-                  setWindowEndMs(e);
+                  position: 'absolute',
+                  top: 6,
+                  left: '50%',
+                  transform: 'translateX(-50%)',
+                  zIndex: 5,
+                  width: 56,
+                  height: 5,
+                  borderRadius: 3,
+                  background: 'rgba(255,255,255,0.28)',
+                  pointerEvents: 'none',
+                  opacity: barPinned || barHover ? 0 : 1,
+                  transition: 'opacity 0.2s ease',
                 }}
               />
-              <span
+              <div
                 style={{
-                  fontSize: 11,
-                  whiteSpace: 'nowrap',
-                  fontVariantNumeric: 'tabular-nums',
-                  minWidth: 78,
-                }}
-                title="Fim do período"
-              >
-                {fmtDateTime(windowEndMs)}
-              </span>
-              <button
-                type="button"
-                onClick={() => {
-                  const v = !barPinned;
-                  setBarPinned(v);
-                  localStorage.setItem('cerberus_period_pinned', v ? '1' : '0');
-                }}
-                title={barPinned ? 'Desafixar a barra de período' : 'Fixar a barra de período'}
-                aria-pressed={barPinned}
-                style={{
-                  cursor: 'pointer',
-                  flexShrink: 0,
-                  border: `1px solid ${barPinned ? '#c1121f' : 'var(--border)'}`,
-                  background: barPinned ? '#c1121f' : 'transparent',
-                  color: barPinned ? '#fff' : 'var(--muted)',
-                  borderRadius: 8,
-                  padding: '4px 8px',
-                  fontSize: 13,
-                  lineHeight: 1,
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  zIndex: 5,
+                  overflow: 'hidden',
+                  paddingTop: 10,
+                  pointerEvents: 'none',
                 }}
               >
-                📌
-              </button>
-            </div>
+                <div
+                  style={{
+                    margin: '0 10px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 12,
+                    background: 'rgba(20,27,36,0.92)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 10,
+                    padding: '8px 14px',
+                    boxShadow: '0 6px 16px rgba(0,0,0,.45)',
+                    transform: barPinned || barHover ? 'translateY(0)' : 'translateY(-160%)',
+                    opacity: barPinned || barHover ? 1 : 0,
+                    transition: 'transform 0.28s cubic-bezier(0.2, 0.8, 0.2, 1), opacity 0.2s ease',
+                    pointerEvents: barPinned || barHover ? 'auto' : 'none',
+                  }}
+                >
+                  <span className="muted" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
+                    Período
+                  </span>
+                  <span
+                    style={{
+                      fontSize: 11,
+                      whiteSpace: 'nowrap',
+                      fontVariantNumeric: 'tabular-nums',
+                      minWidth: 78,
+                      textAlign: 'right',
+                    }}
+                    title="Início do período"
+                  >
+                    {fmtDateTime(windowStartMs)}
+                  </span>
+                  <PeriodRange
+                    min={rangeMin}
+                    max={rangeMax}
+                    start={windowStartMs}
+                    end={windowEndMs}
+                    onChange={(s, e) => {
+                      setWindowStartMs(s);
+                      setWindowEndMs(e);
+                    }}
+                  />
+                  <span
+                    style={{
+                      fontSize: 11,
+                      whiteSpace: 'nowrap',
+                      fontVariantNumeric: 'tabular-nums',
+                      minWidth: 78,
+                    }}
+                    title="Fim do período"
+                  >
+                    {fmtDateTime(windowEndMs)}
+                  </span>
+                  <button
+                    type="button"
+                    className="pinbtn"
+                    onClick={() => {
+                      const v = !barPinned;
+                      setBarPinned(v);
+                      localStorage.setItem('cerberus_period_pinned', v ? '1' : '0');
+                    }}
+                    title={barPinned ? 'Desafixar a barra de período' : 'Fixar a barra de período'}
+                    aria-pressed={barPinned}
+                    style={{ flexShrink: 0, cursor: 'pointer' }}
+                  >
+                    📌
+                  </button>
+                </div>
+              </div>
+            </>
           )}
           <LiveMap
             agents={agents}
