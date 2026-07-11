@@ -130,3 +130,22 @@ const alertSchema = new Schema(
 alertSchema.index({ operationId: 1, receivedAt: -1 });
 export type AlertDoc = InferSchemaType<typeof alertSchema>;
 export const Alert = model('Alert', alertSchema);
+
+/**
+ * Estado de pertencimento agente↔zona: guarda se o agente está DENTRO de cada
+ * geofence. É a fonte de verdade para detectar transições enter/exit sem depender
+ * de reconstruir a "posição anterior" (frágil a rajadas/ordem de chegada).
+ */
+const geofenceMembershipSchema = new Schema(
+  {
+    operationId: { type: String, required: true },
+    agentId: { type: String, required: true },
+    geofenceId: { type: String, required: true },
+    inside: { type: Boolean, required: true },
+    updatedAt: { type: Date, required: true },
+  },
+  { timestamps: false },
+);
+geofenceMembershipSchema.index({ operationId: 1, agentId: 1, geofenceId: 1 }, { unique: true });
+export type GeofenceMembershipDoc = InferSchemaType<typeof geofenceMembershipSchema>;
+export const GeofenceMembership = model('GeofenceMembership', geofenceMembershipSchema);

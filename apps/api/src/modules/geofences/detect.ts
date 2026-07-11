@@ -14,6 +14,8 @@ export interface GeofenceEvent {
   geofenceId: string;
   geofenceName: string;
   type: 'enter' | 'exit';
+  /** Novo estado de pertencimento após o evento (true = passou a estar dentro). */
+  inside: boolean;
 }
 
 const EARTH_RADIUS_M = 6371000;
@@ -30,27 +32,31 @@ export function haversineMeters(a: GeoPoint, b: GeoPoint): number {
 }
 
 /**
- * Detecta transições enter/exit comparando a posição atual com a anterior contra
- * cada geofence (círculo center+raio). `prev` null (primeira posição do agente)
- * é tratado como "fora" — logo, começar dentro de uma zona gera um `enter`.
+ * Detecta transições enter/exit comparando a posição atual com o ESTADO ANTERIOR
+ * de pertencimento (`insideBefore[geofenceId]`, default false = fora) contra cada
+ * geofence (círculo center+raio). Só emite evento quando o estado muda — logo,
+ * uma vez dentro, não repete `enter`, e a saída gera `exit`. Estar dentro na
+ * primeira leitura (sem estado) gera um único `enter`.
  */
 export function detectGeofenceEvents(
   current: GeoPoint,
-  prev: GeoPoint | null,
+  insideBefore: Record<string, boolean>,
   geofences: GeofenceLike[],
 ): GeofenceEvent[] {
   const events: GeofenceEvent[] = [];
   for (const g of geofences) {
     const [clng, clat] = g.center?.coordinates ?? [];
     if (clng == null || clat == null) continue;
-    const center: GeoPoint = { lng: clng, lat: clat };
-    const insideNow = haversineMeters(current, center) <= g.radiusMeters;
-    const insideBefore = prev ? haversineMeters(prev, center) <= g.radiusMeters : false;
-    if (insideNow && !insideBefore) {
-      events.push({ geofenceId: String(g._id), geofenceName: g.name, type: 'enter' });
-    } else if (!insideNow && insideBefore) {
-      events.push({ geofenceId: String(g._id), geofenceName: g.name, type: 'exit' });
-    }
+    const id = String(g._id);
+    const insideNow = haversineMeters(current, { lng: clng, lat: clat }) <= g.radiusMeters;
+    const wasInside = insideBefore[id] ?? false;
+    if (insideNow === wasInside) continue; // sem transição
+    events.push({
+      geofenceId: id,
+      geofenceName: g.name,
+      type: insideNow ? 'enter' : 'exit',
+      inside: insideNow,
+    });
   }
   return events;
 }

@@ -15,29 +15,30 @@ describe('haversineMeters', () => {
   });
 });
 
-describe('detectGeofenceEvents', () => {
-  it('enter: fora → dentro', () => {
-    expect(detectGeofenceEvents(INSIDE, OUTSIDE, ZONE)).toEqual([
-      { geofenceId: 'g1', geofenceName: 'Zona A', type: 'enter' },
+describe('detectGeofenceEvents (estado de pertencimento)', () => {
+  it('enter: estava fora → agora dentro', () => {
+    expect(detectGeofenceEvents(INSIDE, { g1: false }, ZONE)).toEqual([
+      { geofenceId: 'g1', geofenceName: 'Zona A', type: 'enter', inside: true },
     ]);
   });
 
-  it('exit: dentro → fora', () => {
-    expect(detectGeofenceEvents(OUTSIDE, INSIDE, ZONE)).toEqual([
-      { geofenceId: 'g1', geofenceName: 'Zona A', type: 'exit' },
+  it('exit: estava dentro → agora fora', () => {
+    expect(detectGeofenceEvents(OUTSIDE, { g1: true }, ZONE)).toEqual([
+      { geofenceId: 'g1', geofenceName: 'Zona A', type: 'exit', inside: false },
     ]);
   });
 
-  it('sem transição: dentro → dentro não gera evento', () => {
-    expect(detectGeofenceEvents(INSIDE, { lng: -43.9387, lat: -19.932 }, ZONE)).toEqual([]);
+  it('sem transição: dentro e continua dentro NÃO repete enter', () => {
+    expect(detectGeofenceEvents(INSIDE, { g1: true }, ZONE)).toEqual([]);
   });
 
-  it('sem transição: fora → fora não gera evento', () => {
-    expect(detectGeofenceEvents(OUTSIDE, { lng: -43.96, lat: -19.95 }, ZONE)).toEqual([]);
+  it('sem transição: fora e continua fora não gera evento', () => {
+    expect(detectGeofenceEvents(OUTSIDE, { g1: false }, ZONE)).toEqual([]);
   });
 
-  it('primeira posição (prev null) dentro conta como enter', () => {
-    const events = detectGeofenceEvents(INSIDE, null, ZONE);
+  it('primeira leitura dentro (sem estado) conta como um único enter', () => {
+    const events = detectGeofenceEvents(INSIDE, {}, ZONE);
+    expect(events).toHaveLength(1);
     expect(events[0]?.type).toBe('enter');
   });
 });

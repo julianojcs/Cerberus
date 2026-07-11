@@ -124,6 +124,7 @@ export function LiveMap({
   editGeofence = null,
   onGeofenceMove,
   onGeofenceResize,
+  focusPoint = null,
 }: {
   agents: Record<string, AgentPoint>;
   trails?: AgentTrails;
@@ -135,6 +136,7 @@ export function LiveMap({
   editGeofence?: EditGeofence | null;
   onGeofenceMove?: (lng: number, lat: number) => void;
   onGeofenceResize?: (radiusMeters: number) => void;
+  focusPoint?: [number, number] | null;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MlMap | null>(null);
@@ -368,6 +370,13 @@ export function LiveMap({
       editEdgeRef.current = null;
     };
   }, [editGeofence?.id]);
+
+  // Voa até um ponto (ex.: ao clicar num alerta) para mostrar onde ocorreu.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !focusPoint) return;
+    map.flyTo({ center: focusPoint, zoom: 16 });
+  }, [focusPoint]);
 
   // Reposiciona os handles conforme os valores mudam (sem brigar com o arraste em curso).
   useEffect(() => {
