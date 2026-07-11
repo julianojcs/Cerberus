@@ -13,7 +13,11 @@ export default function OperationsPage() {
   const [operations, setOperations] = useState<Operation[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [settings, setSettings] = useState<Settings>({ minRoutePoints: 5, connectRoutes: false });
+  const [settings, setSettings] = useState<Settings>({
+    minRoutePoints: 5,
+    connectRoutes: false,
+    maxGapMinutes: 5,
+  });
   const [settingsOpen, setSettingsOpen] = useState(false);
   // Usuário lido do localStorage só no cliente (evita mismatch de hidratação SSR).
   const [user, setUser] = useState<ReturnType<typeof getUser>>(null);

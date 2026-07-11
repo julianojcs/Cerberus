@@ -47,8 +47,8 @@ export default function LiveOperationPage() {
   const [agents, setAgents] = useState<Record<string, AgentPoint>>({});
   const [connected, setConnected] = useState(false);
 
-  // Rotas por agente (histórico segmentado nos gaps) + cor por agente.
-  const [routes, setRoutes] = useState<Record<string, Route[]>>({});
+  // Histórico cru + cor por agente. As rotas são DERIVADAS (com o gap configurável).
+  const [rawPositions, setRawPositions] = useState<LatestPosition[]>([]);
   const [agentColors, setAgentColors] = useState<Record<string, string>>({});
   const [firstTs, setFirstTs] = useState<number | null>(null);
   // "Agora" congelado na montagem — teto do período ajustável.
@@ -61,8 +61,16 @@ export default function LiveOperationPage() {
   const [expandedAgent, setExpandedAgent] = useState<string | null>(null);
 
   // Configurações do sistema (padrões enquanto não carrega) + modal.
-  const [settings, setSettings] = useState<Settings>({ minRoutePoints: 5, connectRoutes: false });
+  const [settings, setSettings] = useState<Settings>({
+    minRoutePoints: 5,
+    connectRoutes: false,
+    maxGapMinutes: 5,
+  });
   const [settingsOpen, setSettingsOpen] = useState(false);
+
+  // Barra de período: aparece ao passar o cursor no topo do mapa; "pin" fixa.
+  const [barHover, setBarHover] = useState(false);
+  const [barPinned, setBarPinned] = useState(false);
 
   // Composer de broadcast (central → agentes).
   const [broadcastText, setBroadcastText] = useState('');
@@ -91,6 +99,11 @@ export default function LiveOperationPage() {
   const [alertFocus, setAlertFocus] = useState<AlertFocus | null>(null);
   const [showZones, setShowZones] = useState(true);
   const [recomputing, setRecomputing] = useState(false);
+
+  // Preferência de "pin" da barra (lida só no cliente — evita mismatch de SSR).
+  useEffect(() => {
+    setBarPinned(localStorage.getItem('cerberus_period_pinned') === '1');
+  }, []);
 
   // Snapshot inicial (última posição conhecida) via REST + stream ao vivo via MQTT.
   useEffect(() => {
@@ -144,7 +157,7 @@ export default function LiveOperationPage() {
           if (cap < earliest) earliest = cap;
           if (cap > latest) latest = cap;
         }
-        setRoutes(buildRoutes(positions));
+        setRawPositions(positions);
         setAgentColors(assignAgentColors([...agentIds]));
         if (Number.isFinite(earliest)) {
           setFirstTs(earliest);
@@ -211,6 +224,12 @@ export default function LiveOperationPage() {
   const rangeMax = nowTs;
   // Rota dentro do período se SOBREPÕE o intervalo [início, fim].
   const inWindow = (r: Route) => r.end >= windowStartMs && r.start <= windowEndMs;
+
+  // Rotas por agente, segmentadas nos gaps (limiar configurável em Configurações).
+  const routes = useMemo(
+    () => buildRoutes(rawPositions, settings.maxGapMinutes * 60_000),
+    [rawPositions, settings.maxGapMinutes],
+  );
 
   // Rotas exibíveis: descarta as com menos de `minRoutePoints` pontos (trechos
   // insignificantes que só poluem a lista). É a base para cards, lista e plotagem.
@@ -939,11 +958,36 @@ export default function LiveOperationPage() {
           })}
         </ResizableSidebar>
 
-        <main style={{ flex: 1, minWidth: 0, position: 'relative' }}>
+        <main
+          style={{ flex: 1, minWidth: 0, position: 'relative' }}
+          onMouseMove={(e) => {
+            const rect = e.currentTarget.getBoundingClientRect();
+            setBarHover(e.clientY - rect.top < 72);
+          }}
+          onMouseLeave={() => setBarHover(false)}
+        >
+          {/* Alça sutil quando a barra está oculta — indica a área para revelar. */}
+          {firstTs != null && !(barPinned || barHover) && (
+            <div
+              style={{
+                position: 'absolute',
+                top: 6,
+                left: '50%',
+                transform: 'translateX(-50%)',
+                zIndex: 5,
+                width: 56,
+                height: 5,
+                borderRadius: 3,
+                background: 'rgba(255,255,255,0.28)',
+                pointerEvents: 'none',
+              }}
+            />
+          )}
           {/* Barra de período (topo do mapa): DOIS controles (início e fim) definem
               o intervalo das rotas plotadas. Ocupa toda a largura do topo, com
-              margens laterais iguais à de topo (10px). Padrão: últimas 24 h com dados. */}
-          {firstTs != null && (
+              margens laterais iguais à de topo (10px). Aparece ao passar o cursor no
+              topo; o "pin" a mantém fixa. Padrão: últimas 24 h com dados. */}
+          {firstTs != null && (barPinned || barHover) && (
             <div
               style={{
                 position: 'absolute',
@@ -997,6 +1041,29 @@ export default function LiveOperationPage() {
               >
                 {fmtDateTime(windowEndMs)}
               </span>
+              <button
+                type="button"
+                onClick={() => {
+                  const v = !barPinned;
+                  setBarPinned(v);
+                  localStorage.setItem('cerberus_period_pinned', v ? '1' : '0');
+                }}
+                title={barPinned ? 'Desafixar a barra de período' : 'Fixar a barra de período'}
+                aria-pressed={barPinned}
+                style={{
+                  cursor: 'pointer',
+                  flexShrink: 0,
+                  border: `1px solid ${barPinned ? '#c1121f' : 'var(--border)'}`,
+                  background: barPinned ? '#c1121f' : 'transparent',
+                  color: barPinned ? '#fff' : 'var(--muted)',
+                  borderRadius: 8,
+                  padding: '4px 8px',
+                  fontSize: 13,
+                  lineHeight: 1,
+                }}
+              >
+                📌
+              </button>
             </div>
           )}
           <LiveMap

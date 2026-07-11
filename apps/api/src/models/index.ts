@@ -166,6 +166,8 @@ const settingsSchema = new Schema(
     minRoutePoints: { type: Number, default: 5, min: 1 },
     /** Ligar rotas: desenha uma linha do último ponto de uma rota ao primeiro da próxima. */
     connectRoutes: { type: Boolean, default: false },
+    /** Intervalo (min) sem transmissão que QUEBRA a rota em segmentos (evita o "pulo"). */
+    maxGapMinutes: { type: Number, default: 5, min: 1 },
   },
   { timestamps: true },
 );

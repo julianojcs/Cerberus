@@ -131,6 +131,8 @@ export interface Settings {
   minRoutePoints: number;
   /** Ligar rotas: linha do último ponto de uma rota ao primeiro da próxima. */
   connectRoutes: boolean;
+  /** Intervalo (min) sem transmissão que quebra a rota em segmentos. */
+  maxGapMinutes: number;
 }
 
 export interface Geofence {

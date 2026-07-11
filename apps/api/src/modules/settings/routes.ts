@@ -6,9 +6,10 @@ import { Settings } from '../../models/index.js';
 const patchSchema = z.object({
   minRoutePoints: z.number().int().min(1).max(1000).optional(),
   connectRoutes: z.boolean().optional(),
+  maxGapMinutes: z.number().int().min(1).max(1440).optional(),
 });
 
-const DEFAULTS = { minRoutePoints: 5, connectRoutes: false };
+const DEFAULTS = { minRoutePoints: 5, connectRoutes: false, maxGapMinutes: 5 };
 
 /** Lê o documento único de configurações, criando-o com os padrões se ainda não existir. */
 async function loadSettings() {
@@ -24,6 +25,7 @@ function serialize(s: Record<string, unknown>) {
   return {
     minRoutePoints: (s.minRoutePoints as number | undefined) ?? DEFAULTS.minRoutePoints,
     connectRoutes: (s.connectRoutes as boolean | undefined) ?? DEFAULTS.connectRoutes,
+    maxGapMinutes: (s.maxGapMinutes as number | undefined) ?? DEFAULTS.maxGapMinutes,
   };
 }
 
@@ -44,6 +46,7 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
     const update: Record<string, unknown> = {};
     if (body.data.minRoutePoints !== undefined) update.minRoutePoints = body.data.minRoutePoints;
     if (body.data.connectRoutes !== undefined) update.connectRoutes = body.data.connectRoutes;
+    if (body.data.maxGapMinutes !== undefined) update.maxGapMinutes = body.data.maxGapMinutes;
 
     // `$setOnInsert` só com `key` — incluir os mesmos campos de `$set` geraria
     // conflito no MongoDB. No insert, os defaults do schema preenchem o restante.

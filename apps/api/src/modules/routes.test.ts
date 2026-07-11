@@ -879,14 +879,14 @@ describe('geofencing + alertas', () => {
 });
 
 describe('configurações do sistema', () => {
-  it('GET /settings retorna os padrões (min 5, ligar rotas off)', async () => {
+  it('GET /settings retorna os padrões (min 5, ligar rotas off, gap 5 min)', async () => {
     const res = await app.inject({
       method: 'GET',
       url: '/settings',
       headers: { authorization: `Bearer ${token}` },
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ minRoutePoints: 5, connectRoutes: false });
+    expect(res.json()).toMatchObject({ minRoutePoints: 5, connectRoutes: false, maxGapMinutes: 5 });
   });
 
   it('GET /settings sem token → 401', async () => {
@@ -899,17 +899,21 @@ describe('configurações do sistema', () => {
       method: 'PATCH',
       url: '/settings',
       headers: { authorization: `Bearer ${token}` },
-      payload: { minRoutePoints: 8, connectRoutes: true },
+      payload: { minRoutePoints: 8, connectRoutes: true, maxGapMinutes: 10 },
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ minRoutePoints: 8, connectRoutes: true });
+    expect(res.json()).toMatchObject({ minRoutePoints: 8, connectRoutes: true, maxGapMinutes: 10 });
 
     const again = await app.inject({
       method: 'GET',
       url: '/settings',
       headers: { authorization: `Bearer ${token}` },
     });
-    expect(again.json()).toMatchObject({ minRoutePoints: 8, connectRoutes: true });
+    expect(again.json()).toMatchObject({
+      minRoutePoints: 8,
+      connectRoutes: true,
+      maxGapMinutes: 10,
+    });
   });
 
   it('agente (não-admin) não altera configurações (403)', async () => {
