@@ -138,10 +138,15 @@ export async function initTracking(ctx: TrackingContext): Promise<void> {
     // --- Comportamento em background ---
     stopOnTerminate: false,
     startOnBoot: true,
+    // Serviço em primeiro plano: enquanto o rastreamento está ligado, o app fica
+    // SEMPRE visível na barra de notificações (mesmo minimizado). `sticky` mantém a
+    // notificação fixa; `channelName` nomeia o canal nas configurações do Android.
     foregroundService: true,
     notification: {
       title: 'Cerberus — Operação ativa',
-      text: 'Reportando posição tática.',
+      text: 'Rastreando sua posição em segundo plano.',
+      channelName: 'Rastreamento Cerberus',
+      sticky: true,
     },
 
     // A publicação é feita pela camada MQTT; o autoSync HTTP do plugin fica off.
