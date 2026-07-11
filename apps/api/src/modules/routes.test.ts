@@ -713,12 +713,19 @@ describe('geofencing + alertas', () => {
       method: 'POST',
       url: `/operations/${operationId}/geofences`,
       headers: { authorization: `Bearer ${token}` },
-      payload: { name: 'Perímetro Alfa', lng: -43.9386, lat: -19.9319, radiusMeters: 150 },
+      payload: {
+        name: 'Perímetro Alfa',
+        lng: -43.9386,
+        lat: -19.9319,
+        radiusMeters: 150,
+        color: 'blue',
+      },
     });
     expect(res.statusCode).toBe(201);
     const g = res.json();
     expect(g.name).toBe('Perímetro Alfa');
     expect(g.radiusMeters).toBe(150);
+    expect(g.color).toBe('blue');
     geofenceId = g.id;
   });
 

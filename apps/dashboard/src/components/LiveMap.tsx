@@ -50,6 +50,7 @@ export interface GeofenceCircle {
   lat: number;
   radiusMeters: number;
   name: string;
+  color?: string; // hex (tom 500 resolvido da familia Tailwind)
 }
 
 /** Anel poligonal aproximando um círculo de `radiusMeters` (MapLibre não tem círculo em metros). */
@@ -70,7 +71,7 @@ function geofencesFC(geofences: GeofenceCircle[]): GeoJSON.FeatureCollection {
     type: 'FeatureCollection',
     features: geofences.map((g) => ({
       type: 'Feature',
-      properties: { name: g.name },
+      properties: { name: g.name, color: g.color ?? '#22c55e' },
       geometry: { type: 'Polygon', coordinates: [circleRing(g.lng, g.lat, g.radiusMeters)] },
     })),
   };
@@ -198,13 +199,13 @@ export function LiveMap({
         id: 'geofences-fill',
         type: 'fill',
         source: 'geofences',
-        paint: { 'fill-color': '#3fb950', 'fill-opacity': 0.12 },
+        paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.12 },
       });
       map.addLayer({
         id: 'geofences-line',
         type: 'line',
         source: 'geofences',
-        paint: { 'line-color': '#3fb950', 'line-width': 2, 'line-opacity': 0.7 },
+        paint: { 'line-color': ['get', 'color'], 'line-width': 2, 'line-opacity': 0.7 },
       });
       // Trilhas (por cima das zonas).
       map.addSource('trails', { type: 'geojson', data: toFeatureCollection(trailsRef.current) });

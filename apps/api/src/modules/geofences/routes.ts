@@ -5,11 +5,18 @@ import { Role } from '@cerberus/shared';
 import { Alert, Geofence } from '../../models/index.js';
 import { assertOperationScope } from '../scope.js';
 
+// Cor = token de familia da paleta Tailwind (o dashboard restringe as opcoes).
+const colorSchema = z
+  .string()
+  .regex(/^[a-z]+$/)
+  .max(30);
+
 const createSchema = z.object({
   name: z.string().min(1).max(120),
   lng: z.number().min(-180).max(180),
   lat: z.number().min(-90).max(90),
   radiusMeters: z.number().min(1).max(100000),
+  color: colorSchema.optional(),
 });
 
 const patchSchema = z.object({
@@ -17,6 +24,7 @@ const patchSchema = z.object({
   lng: z.number().min(-180).max(180).optional(),
   lat: z.number().min(-90).max(90).optional(),
   radiusMeters: z.number().min(1).max(100000).optional(),
+  color: colorSchema.optional(),
 });
 
 /**
@@ -40,6 +48,7 @@ export async function geofenceRoutes(app: FastifyInstance): Promise<void> {
         name: body.data.name,
         center: { type: 'Point', coordinates: [body.data.lng, body.data.lat] },
         radiusMeters: body.data.radiusMeters,
+        color: body.data.color ?? 'green',
       });
       return reply.code(201).send(serializeGeofence(g.toObject()));
     },
@@ -72,6 +81,7 @@ export async function geofenceRoutes(app: FastifyInstance): Promise<void> {
       const update: Record<string, unknown> = {};
       if (body.data.name !== undefined) update.name = body.data.name;
       if (body.data.radiusMeters !== undefined) update.radiusMeters = body.data.radiusMeters;
+      if (body.data.color !== undefined) update.color = body.data.color;
       if (body.data.lng !== undefined && body.data.lat !== undefined) {
         update.center = { type: 'Point', coordinates: [body.data.lng, body.data.lat] };
       }
@@ -119,6 +129,7 @@ function serializeGeofence(g: Record<string, unknown>) {
     lng: center?.coordinates?.[0],
     lat: center?.coordinates?.[1],
     radiusMeters: g.radiusMeters,
+    color: g.color ?? 'green',
     active: g.active,
   };
 }
