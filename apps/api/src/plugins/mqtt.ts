@@ -9,7 +9,7 @@ import {
   parseAgentTopic,
   positionSampleSchema,
 } from '@cerberus/shared';
-import { Alert, Geofence, MessageModel, Position } from '../models/index.js';
+import { Alert, Geofence, GeofenceMembership, MessageModel, Position } from '../models/index.js';
 import { detectGeofenceEvents } from '../modules/geofences/detect.js';
 
 /**
@@ -88,9 +88,10 @@ async function persistPosition(
 }
 
 /**
- * Geofencing: após persistir a posição, compara com a anterior contra as zonas
- * ativas da operação; cada transição enter/exit vira um Alert persistido +
- * anúncio no canal broadcast (agentes/dashboard).
+ * Geofencing: após persistir a posição, compara-a com o ESTADO ANTERIOR de
+ * pertencimento (membership) contra as zonas ativas da operação. Só a TRANSIÇÃO
+ * (fora→dentro / dentro→fora) vira um Alert persistido + anúncio no broadcast;
+ * ficar parado dentro de uma zona NÃO repete alerta.
  */
 async function checkGeofences(
   app: FastifyInstance,
@@ -102,17 +103,23 @@ async function checkGeofences(
   const geofences = await Geofence.find({ operationId, active: true }).lean();
   if (geofences.length === 0) return;
 
-  const prevDocs = await Position.find({ operationId, agentId })
-    .sort({ capturedAt: -1 })
-    .skip(1) // pula a posição recém-persistida; pega a anterior
-    .limit(1)
-    .lean();
-  const prevCoords = (prevDocs[0]?.location as { coordinates?: number[] } | undefined)?.coordinates;
-  const [plng, plat] = prevCoords ?? [];
-  const prev = plng != null && plat != null ? { lng: plng, lat: plat } : null;
+  // Estado anterior de pertencimento por zona (fonte de verdade, não a posição anterior).
+  const memberships = await GeofenceMembership.find({ operationId, agentId }).lean();
+  const insideBefore: Record<string, boolean> = {};
+  for (const m of memberships) insideBefore[m.geofenceId] = m.inside;
 
-  const events = detectGeofenceEvents({ lng: sample.lng, lat: sample.lat }, prev, geofences);
+  const events = detectGeofenceEvents(
+    { lng: sample.lng, lat: sample.lat },
+    insideBefore,
+    geofences,
+  );
   for (const ev of events) {
+    // Atualiza o estado ANTES de anunciar (idempotência sob concorrência).
+    await GeofenceMembership.updateOne(
+      { operationId, agentId, geofenceId: ev.geofenceId },
+      { $set: { inside: ev.inside, updatedAt: new Date() } },
+      { upsert: true },
+    );
     await Alert.create({
       operationId,
       agentId,

@@ -53,6 +53,7 @@ export default function LiveOperationPage() {
     lat: number;
     radiusMeters: number;
   } | null>(null);
+  const [alertFocus, setAlertFocus] = useState<[number, number] | null>(null);
 
   // Snapshot inicial (última posição conhecida) via REST + stream ao vivo via MQTT.
   useEffect(() => {
@@ -551,15 +552,30 @@ export default function LiveOperationPage() {
           {alerts.length > 0 && (
             <div className="card" style={{ padding: 12, marginBottom: 16 }}>
               <strong style={{ fontSize: 14 }}>Alertas ({alerts.length})</strong>
-              {alerts.slice(0, 12).map((a) => (
-                <div key={a.id} className="muted" style={{ fontSize: 13, marginTop: 6 }}>
-                  <span style={{ color: a.type === 'enter' ? 'var(--ok)' : '#e3b341' }}>
-                    {a.type === 'enter' ? '⊕' : '⊖'}
-                  </span>{' '}
-                  {a.agentId} {a.type === 'enter' ? 'entrou em' : 'saiu de'}{' '}
-                  <strong>{a.geofenceName}</strong>
-                </div>
-              ))}
+              <div style={{ maxHeight: 220, overflowY: 'auto', marginTop: 4 }}>
+                {alerts.map((a) => {
+                  const hasLoc = a.lng != null && a.lat != null;
+                  return (
+                    <div
+                      key={a.id}
+                      className="muted"
+                      onClick={() => hasLoc && setAlertFocus([a.lng as number, a.lat as number])}
+                      title={hasLoc ? 'Ver no mapa' : undefined}
+                      style={{
+                        fontSize: 13,
+                        marginTop: 6,
+                        cursor: hasLoc ? 'pointer' : 'default',
+                      }}
+                    >
+                      <span style={{ color: a.type === 'enter' ? 'var(--ok)' : '#e3b341' }}>
+                        {a.type === 'enter' ? '⊕' : '⊖'}
+                      </span>{' '}
+                      {a.agentId} {a.type === 'enter' ? 'entrou em' : 'saiu de'}{' '}
+                      <strong>{a.geofenceName}</strong>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           )}
 
@@ -597,6 +613,7 @@ export default function LiveOperationPage() {
             editGeofence={editGeo}
             onGeofenceMove={(lng, lat) => setEditGeo((e) => (e ? { ...e, lng, lat } : e))}
             onGeofenceResize={(radiusMeters) => setEditGeo((e) => (e ? { ...e, radiusMeters } : e))}
+            focusPoint={alertFocus}
           />
         </main>
       </div>
