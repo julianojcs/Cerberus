@@ -23,6 +23,7 @@ export function subscribeToOperation(
   operationId: string,
   onPosition: (pos: LivePosition) => void,
   token?: string,
+  onStatus?: (connected: boolean) => void,
 ): () => void {
   const client: MqttClient = mqtt.connect(MQTT_WS_URL, {
     // O token JWT é apresentado ao broker (base para ACL em produção EMQX/Mosquitto).
@@ -31,9 +32,14 @@ export function subscribeToOperation(
     reconnectPeriod: 2000,
   });
 
+  // O status do barramento reflete a conexão REAL ao broker (não a chegada de
+  // posições) — um agente parado publica raramente, mas a conexão está viva.
   client.on('connect', () => {
+    onStatus?.(true);
     client.subscribe(operationWildcardTopic(operationId), { qos: 1 });
   });
+  client.on('close', () => onStatus?.(false));
+  client.on('offline', () => onStatus?.(false));
 
   client.on('message', (topic, payload) => {
     const parsed = parseAgentTopic(topic);
