@@ -73,6 +73,13 @@ export function connectMqtt(token: string, agentId: string): MqttClient {
     }
   });
 
+  // Sem este handler as falhas de conexão ficam silenciosas. Loga o motivo (host
+  // inalcançável, WS recusado, etc.) — visível no Metro/debugger. O mqtt.js segue
+  // tentando reconectar sozinho (reconnectPeriod).
+  client.on('error', (err) => {
+    console.warn(`[mqtt] falha de conexão em ${config.mqttWsUrl}:`, err?.message ?? err);
+  });
+
   client.on('message', handleIncoming);
 
   return client;
