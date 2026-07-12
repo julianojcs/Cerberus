@@ -20,8 +20,10 @@ let broker: Awaited<ReturnType<typeof Aedes.createBroker>>;
 let server: Server;
 let app: FastifyInstance;
 let pub: MqttClient;
-// Importado dinamicamente após configurar o env (padrão dos testes da API).
+// Importados dinamicamente após configurar o env (padrão dos testes da API).
 let Position: (typeof import('../models/index.js'))['Position'];
+let Geofence: (typeof import('../models/index.js'))['Geofence'];
+let Alert: (typeof import('../models/index.js'))['Alert'];
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -58,7 +60,7 @@ beforeAll(async () => {
   process.env.JWT_SECRET = 'test_secret_1234567890';
 
   const { buildApp } = await import('../app.js');
-  ({ Position } = await import('../models/index.js'));
+  ({ Position, Geofence, Alert } = await import('../models/index.js'));
 
   app = await buildApp({ withMqtt: true });
 
@@ -103,4 +105,48 @@ describe('ponte MQTT (ingest de telemetria)', () => {
     // receivedAt é gerado no servidor no momento da ingestão.
     expect(doc.receivedAt).toBeInstanceOf(Date);
   }, 15_000);
+
+  it('não duplica alertas ao descarregar várias posições dentro da zona (buffer flush)', async () => {
+    // Zona ativa; um agente publica N posições DENTRO dela numa rajada (simula a
+    // descarga do buffer offline: dezenas de posições concorrentes de uma vez).
+    const center = { lng: -43.94, lat: -19.95 };
+    const burstAgent = 'AG-BURST';
+    await Geofence.create({
+      operationId,
+      name: 'Zona Rajada',
+      center: { type: 'Point', coordinates: [center.lng, center.lat] },
+      radiusMeters: 200,
+      active: true,
+    });
+
+    const N = 20;
+    for (let i = 0; i < N; i++) {
+      pub.publish(
+        agentPositionTopic(operationId, burstAgent),
+        JSON.stringify({
+          lat: center.lat,
+          lng: center.lng,
+          accuracy: 5,
+          capturedAt: new Date(Date.now() + i).toISOString(),
+        }),
+        { qos: 1 },
+      );
+    }
+
+    // Espera as N posições serem persistidas e a fila drenar.
+    await waitFor(async () => {
+      const count = await Position.countDocuments({ operationId, agentId: burstAgent });
+      return count >= N ? count : null;
+    }, 10000);
+    await sleep(800);
+
+    // Sem serialização, cada posição concorrente veria "estava fora" e dispararia
+    // um `enter` → dezenas. Com a fila por agente: exatamente UMA entrada.
+    const enters = await Alert.countDocuments({
+      operationId,
+      agentId: burstAgent,
+      type: 'enter',
+    });
+    expect(enters).toBe(1);
+  }, 20_000);
 });
