@@ -17,7 +17,11 @@ npm run api:dev             # (na raiz) API em :3000
 cd apps/mobile && npm start # Metro em modo --lan (WiFi)
 ```
 
-> `apps/mobile` → `npm start` já usa `expo start --dev-client --lan` (WiFi).
+> `apps/mobile` → `npm start` já usa `expo start --dev-client --lan` (WiFi) e, **antes
+> de subir o Metro, roda `scripts/set-ip.mjs`**: detecta o IP ativo do PC (a interface
+> da rota padrão — Wi‑Fi/Ethernet, não o `172.x` do WSL) e grava
+> `EXPO_PUBLIC_API_URL`/`EXPO_PUBLIC_MQTT_WS_URL` no `.env`. **Trocar de WiFi não exige
+> mais editar IP à mão** — só rodar `npm start` de novo (ou `npm run set-ip`).
 > Rede diferente (4G/roteador isolado)? Em `apps/mobile`, use `npm run start:tunnel`
 > (Expo Tunnel).
 
