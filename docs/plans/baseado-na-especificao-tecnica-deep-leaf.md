@@ -19,7 +19,7 @@ Apoiadas por: **barramento MQTT** (tempo real), **MongoDB** (persistência + ín
 TLS 1.3, e E2EE AES-256 em fase posterior).
 
 **Estado atual do repositório:** greenfield. Só existem `docs/Documentacao_Tecnica_Cerberus.pdf` e
-ativos de marca em [src/assets/images/](src/assets/images/). Nenhum código-fonte ainda.
+ativos de marca em [assets/brand/](assets/brand/). Nenhum código-fonte ainda.
 
 **Decisões confirmadas com o usuário:**
 - **Ambiente:** código portátil (12-factor via `.env`), mas **deploy inicial no stack gratuito** (Render + MongoDB Atlas M0 + HiveMQ Cloud); migração DTI on-prem é fase posterior.
@@ -74,7 +74,7 @@ Cerberus/
 └─ docs/                        # documentação existente
 ```
 
-Os ativos de marca em [src/assets/images/](src/assets/images/) serão reaproveitados em
+Os ativos de marca em [assets/brand/](assets/brand/) serão reaproveitados em
 `apps/dashboard/public/` e `apps/mobile/assets/`.
 
 ### `packages/shared` (contratos — base de tudo)

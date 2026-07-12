@@ -18,6 +18,9 @@ const config: ExpoConfig = {
   orientation: 'portrait',
   scheme: 'cerberus',
   userInterfaceStyle: 'dark',
+  // Ícone do app = logo principal do sistema (cópia de assets/brand/logo.png).
+  // Recomendado um mestre 1024x1024 quadrado; a atual é retangular (será ajustada).
+  icon: './assets/icon.png',
   ios: {
     bundleIdentifier: 'br.gov.pf.cerberus.agente',
     supportsTablet: true, // iPhones e iPads (conforme spec)
@@ -31,6 +34,10 @@ const config: ExpoConfig = {
   },
   android: {
     package: 'br.gov.pf.cerberus.agente',
+    adaptiveIcon: {
+      foregroundImage: './assets/icon.png',
+      backgroundColor: '#0b0f14', // fundo institucional escuro (var --bg)
+    },
     permissions: [
       'ACCESS_FINE_LOCATION',
       'ACCESS_COARSE_LOCATION',

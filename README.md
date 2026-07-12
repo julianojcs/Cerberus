@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="src/assets/images/Cerberus-logo-1-fundo-branco.png" alt="Cerberus" width="220" />
+  <img src="assets/brand/Cerberus-logo-1-fundo-branco.png" alt="Cerberus" width="220" />
 </p>
 
 # Cerberus
