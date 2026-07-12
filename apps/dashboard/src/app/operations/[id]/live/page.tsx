@@ -259,6 +259,17 @@ export default function LiveOperationPage() {
   // Rota dentro do período se SOBREPÕE o intervalo [início, fim].
   const inWindow = (r: Route) => r.end >= windowStartMs && r.start <= windowEndMs;
 
+  // Alertas dentro do Período (mesma janela das rotas). Sem isto, apareciam alertas
+  // de cruzamentos fora do período exibido — sem rota correspondente no mapa.
+  const periodAlerts = useMemo(
+    () =>
+      alerts.filter((a) => {
+        const t = +new Date(a.capturedAt);
+        return t >= windowStartMs && t <= windowEndMs;
+      }),
+    [alerts, windowStartMs, windowEndMs],
+  );
+
   // Rotas por agente, segmentadas nos gaps (limiar configurável em Configurações).
   const routes = useMemo(
     () => buildRoutes(rawPositions, settings.maxGapMinutes * 60_000),
@@ -792,14 +803,14 @@ export default function LiveOperationPage() {
             </button>
           </div>
 
-          {alerts.length > 0 && (
+          {periodAlerts.length > 0 && (
             <div className="card" style={{ padding: 12, marginBottom: 16 }}>
-              <strong style={{ fontSize: 14 }}>Alertas ({alerts.length})</strong>
+              <strong style={{ fontSize: 14 }}>Alertas ({periodAlerts.length})</strong>
               <div
                 className="thinscroll"
                 style={{ maxHeight: 220, overflowY: 'auto', marginTop: 4 }}
               >
-                {alerts.map((a) => {
+                {periodAlerts.map((a) => {
                   const hasLoc = a.lng != null && a.lat != null;
                   return (
                     <div
