@@ -13,6 +13,26 @@ import { Alert, Geofence, GeofenceMembership, MessageModel, Position } from '../
 import { detectGeofenceEvents } from '../modules/geofences/detect.js';
 
 /**
+ * Fila de serialização POR AGENTE. Os handlers de mensagem do MQTT são assíncronos
+ * e rodam concorrentemente; quando o buffer offline do app descarrega dezenas de
+ * posições de uma vez, TODAS entram ao mesmo tempo. Sem serializar, cada uma lê o
+ * MESMO estado de pertencimento (memberships) ANTES de qualquer outra gravar — todas
+ * veem "estava fora" e disparam `enter`, gerando dezenas de alertas duplicados. A
+ * fila garante o ciclo ler→decidir→gravar atômico e em ordem cronológica por agente
+ * (agentes distintos seguem em paralelo).
+ */
+const agentQueue = new Map<string, Promise<unknown>>();
+function serializePerAgent(key: string, task: () => Promise<void>): Promise<void> {
+  const prev = agentQueue.get(key) ?? Promise.resolve();
+  const run = prev.then(task); // encadeia após o anterior (prev nunca rejeita, ver abaixo)
+  agentQueue.set(
+    key,
+    run.catch(() => undefined),
+  );
+  return run;
+}
+
+/**
  * PONTE MQTT (ingest). A API conecta ao broker como cliente privilegiado,
  * assina `operacao/+/agente/+/#` e persiste posições e mensagens no MongoDB.
  * Isso desacopla a escrita no banco da plotagem em tempo real (dashboard assina
@@ -49,8 +69,12 @@ export default fp(async function mqttPlugin(app: FastifyInstance) {
     try {
       const raw = JSON.parse(payload.toString());
       if (channel === AgentChannel.POSICAO) {
-        const sample = await persistPosition(operationId, agentId, raw);
-        await checkGeofences(app, client, operationId, agentId, sample);
+        // Serializa persistência + geofencing por agente (evita alertas duplicados
+        // quando o buffer offline descarrega várias posições concorrentes).
+        await serializePerAgent(`${operationId}:${agentId}`, async () => {
+          const sample = await persistPosition(operationId, agentId, raw);
+          await checkGeofences(app, client, operationId, agentId, sample);
+        });
       } else if (channel === AgentChannel.MENSAGEM) {
         await persistMessage(operationId, agentId, raw);
       }
