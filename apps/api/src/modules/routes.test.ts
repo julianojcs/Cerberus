@@ -92,6 +92,18 @@ afterAll(async () => {
   await mongod?.stop();
 });
 
+describe('health', () => {
+  it('GET /health → 200 com status ok e mongo conectado', async () => {
+    const res = await app.inject({ method: 'GET', url: '/health' });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.status).toBe('ok');
+    expect(body.service).toBe('cerberus-api');
+    expect(body.mongo).toBe('connected'); // memory server conectado
+    expect(body).toHaveProperty('mqtt'); // ponte desligada nos testes (withMqtt:false)
+  });
+});
+
 describe('autenticação', () => {
   it('rejeita credenciais inválidas com 401', async () => {
     const res = await app.inject({
