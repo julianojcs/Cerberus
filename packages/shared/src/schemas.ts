@@ -55,6 +55,24 @@ export const messageSchema = z.object({
 });
 export type Message = z.infer<typeof messageSchema>;
 
+/** Registro da chave pública X25519 (base64 de 32 bytes = 44 chars) para E2EE. */
+export const publicKeyRegistrationSchema = z.object({
+  publicKey: z.string().regex(/^[A-Za-z0-9+/]{43}=$/, 'Chave pública inválida'),
+});
+export type PublicKeyRegistration = z.infer<typeof publicKeyRegistrationSchema>;
+
+/**
+ * Entrada do diretório de chaves de uma operação. `id` é o identificador usado
+ * como destinatário no envelope E2EE (agentId do agente, ou userId do admin).
+ */
+export interface KeyDirectoryEntry {
+  id: string;
+  userId: string;
+  role: Role;
+  agentId?: string;
+  publicKey: string;
+}
+
 /** Claims embutidos no JWT (reusado como credencial de conexão MQTT). */
 export const authClaimsSchema = z.object({
   sub: z.string(), // userId

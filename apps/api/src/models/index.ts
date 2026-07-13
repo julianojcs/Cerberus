@@ -13,6 +13,8 @@ const userSchema = new Schema(
     agentId: { type: String, index: true },
     /** Operações às quais o usuário tem acesso (base do isolamento multitenant). */
     operationIds: { type: [Schema.Types.ObjectId], ref: 'Operation', default: [] },
+    /** Chave pública X25519 (base64) para E2EE. A privada nunca chega ao servidor. */
+    publicKey: { type: String },
   },
   { timestamps: true },
 );

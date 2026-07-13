@@ -1,4 +1,4 @@
-import type { LoginResponse, Operation } from '@cerberus/shared';
+import type { KeyDirectoryEntry, LoginResponse, Operation } from '@cerberus/shared';
 import { clearSession, getToken } from './auth';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3000';
@@ -77,6 +77,14 @@ export const api = {
     }),
   operations: () => request<Operation[]>('/operations'),
   operation: (id: string) => request<Operation>(`/operations/${id}`),
+  // E2EE: registra a própria chave pública e lê o diretório de chaves da operação.
+  registerPublicKey: (publicKey: string) =>
+    request<{ publicKey: string }>('/auth/public-key', {
+      method: 'PUT',
+      body: JSON.stringify({ publicKey }),
+    }),
+  operationKeys: (operationId: string) =>
+    request<KeyDirectoryEntry[]>(`/operations/${operationId}/keys`),
   latestPositions: (operationId: string) =>
     request<LatestPosition[]>(`/operations/${operationId}/positions/latest`),
   // Histórico da operação (trilha). Vem ordenado do mais recente para o mais antigo.
