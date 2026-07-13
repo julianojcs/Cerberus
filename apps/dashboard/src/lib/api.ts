@@ -70,6 +70,16 @@ export async function fetchBlobUrl(path: string): Promise<string> {
   return URL.createObjectURL(await res.blob());
 }
 
+/** Baixa um recurso protegido como bytes crus (ex.: blob de mídia E2EE para decifrar). */
+export async function fetchAuthedBytes(path: string): Promise<Uint8Array> {
+  const token = getToken();
+  const res = await fetch(`${API_URL}${path}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!res.ok) throw new Error(`Erro ${res.status}`);
+  return new Uint8Array(await res.arrayBuffer());
+}
+
 export const api = {
   login: (username: string, password: string) =>
     request<LoginResponse>('/auth/login', {

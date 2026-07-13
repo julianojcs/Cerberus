@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { generateKeyPair, openMessage, publicFromSecret, sealMessage } from './e2ee.js';
+import {
+  decryptBytes,
+  encryptBytes,
+  generateKeyPair,
+  openMessage,
+  publicFromSecret,
+  sealMessage,
+} from './e2ee.js';
 
 describe('e2ee', () => {
   it('deriva a chave pública correta a partir da secreta', () => {
@@ -47,5 +54,15 @@ describe('e2ee', () => {
   it('devolve null (sem lançar) para uma mensagem de sistema em claro', () => {
     // simula um alerta de geofence publicado em claro no mesmo canal
     expect(openMessage('Entrada na zona Alfa', 'AG-001', generateKeyPair().secretKey)).toBeNull();
+  });
+
+  it('cifra/decifra bytes (mídia) e não vaza o conteúdo no cipher', () => {
+    const bytes = new Uint8Array([1, 2, 3, 250, 128, 0, 42]);
+    const { cipher, key, nonce } = encryptBytes(bytes);
+    expect(Array.from(cipher)).not.toEqual(Array.from(bytes)); // cifrado ≠ claro
+    const back = decryptBytes(cipher, key, nonce);
+    expect(back && Array.from(back)).toEqual(Array.from(bytes));
+    // chave errada → null
+    expect(decryptBytes(cipher, generateKeyPair().secretKey, nonce)).toBeNull();
   });
 });

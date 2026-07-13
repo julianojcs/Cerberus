@@ -3,7 +3,13 @@ import { MongoMemoryServer } from 'mongodb-memory-server';
 import bcrypt from 'bcryptjs';
 import FormData from 'form-data';
 import type { FastifyInstance } from 'fastify';
-import { generateKeyPair, openMessage, sealMessage } from '@cerberus/shared';
+import {
+  decryptBytes,
+  encryptBytes,
+  generateKeyPair,
+  openMessage,
+  sealMessage,
+} from '@cerberus/shared';
 
 // PNG 1x1 transparente (fixture binária mínima para os testes de mídia).
 const PNG = Buffer.from(
@@ -750,16 +756,31 @@ describe('isolamento multitenant (Zero Trust)', () => {
   });
 });
 
-describe('mídia (GridFS)', () => {
+describe('mídia E2EE (GridFS)', () => {
   let mediaRef: string;
+  const agentKeys = generateKeyPair();
+  // O cliente cifra a imagem e embrulha legenda+geotag+chave da imagem num envelope.
+  const img = encryptBytes(new Uint8Array(PNG));
+  const metadata = JSON.stringify({
+    caption: 'Veículo suspeito na esquina.',
+    lat: -19.9319,
+    lng: -43.9386,
+    mime: 'image/png',
+    k: img.key,
+    n: img.nonce,
+  });
+  const mediaEnvelope = sealMessage(metadata, agentKeys.secretKey, [
+    { id: 'AG-0456', publicKey: agentKeys.publicKey },
+  ]);
 
-  it('agente faz upload de foto com legenda + geotag (POST /media) → 201', async () => {
+  it('agente faz upload de mídia cifrada (POST /media) → 201, blob opaco', async () => {
     const form = new FormData();
-    // Campos de texto ANTES do arquivo (para o multipart populá-los em file.fields).
-    form.append('caption', 'Veículo suspeito na esquina.');
-    form.append('lng', '-43.9386');
-    form.append('lat', '-19.9319');
-    form.append('file', PNG, { filename: 'foto.png', contentType: 'image/png' });
+    // O envelope vem ANTES do arquivo (para o multipart populá-lo em file.fields).
+    form.append('ciphertext', mediaEnvelope);
+    form.append('file', Buffer.from(img.cipher), {
+      filename: 'media.bin',
+      contentType: 'application/octet-stream',
+    });
     const res = await app.inject({
       method: 'POST',
       url: `/operations/${operationId}/media`,
@@ -770,52 +791,65 @@ describe('mídia (GridFS)', () => {
     const body = res.json();
     expect(body.type).toBe('media');
     expect(body.mediaRef).toBeTruthy();
-    expect(body.text).toBe('Veículo suspeito na esquina.');
-    expect(body.lat).toBeCloseTo(-19.9319);
-    expect(body.lng).toBeCloseTo(-43.9386);
+    expect(body.ciphertext).toBe(mediaEnvelope);
+    expect(body.text).toBeUndefined(); // nenhuma legenda em claro
     mediaRef = body.mediaRef;
   });
 
-  it('histórico traz a mídia com legenda + geotag', async () => {
+  it('histórico traz o envelope; a legenda/geotag só saem ao decifrar', async () => {
     const res = await app.inject({
       method: 'GET',
       url: `/operations/${operationId}/messages`,
       headers: { authorization: `Bearer ${agentToken}` },
     });
     expect(res.statusCode).toBe(200);
-    const media = (res.json() as Array<{ type: string; text?: string; lat?: number }>).find(
+    const media = (res.json() as Array<{ type: string; ciphertext?: string }>).find(
       (m) => m.type === 'media',
     );
-    expect(media?.text).toBe('Veículo suspeito na esquina.');
-    expect(media?.lat).toBeCloseTo(-19.9319);
+    const meta = JSON.parse(openMessage(media!.ciphertext!, 'AG-0456', agentKeys.secretKey)!);
+    expect(meta.caption).toBe('Veículo suspeito na esquina.');
+    expect(meta.lat).toBeCloseTo(-19.9319);
+    // Nenhuma legenda em claro trafega na resposta.
+    expect(JSON.stringify(res.json())).not.toContain('Veículo suspeito');
   });
 
-  it('faz stream do binário (GET /media/:fileId) → 200 image/png', async () => {
+  it('stream devolve o blob CIFRADO; só a chave do envelope recupera a imagem', async () => {
     const res = await app.inject({
       method: 'GET',
       url: `/operations/${operationId}/media/${mediaRef}`,
       headers: { authorization: `Bearer ${agentToken}` },
     });
     expect(res.statusCode).toBe(200);
-    expect(res.headers['content-type']).toContain('image/png');
-    expect(res.rawPayload.length).toBe(PNG.length);
+    expect(res.headers['content-type']).toContain('application/octet-stream');
+    // O que o servidor guarda é o cipher (≠ PNG); decifrado, volta a imagem original.
+    const stored = new Uint8Array(res.rawPayload);
+    expect(Buffer.from(stored).equals(PNG)).toBe(false);
+    const back = decryptBytes(stored, img.key, img.nonce);
+    expect(back && Buffer.from(back).equals(PNG)).toBe(true);
   });
 
-  it('rejeita tipo não suportado (415)', async () => {
+  it('rejeita upload sem envelope E2EE (400)', async () => {
     const form = new FormData();
-    form.append('file', Buffer.from('texto'), { filename: 'a.txt', contentType: 'text/plain' });
+    form.append('file', Buffer.from('qualquer'), {
+      filename: 'a.bin',
+      contentType: 'application/octet-stream',
+    });
     const res = await app.inject({
       method: 'POST',
       url: `/operations/${operationId}/media`,
       headers: { ...form.getHeaders(), authorization: `Bearer ${agentToken}` },
       payload: form.getBuffer(),
     });
-    expect(res.statusCode).toBe(415);
+    expect(res.statusCode).toBe(400);
   });
 
   it('bloqueia upload em operação fora do escopo (403)', async () => {
     const form = new FormData();
-    form.append('file', PNG, { filename: 'foto.png', contentType: 'image/png' });
+    form.append('ciphertext', mediaEnvelope);
+    form.append('file', Buffer.from(img.cipher), {
+      filename: 'media.bin',
+      contentType: 'application/octet-stream',
+    });
     const res = await app.inject({
       method: 'POST',
       url: '/operations/000000000000000000000000/media',

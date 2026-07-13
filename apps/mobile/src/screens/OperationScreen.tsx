@@ -208,7 +208,7 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
     if (!operationId || !pendingPhoto || uploading) return;
     setUploading(true);
     try {
-      await uploadPhoto(operationId, session.token, pendingPhoto, {
+      await uploadPhoto(operationId, session, pendingPhoto, {
         caption,
         lat: pos?.lat ?? null, // geotag = posição atual do agente (se disponível)
         lng: pos?.lng ?? null,

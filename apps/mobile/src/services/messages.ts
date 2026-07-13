@@ -1,13 +1,7 @@
 import { config } from '../config';
-import { sealMessage, type E2eeRecipient } from '../shared/e2ee';
-import { getSecretKey } from './keys';
+import { sealMessage } from '../shared/e2ee';
+import { fetchRecipients, getSecretKey } from './keys';
 import type { Session } from './auth';
-
-interface KeyDirectoryEntry {
-  id: string;
-  publicKey: string;
-  role: string;
-}
 
 /**
  * Cifra e envia uma mensagem de texto à operação (E2EE). Monta o envelope por
@@ -19,12 +13,7 @@ export async function sendText(session: Session, operationId: string, text: stri
   const secretKey = await getSecretKey(session.userId);
   if (!secretKey) throw new Error('Chave E2EE ausente — refaça o login.');
 
-  const dirRes = await fetch(`${config.apiUrl}/operations/${operationId}/keys`, {
-    headers: { Authorization: `Bearer ${session.token}` },
-  });
-  if (!dirRes.ok) throw new Error(`Erro ${dirRes.status} ao obter chaves`);
-  const directory = (await dirRes.json()) as KeyDirectoryEntry[];
-  const recipients: E2eeRecipient[] = directory.map((e) => ({ id: e.id, publicKey: e.publicKey }));
+  const recipients = await fetchRecipients(session, operationId);
   if (recipients.length === 0) throw new Error('Nenhum destinatário com chave registrada.');
 
   const ciphertext = sealMessage(text, secretKey, recipients);
