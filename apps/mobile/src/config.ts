@@ -1,9 +1,16 @@
 import Constants from 'expo-constants';
 
-/** Configuração injetada por ambiente (app.config.ts -> extra). */
+/**
+ * Fallback secundário: `extra` do app.config.ts. A fonte PRIMÁRIA são as
+ * `EXPO_PUBLIC_*` lidas direto de `process.env` (o `babel-preset-expo` as substitui
+ * inline no bundle do cliente) — mais confiável que `extra`, que depende do `.env`
+ * ser carregado na avaliação do app.config (instável neste monorepo).
+ */
 const extra = (Constants.expoConfig?.extra ?? {}) as {
   apiUrl?: string;
   mqttWsUrl?: string;
+  mqttUsername?: string;
+  mqttPassword?: string;
 };
 
 /**
@@ -24,8 +31,19 @@ function metroHost(): string | null {
 
 const host = metroHost();
 
+// Prioridade: EXPO_PUBLIC_* (inline pelo Babel) → extra (app.config) → host do Metro.
 export const config = {
-  apiUrl: extra.apiUrl ?? (host ? `http://${host}:3000` : 'http://localhost:3000'),
+  apiUrl:
+    process.env.EXPO_PUBLIC_API_URL ||
+    extra.apiUrl ||
+    (host ? `http://${host}:3000` : 'http://localhost:3000'),
   // O app publica via MQTT sobre WebSockets (compatível com React Native).
-  mqttWsUrl: extra.mqttWsUrl ?? (host ? `ws://${host}:9001` : 'ws://localhost:9001'),
+  mqttWsUrl:
+    process.env.EXPO_PUBLIC_MQTT_WS_URL ||
+    extra.mqttWsUrl ||
+    (host ? `ws://${host}:9001` : 'ws://localhost:9001'),
+  // Credencial estática do broker (HiveMQ Cloud). Vazias no dev local / on-prem,
+  // onde o app cai na auth por JWT (ver connectMqtt em services/mqtt.ts).
+  mqttUsername: process.env.EXPO_PUBLIC_MQTT_USERNAME || extra.mqttUsername,
+  mqttPassword: process.env.EXPO_PUBLIC_MQTT_PASSWORD || extra.mqttPassword,
 };

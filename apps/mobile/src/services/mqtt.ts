@@ -47,16 +47,31 @@ function resolveText(m: RawBroadcast): string | null {
   return typeof m.text === 'string' ? m.text : null;
 }
 
+/**
+ * Rótulo amigável para uma MÍDIA. O conteúdo decifrado de uma mensagem de mídia é o
+ * ENVELOPE de metadados (JSON: legenda + geotag + chave da imagem), não uma frase —
+ * exibir o JSON cru é o bug. Mostra só a legenda.
+ */
+function mediaLabel(envelopeJson: string): string {
+  try {
+    const meta = JSON.parse(envelopeJson) as { caption?: string };
+    return meta.caption ? `📷 Foto: ${meta.caption}` : '📷 Foto';
+  } catch {
+    return '📷 Foto';
+  }
+}
+
 function handleIncoming(topic: string, payload: Uint8Array): void {
   if (!broadcastOperationId || topic !== operationBroadcastTopic(broadcastOperationId)) return;
   try {
     const m = JSON.parse(Buffer.from(payload).toString()) as RawBroadcast;
-    const text = resolveText(m);
-    if (text === null) return; // cifrado e não decifrável por este agente — ignora
+    const decrypted = resolveText(m);
+    if (decrypted === null) return; // cifrado e não decifrável por este agente — ignora
     const message: BroadcastMessage = {
       senderId: m.senderId,
       type: m.type,
-      text,
+      // Mídia: o decifrado é o envelope (JSON) — vira rótulo, nunca o JSON cru.
+      text: m.type === 'media' ? mediaLabel(decrypted) : decrypted,
       capturedAt: m.capturedAt,
     };
     for (const listener of broadcastListeners) listener(message);
@@ -87,17 +102,21 @@ export function subscribeBroadcast(
 }
 
 /**
- * Conecta ao barramento MQTT (sobre WebSockets) usando o JWT como credencial.
- * Em produção, o broker (EMQX/Mosquitto) valida o token e aplica as ACLs de
- * tópico: o agente só publica no próprio canal.
+ * Conecta ao barramento MQTT (sobre WebSockets). Duas estratégias de credencial,
+ * escolhidas por ambiente (12-factor):
+ * - **HiveMQ Cloud (MVP):** credencial estática (`EXPO_PUBLIC_MQTT_USERNAME/PASSWORD`).
+ *   O HiveMQ free não valida JWT; a fronteira multitenant é a ponte da API
+ *   (`parseAgentTopic` + `assertOperationScope`), não o broker — ver mqtt-multitenant.md.
+ * - **On-prem (EMQX/Mosquitto):** sem credencial estática, apresenta `jwt` + o token
+ *   de login; o broker valida o JWT e aplica as ACLs de tópico por canal.
  */
 export function connectMqtt(token: string, agentId: string): MqttClient {
   if (client?.connected) return client;
 
   client = mqtt.connect(config.mqttWsUrl, {
     clientId: `agente_${agentId}_${Date.now()}`,
-    username: 'jwt',
-    password: token,
+    username: config.mqttUsername || 'jwt',
+    password: config.mqttUsername ? config.mqttPassword : token,
     reconnectPeriod: 3000,
     clean: true,
   });
