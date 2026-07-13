@@ -49,6 +49,7 @@ export interface TacticalMessage {
   senderId: string;
   type: string; // 'text' | 'media' | 'broadcast'
   text?: string;
+  ciphertext?: string; // envelope E2EE (text/broadcast); decifrado no cliente
   mediaRef?: string;
   lat?: number; // geotag da mídia (onde a foto foi capturada)
   lng?: number;

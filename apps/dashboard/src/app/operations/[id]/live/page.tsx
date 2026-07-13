@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import {
@@ -13,7 +13,7 @@ import {
 } from '@/lib/api';
 import { getToken, getUser } from '@/lib/auth';
 import { getSecretKey } from '@/lib/e2ee';
-import { sealMessage } from '@cerberus/shared';
+import { openMessage, sealMessage } from '@cerberus/shared';
 import { subscribeToOperation, type LivePosition } from '@/lib/mqtt';
 import { LiveMap, type AgentPoint, type PlottedRoute } from '@/components/LiveMap';
 import { Toggle } from '@/components/Toggle';
@@ -29,6 +29,15 @@ import { buildRoutes, assignAgentColors, type Route } from '@/lib/routes';
 /** Histórico buscado para montar as rotas por agente. */
 const HISTORY_LIMIT = 5000;
 const HOUR_MS = 60 * 60 * 1000;
+
+/** Mensagem de texto/broadcast já decifrada para exibição (`text: null` = falha). */
+interface DecryptedMessage {
+  id: string;
+  senderId: string;
+  type: string;
+  text: string | null;
+  capturedAt: string;
+}
 
 /** Data/hora local (America/Sao_Paulo) — exibição das rotas. Dado permanece UTC. */
 function fmtDateTime(ms: number): string {
@@ -88,6 +97,9 @@ export default function LiveOperationPage() {
   const [mediaMsgs, setMediaMsgs] = useState<TacticalMessage[]>([]);
   const [lightbox, setLightbox] = useState<TacticalMessage | null>(null);
 
+  // Histórico de texto/broadcast (E2EE) decifrado localmente para exibição.
+  const [chatMsgs, setChatMsgs] = useState<DecryptedMessage[]>([]);
+
   // Geofencing.
   const [geofences, setGeofences] = useState<Geofence[]>([]);
   const [alerts, setAlerts] = useState<GeofenceAlert[]>([]);
@@ -118,6 +130,35 @@ export default function LiveOperationPage() {
       /* preferência corrompida — ignora */
     }
   }, [colorsKey]);
+
+  // Busca o histórico e decifra texto/broadcast localmente (E2EE). A mídia sai do
+  // mesmo fetch. Reusado pelo polling e logo após enviar um broadcast.
+  const refreshMessages = useCallback(() => {
+    api
+      .messages(operationId)
+      .then((msgs) => {
+        setMediaMsgs(msgs.filter((m) => m.type === 'media' && !!m.mediaRef));
+        const user = getUser();
+        const secretKey = user ? getSecretKey(user.id) : null;
+        const myId = user?.id ?? '';
+        setChatMsgs(
+          msgs
+            .filter((m) => m.type === 'text' || m.type === 'broadcast')
+            .map((m) => ({
+              id: m.id,
+              senderId: m.senderId,
+              type: m.type,
+              // Envelope E2EE → decifra com a chave local; senão cai no texto legado.
+              text:
+                m.ciphertext && secretKey
+                  ? openMessage(m.ciphertext, myId, secretKey)
+                  : (m.text ?? null),
+              capturedAt: m.capturedAt,
+            })),
+        );
+      })
+      .catch(() => {});
+  }, [operationId]);
 
   // Snapshot inicial (última posição conhecida) via REST + stream ao vivo via MQTT.
   useEffect(() => {
@@ -187,13 +228,10 @@ export default function LiveOperationPage() {
         /* sem histórico ainda */
       });
 
-    // Overlays (mídia + geofences + alertas): polling leve a cada 15s (o painel
-    // não assina o canal de broadcast).
+    // Overlays (mensagens/mídia + geofences + alertas): polling leve a cada 15s (o
+    // painel não assina o canal de broadcast). `refreshMessages` decifra o histórico.
     const loadOverlays = () => {
-      api
-        .messages(operationId)
-        .then((msgs) => setMediaMsgs(msgs.filter((m) => m.type === 'media' && !!m.mediaRef)))
-        .catch(() => {});
+      refreshMessages();
       api
         .geofences(operationId)
         .then(setGeofences)
@@ -229,7 +267,7 @@ export default function LiveOperationPage() {
       clearInterval(overlayTimer);
       unsubscribe();
     };
-  }, [operationId, router]);
+  }, [operationId, router, refreshMessages]);
 
   const agentList = useMemo(() => Object.values(agents), [agents]);
 
@@ -416,6 +454,7 @@ export default function LiveOperationPage() {
       await api.broadcast(operationId, ciphertext);
       setBroadcastText('');
       setBroadcastMsg('Broadcast cifrado enviado ✓');
+      refreshMessages(); // reflete no histórico imediatamente (sem esperar o poll)
     } catch (e) {
       setBroadcastMsg(e instanceof Error ? e.message : 'Falha ao enviar');
     } finally {
@@ -585,6 +624,68 @@ export default function LiveOperationPage() {
               </div>
             )}
           </div>
+
+          {chatMsgs.length > 0 && (
+            <div className="card" style={{ padding: 12, marginBottom: 16 }}>
+              <strong style={{ fontSize: 14 }}>Mensagens (E2EE) ({chatMsgs.length})</strong>
+              <p className="muted" style={{ fontSize: 12, margin: '4px 0 8px' }}>
+                Decifradas neste dispositivo — o servidor só vê texto cifrado.
+              </p>
+              <div style={{ maxHeight: 260, overflowY: 'auto', display: 'grid', gap: 6 }}>
+                {chatMsgs.map((m) => {
+                  const isBroadcast = m.type === 'broadcast';
+                  const who = isBroadcast ? 'CENTRAL' : m.senderId;
+                  const when = new Date(m.capturedAt).toLocaleString('pt-BR', {
+                    day: '2-digit',
+                    month: '2-digit',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  });
+                  return (
+                    <div
+                      key={m.id}
+                      style={{
+                        background: 'var(--panel-2, #1c2733)',
+                        border: `1px solid ${isBroadcast ? 'var(--accent, #c1121f)' : 'var(--border)'}`,
+                        borderRadius: 8,
+                        padding: '6px 8px',
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          gap: 8,
+                          fontSize: 11,
+                          color: 'var(--muted, #8b9aa8)',
+                          marginBottom: 2,
+                        }}
+                      >
+                        <span
+                          style={{
+                            fontWeight: 700,
+                            color: isBroadcast ? 'var(--accent, #c1121f)' : 'var(--text, #e6edf3)',
+                          }}
+                        >
+                          {who}
+                        </span>
+                        <span>{when}</span>
+                      </div>
+                      <div
+                        style={{ fontSize: 13, color: 'var(--text, #e6edf3)', lineHeight: 1.35 }}
+                      >
+                        {m.text ?? (
+                          <span className="muted" style={{ fontStyle: 'italic' }}>
+                            🔒 não foi possível decifrar
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           {mediaMsgs.length > 0 && (
             <div className="card" style={{ padding: 12, marginBottom: 16 }}>
