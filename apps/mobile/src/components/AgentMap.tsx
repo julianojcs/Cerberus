@@ -50,18 +50,22 @@ const HTML = `<!DOCTYPE html>
     maxNativeZoom: 19,
   }).addTo(map);
   var line = L.polyline([], { color: '#c1121f', weight: 4, opacity: 0.85 }).addTo(map);
-  var marker = null;
   var meMarker = null;
   var fitted = false;
-  // Centraliza na posição do agente (sob demanda), mesmo sem transmitir. Mostra um
-  // marcador azul "eu" — distinto do marcador vermelho da trilha transmitida.
-  window.__focus = function (lat, lng) {
-    if (typeof lat !== 'number' || typeof lng !== 'number') return;
+  // Marcador ÚNICO "você está aqui" (azul), distinto da trilha vermelha. Segue a
+  // posição ao vivo (__update) e também é reposicionado ao centralizar (__focus) —
+  // um só ponto, sem duplicar/"pular" entre um marcador de trilha e outro de foco.
+  function setMe(lat, lng) {
     if (!meMarker) {
       meMarker = L.circleMarker([lat, lng], { radius: 8, color: '#fff', weight: 2, fillColor: '#2f81f7', fillOpacity: 1 }).addTo(map);
     } else {
       meMarker.setLatLng([lat, lng]);
     }
+  }
+  // Centraliza na posição do agente (sob demanda), mesmo sem transmitir.
+  window.__focus = function (lat, lng) {
+    if (typeof lat !== 'number' || typeof lng !== 'number') return;
+    setMe(lat, lng);
     map.setView([lat, lng], Math.max(map.getZoom(), 17));
     fitted = true;
   };
@@ -71,11 +75,8 @@ const HTML = `<!DOCTYPE html>
     // O marcador (posição atual) fica sempre visível; a rota liga/desliga.
     line.setLatLngs(showRoute ? latlngs : []);
     var last = latlngs[latlngs.length - 1];
-    if (!marker) {
-      marker = L.circleMarker(last, { radius: 8, color: '#fff', weight: 2, fillColor: '#c1121f', fillOpacity: 1 }).addTo(map);
-    } else {
-      marker.setLatLng(last);
-    }
+    // Marcador único "você está aqui" na cabeça da trilha, ao vivo.
+    setMe(last[0], last[1]);
     if (!fitted) { map.setView(last, 18); fitted = true; }
     else { map.panTo(last); }
     // Modo bússola: alinha o topo do mapa à direção de deslocamento (heading do GPS).
