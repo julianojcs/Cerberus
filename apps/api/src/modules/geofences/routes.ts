@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { Types } from 'mongoose';
 import { Role } from '@cerberus/shared';
 import { Alert, Geofence, GeofenceMembership, Position } from '../../models/index.js';
-import { detectGeofenceEvents } from './detect.js';
+import { detectGeofenceEvents, haversineMeters } from './detect.js';
 import { assertOperationScope } from '../scope.js';
 
 // Cor = token de familia da paleta Tailwind (o dashboard restringe as opcoes).
@@ -51,6 +51,36 @@ export async function geofenceRoutes(app: FastifyInstance): Promise<void> {
         radiusMeters: body.data.radiusMeters,
         color: body.data.color ?? 'green',
       });
+
+      // Semeia o pertencimento dos agentes que JÁ estão dentro da zona no momento da
+      // criação (inside=true, SEM alerta). Assim, criar uma zona em volta de um agente
+      // que já está lá NÃO dispara um "enter" espúrio na próxima posição — ele não
+      // entrou, já estava dentro. Só cruzamentos POSTERIORES geram enter/exit.
+      const gid = String(g._id);
+      const center = { lng: body.data.lng, lat: body.data.lat };
+      const latest = await Position.aggregate([
+        { $match: { operationId: id } },
+        { $sort: { capturedAt: -1 } },
+        { $group: { _id: '$agentId', doc: { $first: '$$ROOT' } } },
+        { $replaceRoot: { newRoot: '$doc' } },
+      ]);
+      const seeds = latest
+        .map((p) => {
+          const coords = (p.location as { coordinates?: number[] } | undefined)?.coordinates ?? [];
+          const [lng, lat] = coords;
+          if (lng == null || lat == null) return null;
+          if (haversineMeters(center, { lng, lat }) > body.data.radiusMeters) return null;
+          return {
+            operationId: id,
+            agentId: p.agentId as string,
+            geofenceId: gid,
+            inside: true,
+            updatedAt: new Date(),
+          };
+        })
+        .filter((s): s is NonNullable<typeof s> => s !== null);
+      if (seeds.length > 0) await GeofenceMembership.insertMany(seeds);
+
       return reply.code(201).send(serializeGeofence(g.toObject()));
     },
   );
@@ -112,9 +142,11 @@ export async function geofenceRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
-  // Recalcula os alertas reprocessando TODO o histórico de posições contra as
-  // zonas ativas (replay). Útil após criar/mover zonas: gera os alertas de
-  // entrada/saída que ocorreram no passado. Admin, escopado.
+  // Recalcula os alertas reprocessando o histórico de posições contra as zonas
+  // ativas (replay). Uma zona só "existe" a partir do seu createdAt: posições
+  // ANTERIORES apenas firmam a linha de base de pertencimento (sem alerta), então um
+  // agente que já estava dentro quando a zona foi criada NÃO gera "enter" espúrio;
+  // só cruzamentos a partir do createdAt viram enter/exit. Admin, escopado.
   app.post(
     '/operations/:id/geofences/recompute',
     { onRequest: [app.requireRole(Role.ADMIN)] },
@@ -133,12 +165,31 @@ export async function geofenceRoutes(app: FastifyInstance): Promise<void> {
       const stateByAgent: Record<string, Record<string, boolean>> = {};
       const alerts: Record<string, unknown>[] = [];
 
+      // Instante de criação de cada zona (ela só "existe" a partir daí).
+      const createdMs = new Map<string, number>();
+      for (const g of geofences) createdMs.set(String(g._id), g.createdAt ? +new Date(g.createdAt) : 0);
+
       for (const p of positions) {
         const coords = (p.location as { coordinates?: number[] } | undefined)?.coordinates;
         const [lng, lat] = coords ?? [];
         if (lng == null || lat == null) continue;
+        const capMs = +new Date(p.capturedAt);
         const insideBefore = (stateByAgent[p.agentId] ??= {});
-        const events = detectGeofenceEvents({ lng, lat }, insideBefore, geofences);
+
+        // Zonas ainda não criadas nesta posição: só firmam a linha de base (sem alerta),
+        // para "já estar dentro na criação" não virar um "enter" espúrio depois.
+        for (const g of geofences) {
+          if (capMs >= (createdMs.get(String(g._id)) ?? 0)) continue;
+          const gc = (g.center as { coordinates?: number[] } | undefined)?.coordinates ?? [];
+          const [clng, clat] = gc;
+          if (clng == null || clat == null) continue;
+          insideBefore[String(g._id)] =
+            haversineMeters({ lng, lat }, { lng: clng, lat: clat }) <= g.radiusMeters;
+        }
+
+        // Zonas já existentes nesta posição: detecção normal (gera enter/exit).
+        const born = geofences.filter((g) => capMs >= (createdMs.get(String(g._id)) ?? 0));
+        const events = detectGeofenceEvents({ lng, lat }, insideBefore, born);
         for (const ev of events) {
           insideBefore[ev.geofenceId] = ev.inside;
           alerts.push({

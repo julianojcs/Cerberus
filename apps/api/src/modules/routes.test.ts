@@ -984,30 +984,30 @@ describe('geofencing + alertas', () => {
     expect(res.statusCode).toBe(403);
   });
 
-  it('recalcula alertas do histórico (replay) → enter + exit', async () => {
+  it('replay é ciente do createdAt: cruzamento após criação gera enter+exit; já-dentro-na-criação não gera enter', async () => {
     const { Geofence, Position } = await import('../models/index.js');
-    await Geofence.create({
+    const gf = await Geofence.create({
       operationId,
       name: 'ZonaReplay',
       center: { type: 'Point', coordinates: [-43.9, -19.9] },
       radiusMeters: 150,
       color: 'blue',
     });
-    // Dentro → depois longe (fora): deve gerar enter e exit para AG-REPLAY.
-    await Position.create({
-      operationId,
-      agentId: 'AG-REPLAY',
-      location: { type: 'Point', coordinates: [-43.9, -19.9] },
-      capturedAt: new Date('2026-07-11T10:00:00Z'),
-      receivedAt: new Date(),
-    });
-    await Position.create({
-      operationId,
-      agentId: 'AG-REPLAY',
-      location: { type: 'Point', coordinates: [-43.8, -19.8] },
-      capturedAt: new Date('2026-07-11T10:01:00Z'),
-      receivedAt: new Date(),
-    });
+    const created = gf.createdAt as Date;
+    const inside = { type: 'Point' as const, coordinates: [-43.9, -19.9] };
+    const outside = { type: 'Point' as const, coordinates: [-43.8, -19.8] };
+    const at = (deltaMs: number) => new Date(created.getTime() + deltaMs);
+
+    // AG-REPLAY: cruza PARA DENTRO e depois PARA FORA, ambos APÓS a criação da zona
+    // → deve gerar enter + exit.
+    await Position.create({ operationId, agentId: 'AG-REPLAY', location: inside, capturedAt: at(60_000), receivedAt: new Date() });
+    await Position.create({ operationId, agentId: 'AG-REPLAY', location: outside, capturedAt: at(120_000), receivedAt: new Date() });
+
+    // AG-INSIDE: já estava DENTRO quando a zona foi criada (posição ANTES do createdAt)
+    // → não deve gerar enter; ao sair depois, gera só exit.
+    await Position.create({ operationId, agentId: 'AG-INSIDE', location: inside, capturedAt: at(-60_000), receivedAt: new Date() });
+    await Position.create({ operationId, agentId: 'AG-INSIDE', location: inside, capturedAt: at(60_000), receivedAt: new Date() });
+    await Position.create({ operationId, agentId: 'AG-INSIDE', location: outside, capturedAt: at(120_000), receivedAt: new Date() });
 
     const res = await app.inject({
       method: 'POST',
@@ -1015,17 +1015,22 @@ describe('geofencing + alertas', () => {
       headers: { authorization: `Bearer ${token}` },
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json().alertsCreated).toBeGreaterThanOrEqual(2);
 
     const alerts = await app.inject({
       method: 'GET',
       url: `/operations/${operationId}/alerts`,
       headers: { authorization: `Bearer ${token}` },
     });
-    const mine = (alerts.json() as Array<{ type: string; agentId: string }>)
-      .filter((a) => a.agentId === 'AG-REPLAY')
-      .map((a) => a.type);
-    expect(mine).toEqual(expect.arrayContaining(['enter', 'exit']));
+    const typesOf = (agentId: string) =>
+      (alerts.json() as Array<{ type: string; agentId: string }>)
+        .filter((a) => a.agentId === agentId)
+        .map((a) => a.type);
+
+    // Cruzou após a criação → enter + exit.
+    expect(typesOf('AG-REPLAY')).toEqual(expect.arrayContaining(['enter', 'exit']));
+    // Já estava dentro na criação → sem "enter" espúrio; só o exit ao sair.
+    expect(typesOf('AG-INSIDE')).toContain('exit');
+    expect(typesOf('AG-INSIDE')).not.toContain('enter');
   });
 
   it('agente (não-admin) não recalcula alertas (403)', async () => {
