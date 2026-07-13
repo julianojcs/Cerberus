@@ -14,6 +14,15 @@ const sendMessageSchema = z.object({
 });
 
 /**
+ * Broadcast E2EE: o corpo carrega apenas o `ciphertext` (envelope base64 cifrado
+ * no dashboard). O servidor nunca vê o texto em claro. O envelope cresce com o nº
+ * de destinatários — daí o limite folgado.
+ */
+const broadcastSchema = z.object({
+  ciphertext: z.string().min(1).max(500_000),
+});
+
+/**
  * Mensagens táticas de texto (MVP). O histórico é escopado por operação; o envio
  * persiste a mensagem e faz broadcast em tempo real aos agentes/dashboard via a
  * ponte MQTT (quando ativa). E2EE (ciphertext) entra na fase dedicada.
@@ -79,9 +88,10 @@ export async function messageRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
-  // Broadcast da CENTRAL (admin) para todos os agentes da operação. Diferente do
-  // chat tático: é uma diretiva de comando. Persiste como mensagem tipo BROADCAST
-  // e publica no canal `operacao/{opId}/broadcast`, que os agentes assinam.
+  // Broadcast E2EE da CENTRAL (admin) para todos os agentes da operação. Diferente
+  // do chat tático: é uma diretiva de comando. O corpo já vem CIFRADO (envelope
+  // por destinatário, montado no dashboard) — o servidor persiste/publica apenas o
+  // `ciphertext` e nunca vê o texto. Publica em `operacao/{opId}/broadcast`.
   app.post(
     '/operations/:id/broadcast',
     { onRequest: [app.requireRole(Role.ADMIN)] },
@@ -89,7 +99,7 @@ export async function messageRoutes(app: FastifyInstance): Promise<void> {
       const { id } = request.params as { id: string };
       if (!assertOperationScope(request, reply, id)) return;
 
-      const body = sendMessageSchema.safeParse(request.body);
+      const body = broadcastSchema.safeParse(request.body);
       if (!body.success) return reply.code(400).send({ error: 'Dados inválidos' });
 
       const claims = request.user as AuthClaims;
@@ -100,7 +110,7 @@ export async function messageRoutes(app: FastifyInstance): Promise<void> {
         operationId: id,
         senderId,
         type: MessageType.BROADCAST,
-        text: body.data.text,
+        ciphertext: body.data.ciphertext,
         capturedAt: now,
         receivedAt: now,
       });
@@ -111,7 +121,7 @@ export async function messageRoutes(app: FastifyInstance): Promise<void> {
           JSON.stringify({
             senderId,
             type: MessageType.BROADCAST,
-            text: body.data.text,
+            ciphertext: body.data.ciphertext,
             capturedAt: now.toISOString(),
           }),
           { qos: 1 },
@@ -129,6 +139,7 @@ function serialize(m: {
   senderId: string;
   type: string;
   text?: string | null;
+  ciphertext?: string | null;
   mediaRef?: string | null;
   location?: { coordinates?: number[] } | null;
   capturedAt?: Date;
@@ -140,6 +151,8 @@ function serialize(m: {
     senderId: m.senderId,
     type: m.type,
     text: m.text ?? undefined,
+    // Envelope E2EE (broadcast). Sem ele, o histórico cifrado seria indecifrável.
+    ciphertext: m.ciphertext ?? undefined,
     mediaRef: m.mediaRef ?? undefined,
     lng: coords?.[0],
     lat: coords?.[1],

@@ -11,7 +11,9 @@ import {
   type GeofenceAlert,
   type Settings,
 } from '@/lib/api';
-import { getToken } from '@/lib/auth';
+import { getToken, getUser } from '@/lib/auth';
+import { getSecretKey } from '@/lib/e2ee';
+import { sealMessage } from '@cerberus/shared';
 import { subscribeToOperation, type LivePosition } from '@/lib/mqtt';
 import { LiveMap, type AgentPoint, type PlottedRoute } from '@/components/LiveMap';
 import { Toggle } from '@/components/Toggle';
@@ -396,9 +398,24 @@ export default function LiveOperationPage() {
     setSending(true);
     setBroadcastMsg(null);
     try {
-      await api.broadcast(operationId, text);
+      // E2EE: cifra o broadcast localmente (envelope por destinatário) usando o
+      // diretório de chaves da operação. O servidor só recebe o ciphertext.
+      const user = getUser();
+      const secretKey = user ? getSecretKey(user.id) : null;
+      if (!user || !secretKey) {
+        setBroadcastMsg('Chave E2EE ausente — refaça o login para provisioná-la.');
+        return;
+      }
+      const directory = await api.operationKeys(operationId);
+      if (!directory.some((e) => e.role === 'agente')) {
+        setBroadcastMsg('Nenhum agente com chave E2EE registrada ainda.');
+        return;
+      }
+      const recipients = directory.map((e) => ({ id: e.id, publicKey: e.publicKey }));
+      const ciphertext = sealMessage(text, secretKey, recipients);
+      await api.broadcast(operationId, ciphertext);
       setBroadcastText('');
-      setBroadcastMsg('Broadcast enviado ✓');
+      setBroadcastMsg('Broadcast cifrado enviado ✓');
     } catch (e) {
       setBroadcastMsg(e instanceof Error ? e.message : 'Falha ao enviar');
     } finally {
