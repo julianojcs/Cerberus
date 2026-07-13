@@ -3,6 +3,7 @@ import { MongoMemoryServer } from 'mongodb-memory-server';
 import bcrypt from 'bcryptjs';
 import FormData from 'form-data';
 import type { FastifyInstance } from 'fastify';
+import { generateKeyPair } from '@cerberus/shared';
 
 // PNG 1x1 transparente (fixture binária mínima para os testes de mídia).
 const PNG = Buffer.from(
@@ -366,6 +367,94 @@ describe('provisionamento de usuários (admin)', () => {
       headers: { authorization: `Bearer ${token}` },
     });
     expect(get.statusCode).toBe(404);
+  });
+});
+
+describe('diretório de chaves E2EE', () => {
+  const adminKeys = generateKeyPair();
+  const agentKeys = generateKeyPair();
+
+  it('registra a chave pública do admin (PUT /auth/public-key) → 200', async () => {
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/auth/public-key',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { publicKey: adminKeys.publicKey },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().publicKey).toBe(adminKeys.publicKey);
+  });
+
+  it('registra a chave pública do agente', async () => {
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/auth/public-key',
+      headers: { authorization: `Bearer ${agentToken}` },
+      payload: { publicKey: agentKeys.publicKey },
+    });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('rejeita chave pública malformada (400)', async () => {
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/auth/public-key',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { publicKey: 'nao-e-base64-de-32-bytes' },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('exige autenticação para registrar (401)', async () => {
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/auth/public-key',
+      payload: { publicKey: adminKeys.publicKey },
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('diretório lista as chaves da operação, com id = agentId para o agente', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/operations/${operationId}/keys`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const entries = res.json() as Array<{ id: string; role: string; publicKey: string }>;
+    const agent = entries.find((e) => e.id === 'AG-0456');
+    expect(agent?.publicKey).toBe(agentKeys.publicKey);
+    expect(agent?.role).toBe('agente');
+    // o admin aparece com id = userId (sem agentId)
+    expect(entries.some((e) => e.role === 'admin' && e.publicKey === adminKeys.publicKey)).toBe(
+      true,
+    );
+  });
+
+  it('agente também lê o diretório da própria operação (futuro agente→central)', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/operations/${operationId}/keys`,
+      headers: { authorization: `Bearer ${agentToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('bloqueia o diretório fora do escopo (403)', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/operations/000000000000000000000000/keys',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('exige autenticação no diretório (401)', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/operations/${operationId}/keys`,
+    });
+    expect(res.statusCode).toBe(401);
   });
 });
 

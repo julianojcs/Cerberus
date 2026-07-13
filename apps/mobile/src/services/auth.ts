@@ -1,5 +1,6 @@
 import * as SecureStore from 'expo-secure-store';
 import { config } from '../config';
+import { provisionKeys } from './keys';
 
 const TOKEN_KEY = 'cerberus_token';
 const SESSION_KEY = 'cerberus_session';
@@ -46,6 +47,13 @@ export async function login(username: string, password: string): Promise<Session
 
   await SecureStore.setItemAsync(TOKEN_KEY, data.token);
   await SecureStore.setItemAsync(SESSION_KEY, JSON.stringify(session));
+
+  // Provisiona a chave E2EE do agente (gera + registra a pública). Não bloqueia o
+  // login se falhar — o app re-tenta no próximo login e a decifra tolera ausência.
+  await provisionKeys({ userId: session.userId, token: session.token }).catch((err) =>
+    console.warn('[e2ee] falha ao provisionar chave:', err?.message ?? err),
+  );
+
   return session;
 }
 

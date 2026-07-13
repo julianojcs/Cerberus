@@ -1,6 +1,12 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { OperationStatus, OperationType, Role, type AuthClaims } from '@cerberus/shared';
+import {
+  OperationStatus,
+  OperationType,
+  Role,
+  type AuthClaims,
+  type KeyDirectoryEntry,
+} from '@cerberus/shared';
 import { Operation, User } from '../../models/index.js';
 import { assertOperationScope } from '../scope.js';
 
@@ -106,6 +112,18 @@ export async function operationRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
+  // Diretório de chaves públicas da operação (autenticado + escopo). Alimenta o
+  // envelope E2EE: a central cifra a `publicKey` de cada agente. Só entram membros
+  // que já registraram sua chave; quem não registrou não recebe (nem decifra).
+  app.get('/operations/:id/keys', { onRequest: [app.authenticate] }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    if (!assertOperationScope(request, reply, id)) return;
+    const users = await User.find({ operationIds: id, publicKey: { $ne: null } }).lean();
+    return users
+      .filter((u) => typeof u.publicKey === 'string' && u.publicKey.length > 0)
+      .map(serializeKey);
+  });
+
   // Remove um usuário do escopo da operação (admin + escopo).
   app.delete(
     '/operations/:id/members/:userId',
@@ -147,5 +165,22 @@ function serializeMember(u: {
     name: u.name,
     role: u.role,
     agentId: u.agentId ?? undefined,
+  };
+}
+
+/** Entrada do diretório de chaves. `id` = identificador de destinatário no envelope. */
+function serializeKey(u: {
+  _id: unknown;
+  role: string;
+  agentId?: string | null;
+  publicKey?: string | null;
+}): KeyDirectoryEntry {
+  const userId = String(u._id);
+  return {
+    id: u.agentId ?? userId,
+    userId,
+    role: u.role as Role,
+    agentId: u.agentId ?? undefined,
+    publicKey: u.publicKey as string,
   };
 }

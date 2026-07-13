@@ -5,3 +5,4 @@
 export * from './constants.js';
 export * from './topics.js';
 export * from './schemas.js';
+export * from './e2ee.js';

@@ -1,6 +1,11 @@
 import type { FastifyInstance } from 'fastify';
 import bcrypt from 'bcryptjs';
-import { loginRequestSchema, Role, type AuthClaims } from '@cerberus/shared';
+import {
+  loginRequestSchema,
+  publicKeyRegistrationSchema,
+  Role,
+  type AuthClaims,
+} from '@cerberus/shared';
 import { User } from '../../models/index.js';
 
 /**
@@ -49,6 +54,24 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   /** Retorna o perfil do portador do token (útil para o dashboard/app). */
   app.get('/auth/me', { onRequest: [app.authenticate] }, async (request) => {
     return request.user;
+  });
+
+  /**
+   * Registra/atualiza a chave pública X25519 do portador (E2EE). A chave privada
+   * nunca é enviada — fica só no dispositivo (SecureStore) ou navegador. O cliente
+   * chama isto no primeiro login/abertura, após gerar o par localmente.
+   */
+  app.put('/auth/public-key', { onRequest: [app.authenticate] }, async (request, reply) => {
+    const body = publicKeyRegistrationSchema.safeParse(request.body);
+    if (!body.success) return reply.code(400).send({ error: 'Chave pública inválida' });
+    const claims = request.user as AuthClaims;
+    const user = await User.findByIdAndUpdate(
+      claims.sub,
+      { $set: { publicKey: body.data.publicKey } },
+      { new: true },
+    );
+    if (!user) return reply.code(401).send({ error: 'Usuário não encontrado' });
+    return reply.send({ publicKey: user.publicKey });
   });
 
   /**
