@@ -58,10 +58,15 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
     await app.register(mqttPlugin);
   }
 
+  // Liveness/observabilidade: sempre 200 (o processo está de pé). O corpo reporta o
+  // estado dos componentes — o health check do Render/proxy usa o 200; o corpo ajuda
+  // a diagnosticar (mongo caído, barramento desconectado) sem derrubar o serviço.
   app.get('/health', async () => ({
     status: 'ok',
     service: 'cerberus-api',
     time: new Date().toISOString(),
+    mongo: app.mongoose?.connection?.readyState === 1 ? 'connected' : 'disconnected',
+    mqtt: app.mqtt?.connected ? 'connected' : 'disconnected',
   }));
 
   await app.register(authRoutes);
