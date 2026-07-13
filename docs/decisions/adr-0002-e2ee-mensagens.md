@@ -1,6 +1,7 @@
 # ADR 0002 — Criptografia ponta-a-ponta (E2EE) das mensagens táticas
 
-- **Status:** Aceita (Fase 5 — issue #64). Entrega faseada — ver "Escopo de entrega".
+- **Status:** Aceita e **entregue** (Fase 5 — issues #64 e #68). Todo o conteúdo de mensagens
+  (broadcast, texto agente↔central e mídia) é E2EE — ver "Escopo de entrega".
 - **Data:** 2026-07-13
 - **Regras relacionadas:** [mqtt-multitenant.md](../../.claude/rules/mqtt-multitenant.md),
   [timezone-dates.md](../../.claude/rules/timezone-dates.md)
@@ -99,14 +100,22 @@ não têm um remetente humano com chave. O consumidor decide por presença de ca
 presente → decifra; senão `text` → exibe como-está**. `openMessage` devolvendo `null` para não-
 envelopes garante que texto de sistema nunca é confundido com conteúdo cifrado.
 
-## Escopo de entrega (faseado dentro da Fase 5)
+## Escopo de entrega (Fase 5 — completa)
 
-- **Entregue (PR #65 fundação + PR #66 broadcast):** pares de chaves + diretório; **broadcast
-  central→agentes E2EE** (dashboard cifra pelo diretório; API persiste/publica só `ciphertext`;
-  `serialize()` devolve `ciphertext`; app decifra no serviço MQTT).
-- **Restante da Fase 5:** texto **agente→central** cifrado (`POST /messages`), **UI de recepção/
-  histórico cifrado no dashboard** (decifrar broadcast/texto), e **E2EE de mídia** (binário no
-  GridFS). Enquanto não entregue, `POST /messages` (texto) segue em claro.
+Entregue em fatias, todas mescladas na `main`:
+
+- **Fundação (PR #65):** pares de chaves X25519 + diretório de chaves (`User.publicKey`,
+  `PUT /auth/public-key`, `GET /operations/:id/keys`); provisionamento no login.
+- **Broadcast central→agentes (PR #66):** dashboard cifra pelo diretório; API persiste/publica só
+  `ciphertext`; `serialize()` devolve `ciphertext`; app decifra no serviço MQTT.
+- **Texto agente↔central + histórico no dashboard (PR #69):** `POST /messages` aceita/persiste/publica
+  só `ciphertext` (schema unificado com o broadcast); compositor de texto no app; painel
+  **"Mensagens (E2EE)"** no dashboard que decifra broadcast + texto (`myId = userId` do admin).
+- **Mídia (PR #70):** bytes da imagem cifrados (secretbox) + envelope de metadata (legenda + geotag +
+  chave da imagem); blob **opaco** no GridFS; dashboard decifra no navegador (`AuthImage`).
+
+Nada de conteúdo de mensagem trafega ou é persistido em claro. **Endurecimento** e **rotação de
+chave** ficam para o futuro (ver "Consequências").
 
 ## Referência de implementação (mapa técnico completo)
 
@@ -131,6 +140,8 @@ envelopes garante que texto de sistema nunca é confundido com conteúdo cifrado
 | `E2eeRecipient` | `{ id: string; publicKey: string }` | destinatário do envelope |
 | `sealMessage(txt, sk, recips)` | `(string, string, E2eeRecipient[]) => string` | cifra 1→N; devolve o envelope (string) |
 | `openMessage(ct, myId, sk)` | `(string, string, string) => string \| null` | decifra ou `null` (não-destinatário / chave errada / não-envelope) |
+| `encryptBytes(bytes)` | `(Uint8Array) => { cipher, key, nonce }` | cifra binário (mídia) com chave nova (secretbox); chave/nonce em base64 |
+| `decryptBytes(cipher, key, nonce)` | `(Uint8Array, string, string) => Uint8Array \| null` | decifra binário; `null` se a chave/nonce não bater |
 
 `KeyDirectoryEntry` (`{ id, userId, role, agentId?, publicKey }`) vive em
 `packages/shared/src/schemas.ts`, junto de `publicKeyRegistrationSchema`
@@ -143,6 +154,9 @@ envelopes garante que texto de sistema nunca é confundido com conteúdo cifrado
 | `PUT /auth/public-key` | autenticado | `{ publicKey }` → `{ publicKey }` | grava `User.publicKey` do portador |
 | `GET /operations/:id/keys` | autenticado + escopo | → `KeyDirectoryEntry[]` | só membros da operação com chave; `id = agentId ?? userId` |
 | `POST /operations/:id/broadcast` | `requireRole(ADMIN)` + escopo | `{ ciphertext }` (≤ 500 000 chars) → mensagem | persiste/publica **só** `ciphertext` (sem `text`); tipo `BROADCAST` |
+| `POST /operations/:id/messages` | autenticado + escopo | `{ ciphertext }` → mensagem | chat da operação (texto); mesmo canal/schema do broadcast; tipo `TEXT` |
+| `POST /operations/:id/media` | autenticado + escopo | multipart: campo `ciphertext` + `file` (blob opaco) | valida presença do envelope (sem checar tipo do blob); GridFS `octet-stream`; tipo `MEDIA` |
+| `GET /operations/:id/media/:fileId` | autenticado + escopo | → blob cifrado (`octet-stream`) | streaming do binário opaco; o cliente decifra |
 
 - `User.publicKey: { type: String }` em `apps/api/src/models/index.ts` (a `MessageModel` já tinha
   `ciphertext: String`, antes reservado).
@@ -153,6 +167,27 @@ envelopes garante que texto de sistema nunca é confundido com conteúdo cifrado
 - A ponte MQTT **não re-ingere** o broadcast: ela assina `operacao/+/agente/+/#` (canal do agente),
   e o broadcast sai em `operacao/{opId}/broadcast` — a persistência ocorre **só** na rota, sem
   duplicação.
+- `POST /messages` e `POST /broadcast` compartilham o `encryptedMessageSchema` (`{ ciphertext }`).
+
+### Mídia E2EE (envelope de metadata + blob opaco)
+
+A imagem não cabe no envelope (é grande). Então usa-se **duas camadas**:
+
+1. Cifra-se o **binário** com `encryptBytes(imagem)` → `{ cipher, key, nonce }`. O `cipher` vai ao
+   GridFS como blob **opaco** (`application/octet-stream`).
+2. Um **envelope normal** (`sealMessage`) embrulha um JSON de metadata por destinatário — a chave da
+   imagem viaja **dentro** dele, nunca em claro:
+
+   ```jsonc
+   { "caption": "...", "lat": -19.9, "lng": -43.9, "mime": "image/png", "k": "<key>", "n": "<nonce>" }
+   ```
+
+Fluxo: o app lê a imagem (`expo-file-system` base64 → `Uint8Array`), cifra, escreve o `cipher` num
+arquivo temporário e o envia no multipart junto do envelope (campo `ciphertext` **antes** do `file`,
+para estar em `file.fields`). O dashboard baixa o blob cifrado (`fetchAuthedBytes`), lê a metadata do
+envelope, `decryptBytes` → `Blob(mime)` → object URL (`AuthImage` com `mediaKey`); legenda/geotag/pinos
+saem da metadata decifrada. A `MessageModel` MEDIA guarda `mediaRef` (id no GridFS) + `ciphertext`
+(envelope), **sem** `text`/`location`.
 
 ### Cliente — dashboard
 
@@ -164,9 +199,11 @@ envelopes garante que texto de sistema nunca é confundido com conteúdo cifrado
 - `api.registerPublicKey(publicKey)` e `api.operationKeys(operationId)` em `lib/api.ts`.
 - `api.broadcast(operationId, ciphertext)` — assinatura mudou de `text` para `ciphertext`.
 - `sendBroadcast()` (`operations/[id]/live/page.tsx`): busca o diretório, monta `recipients` com
-  **todas** as entradas (inclui o próprio admin — habilita auto-decifra futura), mas **avisa e
-  aborta** se nenhuma entrada tem `role === 'agente'`; cifra com `sealMessage` e envia o
-  `ciphertext`.
+  **todas** as entradas (inclui o próprio admin — habilita auto-decifra), mas **avisa e aborta** se
+  nenhuma entrada tem `role === 'agente'`; cifra com `sealMessage` e envia o `ciphertext`.
+- **Histórico** (`refreshMessages`): decifra broadcast + texto (`openMessage`, `myId = userId`) para o
+  painel "Mensagens (E2EE)", e a metadata de cada mídia para miniaturas/lightbox/pinos. `fetchAuthedBytes`
+  + `AuthImage` (com `mediaKey`) decifram o blob no navegador.
 
 ### Cliente — app (agente)
 
@@ -179,13 +216,20 @@ envelopes garante que texto de sistema nunca é confundido com conteúdo cifrado
   listener)` recebe `identity = { myId, secretKey }`; `handleIncoming` chama `resolveText` →
   `openMessage` para `ciphertext` ou repassa `text` em claro. `OperationScreen` carrega a
   `secretKey` (assíncrono, SecureStore) antes de assinar, com `myId = agentId ?? userId`.
+- **Envio de texto** (`services/messages.ts` → `sendText`) e **de mídia** (`services/media.ts` →
+  `uploadPhoto`) cifram para o diretório via `fetchRecipients(session, operationId)` (centralizado em
+  `keys.ts`, reusado por ambos). O compositor de texto e o upload ficam no `OperationScreen`.
 
 ## Consequências
 
-- **Verificado por teste** (`apps/api/src/modules/routes.test.ts`): round-trip pelo endpoint prova
-  que o servidor **não persiste nem retorna texto em claro** (`JSON.stringify(history)` não contém a
-  diretiva) e que **só o destinatário** decifra; round-trip unitário dos helpers em
-  `packages/shared/src/e2ee.test.ts` (inclui "não vaza texto", "não-destinatário → null").
+- **Verificado por teste** (`apps/api/src/modules/routes.test.ts`): round-trips pelos endpoints de
+  broadcast, texto e mídia provam que o servidor **não persiste nem retorna conteúdo em claro**
+  (`JSON.stringify(history)` não contém a diretiva/legenda; o blob no GridFS ≠ imagem) e que **só o
+  destinatário** decifra; round-trip unitário dos helpers em `packages/shared/src/e2ee.test.ts`
+  (inclui "não vaza texto", "não-destinatário → null", cifra/decifra de bytes).
+- **Pendente de verificação manual:** o round-trip de cripto de **mídia** foi provado a nível de
+  API/unit (bytes idênticos), mas a captura na **câmera do aparelho** → exibição decifrada no
+  **navegador** ainda depende de teste do operador com app + dashboard reais.
 - **Invariante para código novo de mensagens:** cifrar **no cliente**; a API **nunca** grava texto
   em claro de conteúdo E2EE; `serialize()` **deve** propagar `ciphertext` (senão o histórico fica
   indecifrável); toda rota escopada mantém `assertOperationScope`.
