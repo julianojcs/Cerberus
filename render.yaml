@@ -22,7 +22,7 @@ services:
       # https://cerberus-dashboard.vercel.app
       - key: CORS_ORIGINS
         sync: false
-      # mongodb+srv://<user>:<pass>@<cluster>/cerberus_db (MongoDB Atlas M0)
+      # mongodb+srv://<user>:<pass>@<cluster>/cerberus (MongoDB Atlas M0)
       - key: MONGO_URI
         sync: false
       # mqtts://<cluster>.s1.eu.hivemq.cloud:8883 (HiveMQ Cloud, TLS)

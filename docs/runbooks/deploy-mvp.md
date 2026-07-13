@@ -30,7 +30,7 @@ A API é o único serviço que hospedamos aqui; banco e broker são serviços ge
    (qualquer IP) — aceitável porque o usuário/senha + TLS protegem a conexão. Endurecer com a
    lista de IPs de saída do Render é um follow‑up.
 4. **Connect** → *Drivers* → copie a URI: `mongodb+srv://cerberus_api:<senha>@<cluster>.mongodb.net/`.
-   Acrescente o nome do banco: `.../cerberus_db`. Essa é a `MONGO_URI`.
+   Acrescente o nome do banco: `.../cerberus`. Essa é a `MONGO_URI`.
 
 ## 2. HiveMQ Cloud (Serverless — grátis)
 
@@ -54,7 +54,7 @@ A API é o único serviço que hospedamos aqui; banco e broker são serviços ge
 
    | Variável | Valor |
    | --- | --- |
-   | `MONGO_URI` | a URI do passo 1 (com `/cerberus_db`) |
+   | `MONGO_URI` | a URI do passo 1 (com `/cerberus`) |
    | `MQTT_BROKER_URL` | `mqtts://<cluster>.hivemq.cloud:8883` |
    | `MQTT_USERNAME` / `MQTT_PASSWORD` | credenciais do passo 2 |
    | `CORS_ORIGINS` | URL do dashboard publicado (ex.: `https://cerberus.vercel.app`) |
@@ -78,7 +78,7 @@ A API é o único serviço que hospedamos aqui; banco e broker são serviços ge
 O seed cria admin, operação e um agente de teste. Rode da sua máquina apontando para o Atlas:
 
 ```bash
-MONGO_URI="mongodb+srv://cerberus_api:<senha>@<cluster>.mongodb.net/cerberus_db" \
+MONGO_URI="mongodb+srv://cerberus_api:<senha>@<cluster>.mongodb.net/cerberus" \
 JWT_SECRET="qualquer_coisa_para_o_seed" \
 MQTT_BROKER_URL="mqtt://localhost:1883" \
 npm run api:seed
@@ -88,12 +88,26 @@ npm run api:seed
 
 ## 5. Apontar dashboard e app para a API pública
 
-- **Dashboard** (quando publicado na Vercel): `NEXT_PUBLIC_API_URL=https://cerberus-api.onrender.com`
-  e `NEXT_PUBLIC_MQTT_WS_URL=wss://<cluster>.hivemq.cloud:8884/mqtt`.
+> **Credencial do broker (HiveMQ Cloud free):** o HiveMQ gratuito **não valida JWT** (só tier pago),
+> então o app e o dashboard apresentam a **credencial estática** `cerberus_api` (a mesma do passo 2)
+> via as variáveis `*_MQTT_USERNAME` / `*_MQTT_PASSWORD`. Sem elas, os clientes são recusados pelo
+> broker e o tempo real não sobe. No dev local (Mosquitto sem auth) e no on-prem (EMQX/Mosquitto com
+> ACL por JWT), **deixe essas duas vazias** — os clientes caem em `jwt` + token automaticamente. A
+> troca é só ambiente (12-factor); nenhum código muda.
+
+- **Dashboard** (quando publicado na Vercel):
+  ```
+  NEXT_PUBLIC_API_URL=https://cerberus-api.onrender.com
+  NEXT_PUBLIC_MQTT_WS_URL=wss://<cluster>.hivemq.cloud:8884/mqtt
+  NEXT_PUBLIC_MQTT_USERNAME=cerberus_api
+  NEXT_PUBLIC_MQTT_PASSWORD=<senha do passo 2>
+  ```
 - **App móvel** ([apps/mobile/.env](../../apps/mobile/.env), não versionado):
   ```
   EXPO_PUBLIC_API_URL=https://cerberus-api.onrender.com
   EXPO_PUBLIC_MQTT_WS_URL=wss://<cluster>.hivemq.cloud:8884/mqtt
+  EXPO_PUBLIC_MQTT_USERNAME=cerberus_api
+  EXPO_PUBLIC_MQTT_PASSWORD=<senha do passo 2>
   ```
   Rebuild/reabra o app. Com endpoints explícitos, o app **não** depende mais do IP do Metro/LAN —
   funciona sobre dados móveis.
