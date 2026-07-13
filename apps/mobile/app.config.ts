@@ -64,6 +64,9 @@ const config: ExpoConfig = {
         photosPermission: 'O Cerberus acessa fotos para enviar mídia tática da operação.',
       },
     ],
+    // Alinha o Kotlin do classpath (1.9.25) ao exigido pelo Compose do
+    // expo-modules-core — ver plugins/with-kotlin-classpath.js.
+    './plugins/with-kotlin-classpath',
   ],
   extra: {
     // Sem fallback: quando não definido, o app deriva o host do Metro
