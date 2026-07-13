@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import {
@@ -308,6 +308,31 @@ export default function LiveOperationPage() {
             activity: pos.activity,
           },
         }));
+        // Alimenta o histórico que deriva as ROTAS (buildRoutes) com a posição ao
+        // vivo — assim a rota CRESCE em tempo real (o id do segmento é estável, a
+        // seleção persiste). Sem isto, a rota só atualizava com F5 (re-fetch).
+        setRawPositions((prev) => {
+          // QoS 1 pode reentregar a mesma amostra — não duplica o ponto.
+          if (prev.some((p) => p.agentId === pos.agentId && p.capturedAt === pos.capturedAt)) {
+            return prev;
+          }
+          return [
+            ...prev,
+            {
+              id: `live-${pos.agentId}-${pos.capturedAt}`,
+              operationId,
+              agentId: pos.agentId,
+              lng: pos.lng,
+              lat: pos.lat,
+              accuracy: pos.accuracy ?? undefined,
+              speed: pos.speed ?? undefined,
+              heading: pos.heading ?? undefined,
+              battery: pos.battery ?? undefined,
+              activity: pos.activity,
+              capturedAt: pos.capturedAt,
+            },
+          ];
+        });
       },
       getToken() ?? undefined,
       setConnected,
@@ -375,6 +400,32 @@ export default function LiveOperationPage() {
     }
     return out;
   }, [routes, settings.minRoutePoints]);
+
+  // Auto-seleciona segmentos NOVOS de agentes JÁ exibidos. Quando o trajeto ao vivo
+  // quebra num gap (> maxGap), nasce um segmento com id próprio; sem isto ele ficaria
+  // fora da seleção e sumiria do mapa. Regras: (a) só age em agente com ≥1 rota já
+  // selecionada — não plota quem o operador não escolheu; (b) só em ids AINDA NÃO
+  // VISTOS — respeita rotas que o operador desmarcou individualmente.
+  const seenRouteIdsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const seen = seenRouteIdsRef.current;
+    const toAdd: string[] = [];
+    for (const rs of Object.values(visibleRoutes)) {
+      const agentShown = rs.some((r) => selectedRouteIds.has(r.id));
+      for (const r of rs) {
+        if (!seen.has(r.id) && agentShown) toAdd.push(r.id);
+      }
+    }
+    // Marca os segmentos atuais como vistos (uma vez), para não reprocessá-los.
+    for (const rs of Object.values(visibleRoutes)) for (const r of rs) seen.add(r.id);
+    if (toAdd.length > 0) {
+      setSelectedRouteIds((prev) => {
+        const next = new Set(prev);
+        for (const id of toAdd) next.add(id);
+        return next;
+      });
+    }
+  }, [visibleRoutes, selectedRouteIds]);
 
   // Rotas efetivamente plotadas: selecionadas E dentro do período. Com a opção
   // "ligar rotas", adiciona conectores tracejados entre rotas consecutivas.

@@ -30,24 +30,31 @@ export function AuthImage({
   const [url, setUrl] = useState<string | null>(null);
   const [error, setError] = useState(false);
 
+  // Chaves E2EE como PRIMITIVOS (strings), não o objeto `mediaKey`: o pai recria esse
+  // objeto a cada poll (15s), e depender dele re-baixaria/re-decifraria a mídia à toa
+  // (piscando no placeholder). Depender de k/n só re-executa se a mídia mudar de fato.
+  const k = mediaKey?.k ?? null;
+  const n = mediaKey?.n ?? null;
+
   useEffect(() => {
     let active = true;
     let objectUrl: string | null = null;
     setUrl(null);
     setError(false);
 
-    const load = mediaKey
-      ? fetchAuthedBytes(path).then((bytes) => {
-          const clear = decryptBytes(bytes, mediaKey.k, mediaKey.n);
-          if (!clear) throw new Error('Falha ao decifrar a mídia');
-          // Copia para um ArrayBuffer próprio (o Blob não aceita ArrayBufferLike genérico).
-          const buf = clear.buffer.slice(
-            clear.byteOffset,
-            clear.byteOffset + clear.byteLength,
-          ) as ArrayBuffer;
-          return URL.createObjectURL(new Blob([buf], { type: mime ?? 'image/jpeg' }));
-        })
-      : fetchBlobUrl(path);
+    const load =
+      k && n
+        ? fetchAuthedBytes(path).then((bytes) => {
+            const clear = decryptBytes(bytes, k, n);
+            if (!clear) throw new Error('Falha ao decifrar a mídia');
+            // Copia para um ArrayBuffer próprio (o Blob não aceita ArrayBufferLike genérico).
+            const buf = clear.buffer.slice(
+              clear.byteOffset,
+              clear.byteOffset + clear.byteLength,
+            ) as ArrayBuffer;
+            return URL.createObjectURL(new Blob([buf], { type: mime ?? 'image/jpeg' }));
+          })
+        : fetchBlobUrl(path);
 
     load
       .then((u) => {
@@ -63,7 +70,7 @@ export function AuthImage({
       active = false;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [path, mediaKey, mime]);
+  }, [path, k, n, mime]);
 
   if (error) {
     return (
