@@ -9,23 +9,20 @@ const historyQuerySchema = z.object({
   since: z.string().datetime().optional(),
 });
 
-const sendMessageSchema = z.object({
-  text: z.string().min(1).max(4096),
-});
-
 /**
- * Broadcast E2EE: o corpo carrega apenas o `ciphertext` (envelope base64 cifrado
- * no dashboard). O servidor nunca vê o texto em claro. O envelope cresce com o nº
- * de destinatários — daí o limite folgado.
+ * Mensagem E2EE: o corpo carrega apenas o `ciphertext` (envelope base64 cifrado no
+ * cliente). O servidor nunca vê o texto em claro. O envelope cresce com o nº de
+ * destinatários — daí o limite folgado. Vale para chat de texto e para broadcast.
  */
-const broadcastSchema = z.object({
+const encryptedMessageSchema = z.object({
   ciphertext: z.string().min(1).max(500_000),
 });
 
 /**
- * Mensagens táticas de texto (MVP). O histórico é escopado por operação; o envio
- * persiste a mensagem e faz broadcast em tempo real aos agentes/dashboard via a
- * ponte MQTT (quando ativa). E2EE (ciphertext) entra na fase dedicada.
+ * Mensagens táticas E2EE. O histórico é escopado por operação; o envio persiste o
+ * envelope cifrado e o repassa em tempo real aos agentes/dashboard via a ponte MQTT
+ * (quando ativa) no canal `operacao/{opId}/broadcast`. O texto em claro nunca sai
+ * do cliente — o servidor só manuseia `ciphertext`.
  */
 export async function messageRoutes(app: FastifyInstance): Promise<void> {
   // Histórico de mensagens da operação (escopado).
@@ -46,7 +43,9 @@ export async function messageRoutes(app: FastifyInstance): Promise<void> {
     return docs.map(serialize);
   });
 
-  // Envia uma mensagem de texto (escopado) — persiste e faz broadcast aos agentes.
+  // Envia uma mensagem de texto E2EE (escopado). O corpo já vem cifrado (envelope
+  // por destinatário, montado no cliente pelo diretório de chaves da operação); o
+  // servidor persiste/publica só o `ciphertext`. Publica em `operacao/{opId}/broadcast`.
   app.post(
     '/operations/:id/messages',
     { onRequest: [app.authenticate] },
@@ -54,7 +53,7 @@ export async function messageRoutes(app: FastifyInstance): Promise<void> {
       const { id } = request.params as { id: string };
       if (!assertOperationScope(request, reply, id)) return;
 
-      const body = sendMessageSchema.safeParse(request.body);
+      const body = encryptedMessageSchema.safeParse(request.body);
       if (!body.success) return reply.code(400).send({ error: 'Dados inválidos' });
 
       const claims = request.user as AuthClaims;
@@ -65,19 +64,19 @@ export async function messageRoutes(app: FastifyInstance): Promise<void> {
         operationId: id,
         senderId,
         type: MessageType.TEXT,
-        text: body.data.text,
+        ciphertext: body.data.ciphertext,
         capturedAt: now,
         receivedAt: now,
       });
 
-      // Broadcast em tempo real, se a ponte MQTT estiver ativa (desligada em testes).
+      // Repasse em tempo real, se a ponte MQTT estiver ativa (desligada em testes).
       if (app.mqtt?.connected) {
         app.mqtt.publish(
           operationBroadcastTopic(id),
           JSON.stringify({
             senderId,
             type: MessageType.TEXT,
-            text: body.data.text,
+            ciphertext: body.data.ciphertext,
             capturedAt: now.toISOString(),
           }),
           { qos: 1 },
@@ -99,7 +98,7 @@ export async function messageRoutes(app: FastifyInstance): Promise<void> {
       const { id } = request.params as { id: string };
       if (!assertOperationScope(request, reply, id)) return;
 
-      const body = broadcastSchema.safeParse(request.body);
+      const body = encryptedMessageSchema.safeParse(request.body);
       if (!body.success) return reply.code(400).send({ error: 'Dados inválidos' });
 
       const claims = request.user as AuthClaims;

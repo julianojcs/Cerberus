@@ -458,50 +458,65 @@ describe('diretório de chaves E2EE', () => {
   });
 });
 
-describe('mensagens táticas (texto)', () => {
-  it('admin envia mensagem (POST) e ela é persistida', async () => {
+describe('mensagens táticas E2EE (texto)', () => {
+  // Chat da operação: cada membro cifra para todos (aqui, para o próprio agente).
+  const central = generateKeyPair();
+  const agent = generateKeyPair();
+
+  it('admin envia mensagem cifrada (POST); servidor não vê texto em claro', async () => {
+    const ciphertext = sealMessage('Comando: manter posição.', central.secretKey, [
+      { id: 'AG-0456', publicKey: agent.publicKey },
+    ]);
     const res = await app.inject({
       method: 'POST',
       url: `/operations/${operationId}/messages`,
       headers: { authorization: `Bearer ${token}` },
-      payload: { text: 'Comando: manter posição.' },
+      payload: { ciphertext },
     });
     expect(res.statusCode).toBe(201);
     const msg = res.json();
     expect(msg.type).toBe('text');
-    expect(msg.text).toBe('Comando: manter posição.');
+    expect(msg.text).toBeUndefined();
+    expect(msg.ciphertext).toBe(ciphertext);
     expect(msg.senderId).toBeTruthy();
   });
 
   it('agente envia mensagem com senderId = agentId', async () => {
+    const ciphertext = sealMessage('Alvo avistado.', agent.secretKey, [
+      { id: 'AG-0456', publicKey: agent.publicKey },
+    ]);
     const res = await app.inject({
       method: 'POST',
       url: `/operations/${operationId}/messages`,
       headers: { authorization: `Bearer ${agentToken}` },
-      payload: { text: 'Alvo avistado.' },
+      payload: { ciphertext },
     });
     expect(res.statusCode).toBe(201);
     expect(res.json().senderId).toBe('AG-0456');
   });
 
-  it('histórico lista as mensagens (GET)', async () => {
+  it('histórico traz os envelopes; só o destinatário decifra (sem texto em claro)', async () => {
     const res = await app.inject({
       method: 'GET',
       url: `/operations/${operationId}/messages`,
       headers: { authorization: `Bearer ${token}` },
     });
     expect(res.statusCode).toBe(200);
-    const texts = (res.json() as Array<{ text: string }>).map((m) => m.text);
+    const texts = (res.json() as Array<{ type: string; ciphertext?: string }>)
+      .filter((m) => m.type === 'text' && m.ciphertext)
+      .map((m) => openMessage(m.ciphertext!, 'AG-0456', agent.secretKey));
     expect(texts).toContain('Alvo avistado.');
     expect(texts).toContain('Comando: manter posição.');
+    // Nenhum texto em claro trafega na resposta.
+    expect(JSON.stringify(res.json())).not.toContain('Alvo avistado.');
   });
 
-  it('rejeita texto vazio com 400', async () => {
+  it('rejeita mensagem sem ciphertext com 400', async () => {
     const res = await app.inject({
       method: 'POST',
       url: `/operations/${operationId}/messages`,
       headers: { authorization: `Bearer ${token}` },
-      payload: { text: '' },
+      payload: { ciphertext: '' },
     });
     expect(res.statusCode).toBe(400);
   });
@@ -606,6 +621,10 @@ describe('isolamento multitenant (Zero Trust)', () => {
   let opBId: string;
   let tokenAlpha: string; // admin escopado SÓ à operação A (operationId)
   let tokenBravo: string; // admin escopado SÓ à operação B (opBId)
+  const bravoKeys = generateKeyPair();
+  const bravoCiphertext = sealMessage('Bravo: perímetro seguro.', bravoKeys.secretKey, [
+    { id: 'BRAVO', publicKey: bravoKeys.publicKey },
+  ]);
 
   beforeAll(async () => {
     const { User, Operation, Position } = await import('../models/index.js');
@@ -651,12 +670,12 @@ describe('isolamento multitenant (Zero Trust)', () => {
     });
     tokenBravo = lb.json().token;
 
-    // Mensagem real sob a operação B (via rota, exercitando também o write path).
+    // Mensagem real (cifrada) sob a operação B — exercita também o write path E2EE.
     await app.inject({
       method: 'POST',
       url: `/operations/${opBId}/messages`,
       headers: { authorization: `Bearer ${tokenBravo}` },
-      payload: { text: 'Bravo: perímetro seguro.' },
+      payload: { ciphertext: bravoCiphertext },
     });
   }, 60_000);
 
@@ -690,7 +709,7 @@ describe('isolamento multitenant (Zero Trust)', () => {
       method: 'POST',
       url: `/operations/${opBId}/messages`,
       headers: { authorization: `Bearer ${tokenAlpha}` },
-      payload: { text: 'Injeção indevida entre operações.' },
+      payload: { ciphertext: 'injecao-indevida-entre-operacoes' },
     });
     expect(write.statusCode).toBe(403);
   });
@@ -721,9 +740,13 @@ describe('isolamento multitenant (Zero Trust)', () => {
       headers: { authorization: `Bearer ${tokenBravo}` },
     });
     expect(msgs.statusCode).toBe(200);
-    const texts = (msgs.json() as Array<{ text: string }>).map((m) => m.text);
-    expect(texts).toContain('Bravo: perímetro seguro.');
-    expect(texts).not.toContain('Alvo avistado.'); // mensagem da operação A não vaza
+    const list = msgs.json() as Array<{ senderId: string; type: string; ciphertext?: string }>;
+    const decrypted = list
+      .filter((m) => m.type === 'text' && m.ciphertext)
+      .map((m) => openMessage(m.ciphertext!, 'BRAVO', bravoKeys.secretKey));
+    expect(decrypted).toContain('Bravo: perímetro seguro.'); // dados da própria operação
+    // NÃO vaza a operação A: nenhuma mensagem do agente AG-0456 aparece aqui.
+    expect(list.map((m) => m.senderId)).not.toContain('AG-0456');
   });
 });
 

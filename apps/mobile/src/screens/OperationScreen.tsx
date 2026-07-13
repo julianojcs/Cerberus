@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import type { Session } from '../services/auth';
 import { getSecretKey } from '../services/keys';
+import { sendText } from '../services/messages';
 import {
   connectMqtt,
   disconnectMqtt,
@@ -79,6 +80,8 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
   const [headingUp, setHeadingUp] = useState(false);
   const [pendingPhoto, setPendingPhoto] = useState<PickedPhoto | null>(null);
   const [caption, setCaption] = useState('');
+  const [messageText, setMessageText] = useState('');
+  const [sendingText, setSendingText] = useState(false);
 
   useEffect(() => {
     connectMqtt(session.token, agentId);
@@ -172,6 +175,20 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
         },
       },
     ]);
+  }
+
+  async function handleSendText() {
+    const text = messageText.trim();
+    if (!text || !operationId || sendingText) return;
+    setSendingText(true);
+    try {
+      await sendText(session, operationId, text);
+      setMessageText('');
+    } catch (e) {
+      Alert.alert('Falha', e instanceof Error ? e.message : 'Não foi possível enviar a mensagem.');
+    } finally {
+      setSendingText(false);
+    }
   }
 
   async function handleTakePhoto() {
@@ -308,6 +325,29 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
               </View>
             ))
           )}
+
+          {/* Compositor: o agente responde à central (E2EE — cifrado no aparelho). */}
+          <View style={styles.replyRow}>
+            <TextInput
+              style={styles.replyInput}
+              value={messageText}
+              onChangeText={setMessageText}
+              placeholder="Reportar à central…"
+              placeholderTextColor="#8b9aa8"
+              multiline
+              editable={!sendingText}
+            />
+            <TouchableOpacity
+              style={[
+                styles.replySend,
+                (sendingText || !messageText.trim()) && styles.replySendDisabled,
+              ]}
+              onPress={handleSendText}
+              disabled={sendingText || !messageText.trim()}
+            >
+              <Text style={styles.replySendText}>{sendingText ? '…' : 'Enviar'}</Text>
+            </TouchableOpacity>
+          </View>
         </View>
 
         <View style={styles.card}>
@@ -495,6 +535,29 @@ const styles = StyleSheet.create({
   },
   broadcastText: { color: '#e6edf3', fontSize: 15, lineHeight: 20 },
   broadcastMeta: { color: '#8b9aa8', fontSize: 12, marginTop: 2 },
+  replyRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, marginTop: 16 },
+  replyInput: {
+    flex: 1,
+    minHeight: 40,
+    maxHeight: 96,
+    backgroundColor: '#0b0f14',
+    borderColor: '#263543',
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    color: '#e6edf3',
+    fontSize: 14,
+  },
+  replySend: {
+    backgroundColor: '#c1121f',
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  replySendDisabled: { opacity: 0.5 },
+  replySendText: { color: '#fff', fontSize: 14, fontWeight: '700' },
   photoBtn: {
     marginTop: 24,
     backgroundColor: '#c1121f',
