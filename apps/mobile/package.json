@@ -12,7 +12,8 @@
     "android": "expo run:android",
     "ios": "expo run:ios",
     "prebuild": "expo prebuild",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --test plugins/gradle-transforms.test.js"
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "1.23.1",

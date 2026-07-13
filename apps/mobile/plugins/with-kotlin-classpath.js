@@ -14,14 +14,23 @@ const { withProjectBuildGradle } = require('expo/config-plugins');
  * Config plugin (em vez de editar android/, que é gitignored e regenerado pelo
  * prebuild): a correção sobrevive a `expo prebuild --clean`.
  */
+/**
+ * Transform puro (testável): fixa o classpath do kotlin-gradle-plugin em
+ * `$kotlinVersion`. Idempotente — se já estiver fixado (ou ausente), não duplica.
+ */
+function withKotlinClasspathGradle(contents) {
+  return contents.replace(
+    /classpath\((['"])org\.jetbrains\.kotlin:kotlin-gradle-plugin\1\)/,
+    'classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlinVersion")',
+  );
+}
+
 const withKotlinClasspath = (config) =>
   withProjectBuildGradle(config, (cfg) => {
     if (cfg.modResults.language !== 'groovy') return cfg;
-    cfg.modResults.contents = cfg.modResults.contents.replace(
-      /classpath\((['"])org\.jetbrains\.kotlin:kotlin-gradle-plugin\1\)/,
-      'classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlinVersion")',
-    );
+    cfg.modResults.contents = withKotlinClasspathGradle(cfg.modResults.contents);
     return cfg;
   });
 
 module.exports = withKotlinClasspath;
+module.exports.withKotlinClasspathGradle = withKotlinClasspathGradle;

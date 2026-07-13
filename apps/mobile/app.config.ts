@@ -70,6 +70,10 @@ const config: ExpoConfig = {
     // Alinha o Kotlin do classpath (1.9.25) ao exigido pelo Compose do
     // expo-modules-core — ver plugins/with-kotlin-classpath.js.
     './plugins/with-kotlin-classpath',
+    // Fixa play-services-location em 20.0.0 (compatível com o background-geolocation)
+    // — evita IncompatibleClassChangeError ao iniciar o GPS. Ver
+    // plugins/with-play-services-force.js.
+    './plugins/with-play-services-force',
   ],
   extra: {
     // Sem fallback: quando não definido, o app deriva o host do Metro
