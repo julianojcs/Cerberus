@@ -35,8 +35,11 @@ const config: ExpoConfig = {
   android: {
     package: 'br.gov.pf.cerberus.agente',
     adaptiveIcon: {
-      foregroundImage: './assets/icon.png',
-      backgroundColor: '#0b0f14', // fundo institucional escuro (var --bg)
+      // Foreground = logo centralizada em ~66% (zona segura do adaptativo, gerada
+      // por scripts/make-icons.mjs) sobre fundo branco (a logo é para fundo claro,
+      // igual ao ícone do iOS). Evita o corte das bordas pelo launcher.
+      foregroundImage: './assets/adaptive-icon.png',
+      backgroundColor: '#ffffff',
     },
     permissions: [
       'ACCESS_FINE_LOCATION',

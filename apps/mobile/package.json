@@ -6,6 +6,7 @@
   "main": "index.ts",
   "scripts": {
     "set-ip": "node scripts/set-ip.mjs",
+    "make-icons": "node scripts/make-icons.mjs",
     "start": "node scripts/set-ip.mjs && expo start --dev-client --lan",
     "start:tunnel": "expo start --dev-client --tunnel",
     "android": "expo run:android",
@@ -43,6 +44,7 @@
   },
   "devDependencies": {
     "@types/react": "~18.3.12",
+    "jimp": "^0.22.10",
     "typescript": "^5.7.2"
   }
 }
