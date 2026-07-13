@@ -1,6 +1,11 @@
 import * as SecureStore from 'expo-secure-store';
 import { config } from '../config';
-import { generateKeyPair, publicFromSecret, type E2eeKeyPair } from '../shared/e2ee';
+import {
+  generateKeyPair,
+  publicFromSecret,
+  type E2eeKeyPair,
+  type E2eeRecipient,
+} from '../shared/e2ee';
 
 /**
  * Chaves E2EE do agente. A chave SECRETA é gerada no dispositivo e guardada no
@@ -27,6 +32,22 @@ export async function ensureKeyPair(userId: string): Promise<E2eeKeyPair> {
 /** Chave secreta local do usuário (null se ainda não provisionada). */
 export async function getSecretKey(userId: string): Promise<string | null> {
   return SecureStore.getItemAsync(skKey(userId));
+}
+
+/**
+ * Busca o diretório de chaves da operação e o devolve como destinatários de
+ * envelope E2EE (id + chave pública). Reusado por texto e mídia.
+ */
+export async function fetchRecipients(
+  session: { token: string },
+  operationId: string,
+): Promise<E2eeRecipient[]> {
+  const res = await fetch(`${config.apiUrl}/operations/${operationId}/keys`, {
+    headers: { Authorization: `Bearer ${session.token}` },
+  });
+  if (!res.ok) throw new Error(`Erro ${res.status} ao obter chaves`);
+  const dir = (await res.json()) as Array<{ id: string; publicKey: string }>;
+  return dir.map((e) => ({ id: e.id, publicKey: e.publicKey }));
 }
 
 /**

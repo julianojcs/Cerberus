@@ -6,7 +6,6 @@ import { useParams, useRouter } from 'next/navigation';
 import {
   api,
   type LatestPosition,
-  type TacticalMessage,
   type Geofence,
   type GeofenceAlert,
   type Settings,
@@ -37,6 +36,37 @@ interface DecryptedMessage {
   type: string;
   text: string | null;
   capturedAt: string;
+}
+
+/** Mídia com a metadata (legenda/geotag/chave da imagem) decifrada. */
+interface DecryptedMedia {
+  id: string;
+  senderId: string;
+  mediaRef: string;
+  caption: string | null;
+  lat?: number;
+  lng?: number;
+  mime: string;
+  /** Chave/nonce da imagem cifrada; `null` = envelope não decifrável por este operador. */
+  crypto: { k: string; n: string } | null;
+  capturedAt: string;
+}
+
+/** Faz o parse da metadata E2EE da mídia (JSON no envelope). `null` se inválida. */
+function parseMediaMeta(raw: string | null): {
+  caption?: string;
+  lat?: number;
+  lng?: number;
+  mime?: string;
+  k?: string;
+  n?: string;
+} | null {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
 }
 
 /** Data/hora local (America/Sao_Paulo) — exibição das rotas. Dado permanece UTC. */
@@ -93,9 +123,9 @@ export default function LiveOperationPage() {
   const [sending, setSending] = useState(false);
   const [broadcastMsg, setBroadcastMsg] = useState<string | null>(null);
 
-  // Mídia (fotos) enviadas pelos agentes.
-  const [mediaMsgs, setMediaMsgs] = useState<TacticalMessage[]>([]);
-  const [lightbox, setLightbox] = useState<TacticalMessage | null>(null);
+  // Mídia (fotos) enviadas pelos agentes — com metadata E2EE já decifrada.
+  const [mediaMsgs, setMediaMsgs] = useState<DecryptedMedia[]>([]);
+  const [lightbox, setLightbox] = useState<DecryptedMedia | null>(null);
 
   // Histórico de texto/broadcast (E2EE) decifrado localmente para exibição.
   const [chatMsgs, setChatMsgs] = useState<DecryptedMessage[]>([]);
@@ -137,10 +167,30 @@ export default function LiveOperationPage() {
     api
       .messages(operationId)
       .then((msgs) => {
-        setMediaMsgs(msgs.filter((m) => m.type === 'media' && !!m.mediaRef));
         const user = getUser();
         const secretKey = user ? getSecretKey(user.id) : null;
         const myId = user?.id ?? '';
+        setMediaMsgs(
+          msgs
+            .filter((m) => m.type === 'media' && !!m.mediaRef)
+            .map((m) => {
+              const meta =
+                m.ciphertext && secretKey
+                  ? parseMediaMeta(openMessage(m.ciphertext, myId, secretKey))
+                  : null;
+              return {
+                id: m.id,
+                senderId: m.senderId,
+                mediaRef: m.mediaRef as string,
+                caption: meta?.caption ?? null,
+                lat: meta?.lat,
+                lng: meta?.lng,
+                mime: meta?.mime ?? 'image/jpeg',
+                crypto: meta?.k && meta?.n ? { k: meta.k, n: meta.n } : null,
+                capturedAt: m.capturedAt,
+              };
+            }),
+        );
         setChatMsgs(
           msgs
             .filter((m) => m.type === 'text' || m.type === 'broadcast')
@@ -396,7 +446,7 @@ export default function LiveOperationPage() {
           lat: m.lat as number,
           lng: m.lng as number,
           senderId: m.senderId,
-          caption: m.text,
+          caption: m.caption ?? undefined,
         })),
     [mediaMsgs],
   );
@@ -697,7 +747,9 @@ export default function LiveOperationPage() {
                 {mediaMsgs.map((m) => (
                   <div key={m.id} style={{ breakInside: 'avoid', marginBottom: 4 }}>
                     <AuthImage
-                      path={api.mediaPath(operationId, m.mediaRef!)}
+                      path={api.mediaPath(operationId, m.mediaRef)}
+                      mediaKey={m.crypto}
+                      mime={m.mime}
                       alt={`Mídia de ${m.senderId}`}
                       onClick={() => setLightbox(m)}
                       style={{
@@ -1338,8 +1390,10 @@ export default function LiveOperationPage() {
             style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: '92vw' }}
           >
             <AuthImage
-              path={api.mediaPath(operationId, lightbox.mediaRef!)}
-              alt={lightbox.text ?? 'mídia'}
+              path={api.mediaPath(operationId, lightbox.mediaRef)}
+              mediaKey={lightbox.crypto}
+              mime={lightbox.mime}
+              alt={lightbox.caption ?? 'mídia'}
               style={{
                 maxWidth: '92vw',
                 maxHeight: '80vh',
@@ -1358,7 +1412,7 @@ export default function LiveOperationPage() {
               }}
             >
               <div style={{ fontSize: 14 }}>
-                {lightbox.text && <div>{lightbox.text}</div>}
+                {lightbox.caption && <div>{lightbox.caption}</div>}
                 <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
                   {lightbox.senderId}
                   {lightbox.lat != null &&

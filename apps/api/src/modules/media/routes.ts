@@ -6,13 +6,14 @@ import { MessageModel } from '../../models/index.js';
 import { assertOperationScope } from '../scope.js';
 
 const BUCKET = 'media';
-const ALLOWED_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
 /**
- * Captura/upload de mídia tática (fotos) do agente. O binário é persistido em
- * GridFS (coleção `media.*`) com metadata escopada por `operationId`; uma mensagem
- * tipo MEDIA referencia o arquivo (`mediaRef`) e é anunciada no canal broadcast.
- * O download é escopado: só quem está na operação lê a mídia dela.
+ * Captura/upload de mídia tática (fotos) do agente — **E2EE**. O cliente cifra a
+ * imagem (secretbox) e envia o binário **opaco**; a legenda, o geotag e a chave da
+ * imagem viajam num envelope por destinatário (`ciphertext`). O servidor persiste o
+ * blob cifrado em GridFS (metadata escopada por `operationId`) e o envelope na
+ * mensagem tipo MEDIA — nunca vê a imagem nem a legenda. O download é escopado: só
+ * quem está na operação (e tem a chave) lê/decifra a mídia dela.
  */
 export async function mediaRoutes(app: FastifyInstance): Promise<void> {
   function bucket() {
@@ -28,33 +29,24 @@ export async function mediaRoutes(app: FastifyInstance): Promise<void> {
 
     const file = await request.file();
     if (!file) return reply.code(400).send({ error: 'Arquivo ausente' });
-    if (!ALLOWED_TYPES.has(file.mimetype)) {
-      file.file.resume(); // drena o stream para não pendurar a requisição
-      return reply.code(415).send({ error: 'Tipo de mídia não suportado' });
-    }
 
-    // Campos de texto do multipart (vêm ANTES do arquivo no form): legenda + geotag.
+    // Envelope E2EE (legenda + geotag + chave da imagem), cifrado no cliente. Vem
+    // ANTES do arquivo no form para estar disponível em `file.fields`. O servidor
+    // não decifra — só persiste. Sem ele, a mídia seria ilegível: exige-se.
     const fields = file.fields as Record<string, { value?: unknown } | undefined>;
-    const fieldStr = (k: string): string | undefined =>
-      typeof fields[k]?.value === 'string' ? (fields[k]?.value as string) : undefined;
-    const fieldNum = (k: string): number | undefined => {
-      const n = Number(fieldStr(k));
-      return Number.isFinite(n) ? n : undefined;
-    };
-    const caption = fieldStr('caption')?.slice(0, 500);
-    const lng = fieldNum('lng');
-    const lat = fieldNum('lat');
-    const geo =
-      lng != null && lat != null && lng >= -180 && lng <= 180 && lat >= -90 && lat <= 90
-        ? { type: 'Point' as const, coordinates: [lng, lat] }
-        : undefined;
+    const ciphertext = typeof fields.ciphertext?.value === 'string' ? fields.ciphertext.value : '';
+    if (!ciphertext || ciphertext.length > 500_000) {
+      file.file.resume(); // drena o stream para não pendurar a requisição
+      return reply.code(400).send({ error: 'Envelope da mídia ausente ou inválido' });
+    }
 
     const claims = request.user as AuthClaims;
     const senderId = claims.agentId ?? claims.sub;
     const now = new Date();
 
+    // O blob é opaco (cifrado): tipo genérico, sem inspeção de conteúdo.
     const upload = bucket().openUploadStream(file.filename || 'media', {
-      contentType: file.mimetype,
+      contentType: 'application/octet-stream',
       metadata: { operationId: id, senderId },
     });
     try {
@@ -79,8 +71,7 @@ export async function mediaRoutes(app: FastifyInstance): Promise<void> {
       senderId,
       type: MessageType.MEDIA,
       mediaRef,
-      text: caption,
-      location: geo,
+      ciphertext, // envelope: legenda + geotag + chave da imagem (decifrado no cliente)
       capturedAt: now,
       receivedAt: now,
     });
@@ -92,6 +83,7 @@ export async function mediaRoutes(app: FastifyInstance): Promise<void> {
           senderId,
           type: MessageType.MEDIA,
           mediaRef,
+          ciphertext,
           capturedAt: now.toISOString(),
         }),
         { qos: 1 },
@@ -104,9 +96,7 @@ export async function mediaRoutes(app: FastifyInstance): Promise<void> {
       senderId,
       type: MessageType.MEDIA,
       mediaRef,
-      text: caption,
-      lng: geo?.coordinates[0],
-      lat: geo?.coordinates[1],
+      ciphertext,
       capturedAt: now.toISOString(),
     });
   });

@@ -70,6 +70,28 @@ export function sealMessage(
 }
 
 /**
+ * Cifra um bloco de bytes (ex.: uma imagem) com uma chave simétrica nova (secretbox).
+ * Devolve o binário cifrado + a chave/nonce em base64 — que devem viajar cifrados no
+ * envelope da metadata (via `sealMessage`), nunca em claro. Usado no E2EE de mídia:
+ * o blob opaco vai ao GridFS; a chave só existe dentro do envelope por destinatário.
+ */
+export function encryptBytes(bytes: Uint8Array): {
+  cipher: Uint8Array;
+  key: string;
+  nonce: string;
+} {
+  const key = nacl.randomBytes(nacl.secretbox.keyLength);
+  const nonce = nacl.randomBytes(nacl.secretbox.nonceLength);
+  const cipher = nacl.secretbox(bytes, nonce, key);
+  return { cipher, key: encodeBase64(key), nonce: encodeBase64(nonce) };
+}
+
+/** Decifra bytes cifrados por `encryptBytes` com a chave/nonce (base64). `null` se falhar. */
+export function decryptBytes(cipher: Uint8Array, key: string, nonce: string): Uint8Array | null {
+  return nacl.secretbox.open(cipher, decodeBase64(nonce), decodeBase64(key));
+}
+
+/**
  * Decifra o envelope para o destinatário `myId`. Devolve `null` se não for para ele,
  * se a chave/assinatura não bater, ou se não for um envelope E2EE válido (ex.: uma
  * mensagem de sistema em claro no mesmo canal).
