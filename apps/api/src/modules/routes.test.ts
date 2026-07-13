@@ -3,7 +3,7 @@ import { MongoMemoryServer } from 'mongodb-memory-server';
 import bcrypt from 'bcryptjs';
 import FormData from 'form-data';
 import type { FastifyInstance } from 'fastify';
-import { generateKeyPair } from '@cerberus/shared';
+import { generateKeyPair, openMessage, sealMessage } from '@cerberus/shared';
 
 // PNG 1x1 transparente (fixture binária mínima para os testes de mídia).
 const PNG = Buffer.from(
@@ -524,13 +524,21 @@ describe('mensagens táticas (texto)', () => {
   });
 });
 
-describe('broadcast da central (admin → agentes)', () => {
-  it('admin emite broadcast (POST /broadcast) persistido como tipo broadcast', async () => {
+describe('broadcast E2EE da central (admin → agentes)', () => {
+  const central = generateKeyPair();
+  const agent = generateKeyPair();
+
+  it('emite broadcast cifrado; servidor NÃO armazena texto em claro; agente decifra', async () => {
+    // A central cifra localmente para o agente AG-0456 (envelope por destinatário).
+    const ciphertext = sealMessage('CENTRAL: recolher ao ponto de encontro.', central.secretKey, [
+      { id: 'AG-0456', publicKey: agent.publicKey },
+    ]);
+
     const res = await app.inject({
       method: 'POST',
       url: `/operations/${operationId}/broadcast`,
       headers: { authorization: `Bearer ${token}` },
-      payload: { text: 'CENTRAL: recolher ao ponto de encontro.' },
+      payload: { ciphertext },
     });
     expect(res.statusCode).toBe(201);
     expect(res.json().type).toBe('broadcast');
@@ -540,10 +548,20 @@ describe('broadcast da central (admin → agentes)', () => {
       url: `/operations/${operationId}/messages`,
       headers: { authorization: `Bearer ${token}` },
     });
-    const broadcast = (hist.json() as Array<{ type: string; text: string }>).find(
-      (m) => m.type === 'broadcast',
+    const broadcast = (
+      hist.json() as Array<{ type: string; text?: string; ciphertext?: string }>
+    ).find((m) => m.type === 'broadcast');
+
+    // O servidor persiste só o envelope — nunca o texto em claro.
+    expect(broadcast?.text).toBeUndefined();
+    expect(broadcast?.ciphertext).toBe(ciphertext);
+    // O texto em claro não pode aparecer em lugar nenhum da resposta.
+    expect(JSON.stringify(hist.json())).not.toContain('recolher ao ponto de encontro');
+
+    // Só o agente destinatário, com sua chave secreta, recupera a diretiva.
+    expect(openMessage(broadcast!.ciphertext!, 'AG-0456', agent.secretKey)).toBe(
+      'CENTRAL: recolher ao ponto de encontro.',
     );
-    expect(broadcast?.text).toBe('CENTRAL: recolher ao ponto de encontro.');
   });
 
   it('agente (não-admin) não pode emitir broadcast (403)', async () => {
@@ -551,7 +569,7 @@ describe('broadcast da central (admin → agentes)', () => {
       method: 'POST',
       url: `/operations/${operationId}/broadcast`,
       headers: { authorization: `Bearer ${agentToken}` },
-      payload: { text: 'tentativa indevida' },
+      payload: { ciphertext: 'tentativa-indevida' },
     });
     expect(res.statusCode).toBe(403);
   });
@@ -561,17 +579,17 @@ describe('broadcast da central (admin → agentes)', () => {
       method: 'POST',
       url: '/operations/000000000000000000000000/broadcast',
       headers: { authorization: `Bearer ${token}` },
-      payload: { text: 'fora do escopo' },
+      payload: { ciphertext: 'fora-do-escopo' },
     });
     expect(res.statusCode).toBe(403);
   });
 
-  it('rejeita broadcast com texto vazio (400)', async () => {
+  it('rejeita broadcast sem ciphertext (400)', async () => {
     const res = await app.inject({
       method: 'POST',
       url: `/operations/${operationId}/broadcast`,
       headers: { authorization: `Bearer ${token}` },
-      payload: { text: '' },
+      payload: { ciphertext: '' },
     });
     expect(res.statusCode).toBe(400);
   });

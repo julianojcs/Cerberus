@@ -12,6 +12,7 @@ import {
   View,
 } from 'react-native';
 import type { Session } from '../services/auth';
+import { getSecretKey } from '../services/keys';
 import {
   connectMqtt,
   disconnectMqtt,
@@ -98,13 +99,25 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
     [],
   );
 
-  // Recebe diretivas da central (canal broadcast da operação).
+  // Recebe diretivas da central (canal broadcast da operação). Carrega a chave
+  // secreta local (SecureStore, assíncrono) para decifrar o envelope E2EE — o id
+  // do agente deve casar com o `rid` que a central usou (agentId ?? userId).
   useEffect(() => {
     if (!operationId) return;
-    return subscribeBroadcast(operationId, (message) => {
-      setBroadcasts((prev) => [message, ...prev].slice(0, 20));
-    });
-  }, [operationId]);
+    let unsubscribe: (() => void) | undefined;
+    let cancelled = false;
+    void (async () => {
+      const secretKey = await getSecretKey(session.userId);
+      if (cancelled) return;
+      unsubscribe = subscribeBroadcast(operationId, { myId: agentId, secretKey }, (message) => {
+        setBroadcasts((prev) => [message, ...prev].slice(0, 20));
+      });
+    })();
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
+  }, [operationId, agentId, session.userId]);
 
   async function toggleTracking(value: boolean) {
     if (!operationId) return;

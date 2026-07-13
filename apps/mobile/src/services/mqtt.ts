@@ -5,11 +5,12 @@ import {
   operationBroadcastTopic,
   type PositionSample,
 } from '../shared/contracts';
+import { openMessage } from '../shared/e2ee';
 import { flushOutbox, queuePosition } from './outbox';
 
 let client: MqttClient | null = null;
 
-/** Diretiva recebida da central (canal broadcast da operação). */
+/** Diretiva recebida da central, com o texto já decifrado (ou em claro se sistema). */
 export interface BroadcastMessage {
   senderId: string;
   type: string;
@@ -17,17 +18,48 @@ export interface BroadcastMessage {
   capturedAt: string;
 }
 
+/** Payload cru no canal: broadcast E2EE (`ciphertext`) ou sistema em claro (`text`). */
+interface RawBroadcast {
+  senderId: string;
+  type: string;
+  text?: string;
+  ciphertext?: string;
+  capturedAt: string;
+}
+
+/** Identidade do agente para decifrar o envelope E2EE (id + chave secreta local). */
+export interface BroadcastIdentity {
+  myId: string;
+  secretKey: string | null;
+}
+
 type BroadcastListener = (message: BroadcastMessage) => void;
 const broadcastListeners = new Set<BroadcastListener>();
 let broadcastOperationId: string | null = null;
+let broadcastIdentity: BroadcastIdentity = { myId: '', secretKey: null };
+
+/** Decifra o broadcast E2EE ou repassa a mensagem de sistema em claro (alertas). */
+function resolveText(m: RawBroadcast): string | null {
+  if (typeof m.ciphertext === 'string' && m.ciphertext.length > 0) {
+    if (!broadcastIdentity.secretKey) return null; // sem chave local para decifrar
+    return openMessage(m.ciphertext, broadcastIdentity.myId, broadcastIdentity.secretKey);
+  }
+  return typeof m.text === 'string' ? m.text : null;
+}
 
 function handleIncoming(topic: string, payload: Uint8Array): void {
   if (!broadcastOperationId || topic !== operationBroadcastTopic(broadcastOperationId)) return;
   try {
-    const m = JSON.parse(Buffer.from(payload).toString()) as BroadcastMessage;
-    if (m && typeof m.text === 'string') {
-      for (const listener of broadcastListeners) listener(m);
-    }
+    const m = JSON.parse(Buffer.from(payload).toString()) as RawBroadcast;
+    const text = resolveText(m);
+    if (text === null) return; // cifrado e não decifrável por este agente — ignora
+    const message: BroadcastMessage = {
+      senderId: m.senderId,
+      type: m.type,
+      text,
+      capturedAt: m.capturedAt,
+    };
+    for (const listener of broadcastListeners) listener(message);
   } catch {
     /* payload inválido — ignora */
   }
@@ -35,10 +67,16 @@ function handleIncoming(topic: string, payload: Uint8Array): void {
 
 /**
  * Assina o canal de broadcast da operação (central → agentes). O menor privilégio
- * da regra mqtt-multitenant: o agente ouve apenas `operacao/{opId}/broadcast`.
+ * da regra mqtt-multitenant: o agente ouve apenas `operacao/{opId}/broadcast`. A
+ * `identity` permite decifrar o envelope E2EE destinado a este agente.
  */
-export function subscribeBroadcast(operationId: string, listener: BroadcastListener): () => void {
+export function subscribeBroadcast(
+  operationId: string,
+  identity: BroadcastIdentity,
+  listener: BroadcastListener,
+): () => void {
   broadcastOperationId = operationId;
+  broadcastIdentity = identity;
   broadcastListeners.add(listener);
   if (client?.connected) {
     client.subscribe(operationBroadcastTopic(operationId), { qos: 1 });

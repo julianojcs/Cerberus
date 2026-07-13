@@ -90,11 +90,11 @@ export const api = {
   // Histórico da operação (trilha). Vem ordenado do mais recente para o mais antigo.
   positionHistory: (operationId: string, limit = 2000) =>
     request<LatestPosition[]>(`/operations/${operationId}/positions?limit=${limit}`),
-  // Broadcast da central (admin) para todos os agentes da operação.
-  broadcast: (operationId: string, text: string) =>
-    request<{ id: string; type: string; text?: string }>(`/operations/${operationId}/broadcast`, {
+  // Broadcast E2EE da central (admin) → agentes. O corpo já vai cifrado (envelope).
+  broadcast: (operationId: string, ciphertext: string) =>
+    request<{ id: string; type: string }>(`/operations/${operationId}/broadcast`, {
       method: 'POST',
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ ciphertext }),
     }),
   // Histórico de mensagens (texto/mídia/broadcast) da operação.
   messages: (operationId: string) =>
