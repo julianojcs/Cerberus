@@ -16,7 +16,13 @@ import { getSecretKey } from '@/lib/e2ee';
 import { openMessage, sealMessage } from '@cerberus/shared';
 import { subscribeToOperation, type IncomingMessage, type LivePosition } from '@/lib/mqtt';
 import { ChatPanel } from '@/components/ChatPanel';
-import { LiveMap, type AgentPoint, type GeofenceCircle, type PlottedRoute } from '@/components/LiveMap';
+import {
+  LiveMap,
+  type AgentPoint,
+  type AgentTrails,
+  type GeofenceCircle,
+  type PlottedRoute,
+} from '@/components/LiveMap';
 import { Toggle } from '@/components/Toggle';
 import { AuthImage } from '@/components/AuthImage';
 import { ResizableSidebar } from '@/components/ResizableSidebar';
@@ -29,6 +35,8 @@ import { buildRoutes, assignAgentColors, type Route } from '@/lib/routes';
 
 /** Histórico buscado para montar as rotas por agente. */
 const HISTORY_LIMIT = 5000;
+/** Máximo de pontos por trilha ao vivo (limita memória/render num turno longo). */
+const MAX_LIVE_TRAIL = 2000;
 const HOUR_MS = 60 * 60 * 1000;
 
 /** Mensagem de texto/broadcast já decifrada para exibição (`text: null` = falha). */
@@ -103,6 +111,11 @@ export default function LiveOperationPage() {
 
   // Histórico cru. As rotas são DERIVADAS (com o gap configurável).
   const [rawPositions, setRawPositions] = useState<LatestPosition[]>([]);
+  // Trilha AO VIVO por agente: cresce a cada posição do MQTT durante o deslocamento
+  // (semeada com o histórico recente na carga). `[lng,lat][]` — um traço por agente.
+  const [liveTrails, setLiveTrails] = useState<Record<string, [number, number][]>>({});
+  const [showLiveTrail, setShowLiveTrail] = useState(true);
+  const seededTrailRef = useRef(false);
   // Cor por agente: token auto-atribuído + override escolhido pelo admin (localStorage).
   const [agentColorTokens, setAgentColorTokens] = useState<Record<string, string>>({});
   const [agentColorOverrides, setAgentColorOverrides] = useState<Record<string, string>>({});
@@ -357,6 +370,15 @@ export default function LiveOperationPage() {
             activity: pos.activity,
           },
         }));
+        // Estende a trilha ao vivo do agente (limita o comprimento).
+        setLiveTrails((prev) => {
+          const cur = prev[pos.agentId] ?? [];
+          const next: [number, number][] = [...cur, [pos.lng, pos.lat]];
+          return {
+            ...prev,
+            [pos.agentId]: next.length > MAX_LIVE_TRAIL ? next.slice(-MAX_LIVE_TRAIL) : next,
+          };
+        });
       },
       getToken() ?? undefined,
       setConnected,
@@ -379,6 +401,35 @@ export default function LiveOperationPage() {
     for (const id of ids) out[id] = resolveColor(agentColorOverrides[id] ?? agentColorTokens[id]);
     return out;
   }, [agentColorTokens, agentColorOverrides]);
+
+  // Semeia a trilha ao vivo com o histórico recente (uma vez, quando ele carrega):
+  // ao abrir a página o caminho recente já aparece e passa a crescer ao vivo.
+  useEffect(() => {
+    if (seededTrailRef.current || rawPositions.length === 0) return;
+    const asc = [...rawPositions].sort((a, b) => +new Date(a.capturedAt) - +new Date(b.capturedAt));
+    const byAgent: Record<string, [number, number][]> = {};
+    for (const p of asc) {
+      if (p.lng == null || p.lat == null) continue;
+      (byAgent[p.agentId] ??= []).push([p.lng, p.lat]);
+    }
+    seededTrailRef.current = true;
+    setLiveTrails((prev) => {
+      const next = { ...prev };
+      for (const [id, pts] of Object.entries(byAgent)) {
+        const seed = pts.length > MAX_LIVE_TRAIL ? pts.slice(-MAX_LIVE_TRAIL) : pts;
+        // História primeiro; preserva o que já chegou ao vivo antes do seed.
+        next[id] = [...seed, ...(prev[id] ?? [])];
+      }
+      return next;
+    });
+  }, [rawPositions]);
+
+  // Formato do mapa (AgentTrails = 1+ traços por agente): a trilha ao vivo é 1 traço.
+  const liveTrailsForMap = useMemo<AgentTrails>(() => {
+    const out: AgentTrails = {};
+    for (const [id, pts] of Object.entries(liveTrails)) out[id] = [pts];
+    return out;
+  }, [liveTrails]);
 
   // Define a cor (token de família) de um agente e persiste por operação.
   function setAgentColor(agentId: string, token: string) {
@@ -1226,10 +1277,27 @@ export default function LiveOperationPage() {
             </div>
           )}
 
-          <h3 style={{ marginTop: 0 }}>Agentes ({agentList.length})</h3>
-          <p className="muted" style={{ fontSize: 12, margin: '0 0 8px' }}>
-            Selecione um agente para plotar suas rotas (cor própria). Clique no nome para ver e
-            escolher rotas individuais. Ajuste o período na barra do topo do mapa.
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              gap: 8,
+              marginTop: 0,
+            }}
+          >
+            <h3 style={{ margin: 0 }}>Agentes ({agentList.length})</h3>
+            <Toggle
+              checked={showLiveTrail}
+              onChange={setShowLiveTrail}
+              label="Trilha ao vivo"
+              title="Desenha o caminho do agente ao vivo, conforme ele se desloca"
+            />
+          </div>
+          <p className="muted" style={{ fontSize: 12, margin: '8px 0' }}>
+            A <strong>trilha ao vivo</strong> (cor do agente) cresce em tempo real durante o
+            deslocamento. As <strong>rotas</strong> abaixo são o histórico — selecione-as e ajuste o
+            período na barra do topo do mapa.
           </p>
           {agentList.length === 0 && (
             <p className="muted" style={{ fontSize: 14 }}>
@@ -1602,6 +1670,8 @@ export default function LiveOperationPage() {
           <LiveMap
             agents={agents}
             routes={plottedRoutes}
+            trails={liveTrailsForMap}
+            showTrails={showLiveTrail}
             agentColors={agentColors}
             fitNonce={fitNonce}
             mediaMarkers={mediaMarkers}

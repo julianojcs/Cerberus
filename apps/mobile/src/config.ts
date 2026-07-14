@@ -4,6 +4,8 @@ import Constants from 'expo-constants';
 const extra = (Constants.expoConfig?.extra ?? {}) as {
   apiUrl?: string;
   mqttWsUrl?: string;
+  mqttUsername?: string;
+  mqttPassword?: string;
 };
 
 /**
@@ -28,4 +30,7 @@ export const config = {
   apiUrl: extra.apiUrl ?? (host ? `http://${host}:3000` : 'http://localhost:3000'),
   // O app publica via MQTT sobre WebSockets (compatível com React Native).
   mqttWsUrl: extra.mqttWsUrl ?? (host ? `ws://${host}:9001` : 'ws://localhost:9001'),
+  // Credencial estática do broker (HiveMQ Cloud). Vazia ⇒ conecta com jwt+token.
+  mqttUsername: extra.mqttUsername,
+  mqttPassword: extra.mqttPassword,
 };

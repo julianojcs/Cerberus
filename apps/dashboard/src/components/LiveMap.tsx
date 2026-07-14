@@ -67,14 +67,18 @@ function syncRoutes(map: MlMap, routes: PlottedRoute[]): void {
   );
 }
 
-function toFeatureCollection(trails: AgentTrails): GeoJSON.FeatureCollection {
+function toFeatureCollection(
+  trails: AgentTrails,
+  colors?: Record<string, string>,
+): GeoJSON.FeatureCollection {
   const features: GeoJSON.Feature[] = [];
   for (const [agentId, segments] of Object.entries(trails)) {
+    const color = colors?.[agentId] ?? '#c1121f';
     for (const seg of segments) {
       if (seg.length >= 2) {
         features.push({
           type: 'Feature',
-          properties: { agentId },
+          properties: { agentId, color },
           geometry: { type: 'LineString', coordinates: seg },
         });
       }
@@ -83,9 +87,9 @@ function toFeatureCollection(trails: AgentTrails): GeoJSON.FeatureCollection {
   return { type: 'FeatureCollection', features };
 }
 
-function syncTrails(map: MlMap, trails: AgentTrails): void {
+function syncTrails(map: MlMap, trails: AgentTrails, colors?: Record<string, string>): void {
   const source = map.getSource('trails') as GeoJSONSource | undefined;
-  source?.setData(toFeatureCollection(trails));
+  source?.setData(toFeatureCollection(trails, colors));
 }
 
 /**
@@ -335,7 +339,10 @@ export function LiveMap({
         paint: { 'line-color': ['get', 'color'], 'line-width': 2, 'line-opacity': 0.7 },
       });
       // Trilhas (por cima das zonas).
-      map.addSource('trails', { type: 'geojson', data: toFeatureCollection(trailsRef.current) });
+      map.addSource('trails', {
+        type: 'geojson',
+        data: toFeatureCollection(trailsRef.current, agentColorsRef.current),
+      });
       map.addLayer({
         id: 'trails-line',
         type: 'line',
@@ -345,7 +352,7 @@ export function LiveMap({
           'line-cap': 'round',
           visibility: showTrailsRef.current ? 'visible' : 'none',
         },
-        paint: { 'line-color': '#c1121f', 'line-width': 3, 'line-opacity': 0.65 },
+        paint: { 'line-color': ['get', 'color'], 'line-width': 3, 'line-opacity': 0.7 },
       });
       // Rotas selecionadas por agente (por cima das trilhas), cor dirigida por dado.
       map.addSource('agent-routes', { type: 'geojson', data: routesFC(routesRef.current, false) });
@@ -434,7 +441,7 @@ export function LiveMap({
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !styleReadyRef.current) return;
-    syncTrails(map, trails);
+    syncTrails(map, trails, agentColorsRef.current);
   }, [trails]);
 
   // Redesenha as rotas selecionadas (cores por agente) quando a seleção muda.

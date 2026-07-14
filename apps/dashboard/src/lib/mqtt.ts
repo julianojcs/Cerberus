@@ -9,6 +9,11 @@ import {
 } from '@cerberus/shared';
 
 const MQTT_WS_URL = process.env.NEXT_PUBLIC_MQTT_WS_URL ?? 'ws://localhost:9001';
+// Credencial ESTÁTICA do broker gerenciado (HiveMQ Cloud free — não faz auth por
+// JWT). Quando definida, tem prioridade; senão cai no jwt+token (on-prem
+// EMQX/Mosquitto com ACL por claims). Ver .claude/rules/mqtt-multitenant.md.
+const MQTT_USERNAME = process.env.NEXT_PUBLIC_MQTT_USERNAME;
+const MQTT_PASSWORD = process.env.NEXT_PUBLIC_MQTT_PASSWORD;
 
 export interface LivePosition extends PositionSample {
   operationId: string;
@@ -80,9 +85,10 @@ export function subscribeToOperation(
   onMessage?: (m: IncomingMessage) => void,
 ): () => void {
   const client: MqttClient = mqtt.connect(MQTT_WS_URL, {
-    // O token JWT é apresentado ao broker (base para ACL em produção EMQX/Mosquitto).
-    username: token ? 'jwt' : undefined,
-    password: token,
+    // Credencial estática (broker gerenciado) quando configurada; senão o JWT é
+    // apresentado ao broker (base para ACL em produção EMQX/Mosquitto).
+    username: MQTT_USERNAME || (token ? 'jwt' : undefined),
+    password: MQTT_USERNAME ? MQTT_PASSWORD : token,
     reconnectPeriod: 2000,
   });
 

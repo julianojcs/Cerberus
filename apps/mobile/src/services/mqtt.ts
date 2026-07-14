@@ -144,8 +144,10 @@ export function connectMqtt(token: string, agentId: string): MqttClient {
 
   client = mqtt.connect(config.mqttWsUrl, {
     clientId: `agente_${agentId}_${Date.now()}`,
-    username: 'jwt',
-    password: token,
+    // Credencial estática do broker gerenciado (HiveMQ Cloud não faz auth JWT)
+    // quando configurada; senão o JWT é a credencial (on-prem EMQX/Mosquitto).
+    username: config.mqttUsername || 'jwt',
+    password: config.mqttUsername ? config.mqttPassword : token,
     reconnectPeriod: 3000,
     clean: true,
   });
