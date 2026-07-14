@@ -53,3 +53,20 @@ export const MessageType = {
   BROADCAST: 'broadcast',
 } as const;
 export type MessageType = (typeof MessageType)[keyof typeof MessageType];
+
+/** Motivo da revogação de uma sessão — dirige a UX do app (apagar ou não a chave E2EE). */
+export const SessionRevokeReason = {
+  KICKED: 'kicked',
+  ACCOUNT_BLOCKED: 'account_blocked',
+  DEVICE_BLOCKED: 'device_blocked',
+  SESSION_REVOKED: 'session_revoked',
+} as const;
+export type SessionRevokeReason = (typeof SessionRevokeReason)[keyof typeof SessionRevokeReason];
+
+/** Plataforma do dispositivo do agente. */
+export const DevicePlatform = {
+  ANDROID: 'android',
+  IOS: 'ios',
+  WEB: 'web',
+} as const;
+export type DevicePlatform = (typeof DevicePlatform)[keyof typeof DevicePlatform];

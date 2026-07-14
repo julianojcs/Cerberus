@@ -8,6 +8,7 @@ import mongoPlugin from './plugins/mongo.js';
 import authPlugin from './plugins/auth.js';
 import mqttPlugin from './plugins/mqtt.js';
 import { authRoutes } from './modules/auth/routes.js';
+import { sessionRoutes } from './modules/sessions/routes.js';
 import { operationRoutes } from './modules/operations/routes.js';
 import { positionRoutes } from './modules/positions/routes.js';
 import { userRoutes } from './modules/users/routes.js';
@@ -70,6 +71,7 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
   }));
 
   await app.register(authRoutes);
+  await app.register(sessionRoutes);
   await app.register(userRoutes);
   await app.register(operationRoutes);
   await app.register(positionRoutes);

@@ -1,4 +1,4 @@
-import { config } from '../config';
+import { authedFetch } from './http';
 import { sealMessage } from '../shared/e2ee';
 import { fetchRecipients, getSecretKey } from './keys';
 import type { Session } from './auth';
@@ -17,9 +17,9 @@ export async function sendText(session: Session, operationId: string, text: stri
   if (recipients.length === 0) throw new Error('Nenhum destinatário com chave registrada.');
 
   const ciphertext = sealMessage(text, secretKey, recipients);
-  const res = await fetch(`${config.apiUrl}/operations/${operationId}/messages`, {
+  const res = await authedFetch(session.token, `/operations/${operationId}/messages`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.token}` },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ ciphertext }),
   });
   if (!res.ok) throw new Error(`Erro ${res.status} ao enviar mensagem`);

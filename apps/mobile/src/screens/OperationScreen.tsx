@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
   Alert,
+  AppState,
   Image,
   Modal,
   ScrollView,
@@ -31,6 +32,7 @@ import {
   subscribePositions,
 } from '../services/geolocation';
 import { outboxSize } from '../services/outbox';
+import { pingSession } from '../services/heartbeat';
 import { pickPhoto, uploadPhoto, type PickedPhoto } from '../services/media';
 import { AgentMap, type TrackPoint } from '../components/AgentMap';
 import type { PositionSample } from '../shared/contracts';
@@ -91,6 +93,21 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
     }, 2000);
     return () => clearInterval(interval);
   }, [session.token, agentId]);
+
+  // Heartbeat de sessão (~30s + ao voltar ao primeiro plano): se a central derrubou/
+  // bloqueou, o /auth/session responde 401 e o handler global desloga (ver App.tsx).
+  useEffect(() => {
+    const ping = () => void pingSession(session.token);
+    ping();
+    const interval = setInterval(ping, 30_000);
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') ping();
+    });
+    return () => {
+      clearInterval(interval);
+      sub.remove();
+    };
+  }, [session.token]);
 
   // Espelha na tela cada amostra publicada (mesma fonte enviada ao painel).
   useEffect(

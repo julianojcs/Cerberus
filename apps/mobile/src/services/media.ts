@@ -1,7 +1,7 @@
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system';
 import naclUtil from 'tweetnacl-util';
-import { config } from '../config';
+import { authedFetch } from './http';
 import { encryptBytes, sealMessage } from '../shared/e2ee';
 import { fetchRecipients, getSecretKey } from './keys';
 import type { Session } from './auth';
@@ -73,9 +73,8 @@ export async function uploadPhoto(
       type: 'application/octet-stream',
     } as unknown as Blob);
 
-    const res = await fetch(`${config.apiUrl}/operations/${operationId}/media`, {
+    const res = await authedFetch(session.token, `/operations/${operationId}/media`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${session.token}` },
       body: form,
     });
     if (!res.ok) throw new Error(`Falha no upload (${res.status}).`);

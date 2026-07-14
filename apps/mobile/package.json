@@ -22,6 +22,7 @@
     "buffer": "^6.0.3",
     "events": "^3.3.0",
     "expo": "~52.0.0",
+    "expo-application": "~6.0.2",
     "expo-asset": "~11.0.5",
     "expo-camera": "~16.0.0",
     "expo-file-system": "~18.0.12",

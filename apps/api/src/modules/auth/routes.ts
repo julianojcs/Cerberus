@@ -6,7 +6,8 @@ import {
   Role,
   type AuthClaims,
 } from '@cerberus/shared';
-import { User } from '../../models/index.js';
+import { Session, User } from '../../models/index.js';
+import { clientIp, createSession, isDeviceBlocked } from '../sessions/service.js';
 
 /**
  * Rotas de autenticação. O login emite um JWT com o escopo do usuário
@@ -29,12 +30,29 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(401).send({ error: 'Usuário ou senha inválidos' });
     }
 
+    // Portão de login: conta ou dispositivo bloqueado não recebe sessão.
+    if (user.blocked) {
+      return reply.code(403).send({ error: 'Conta bloqueada' });
+    }
+    if (body.data.deviceId && (await isDeviceBlocked(body.data.deviceId))) {
+      return reply.code(403).send({ error: 'Dispositivo bloqueado' });
+    }
+
+    const sid = await createSession({
+      userId: String(user._id),
+      deviceId: body.data.deviceId,
+      deviceLabel: body.data.deviceLabel,
+      platform: body.data.platform,
+      ip: clientIp(request),
+    });
+
     const operationIds = (user.operationIds ?? []).map((id) => String(id));
     const claims: AuthClaims = {
       sub: String(user._id),
       role: user.role as Role,
       agentId: user.agentId ?? undefined,
       operationIds,
+      sid,
     };
 
     const token = app.jwt.sign(claims);
@@ -54,6 +72,22 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   /** Retorna o perfil do portador do token (útil para o dashboard/app). */
   app.get('/auth/me', { onRequest: [app.authenticate] }, async (request) => {
     return request.user;
+  });
+
+  /**
+   * Heartbeat de sessão: o app chama periodicamente. Se a sessão foi revogada, o
+   * `app.authenticate` já responde 401 (o app então desloga). Atualiza `lastSeenAt`
+   * de forma throttled (só se defasado > 20s) para evitar 1 escrita por ping.
+   */
+  app.get('/auth/session', { onRequest: [app.authenticate] }, async (request) => {
+    const claims = request.user as AuthClaims;
+    if (claims.sid) {
+      await Session.updateOne(
+        { _id: claims.sid, lastSeenAt: { $lt: new Date(Date.now() - 20_000) } },
+        { $set: { lastSeenAt: new Date() } },
+      );
+    }
+    return { status: 'active' };
   });
 
   /**
@@ -83,6 +117,11 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     const current = request.user as AuthClaims;
     const user = await User.findById(current.sub);
     if (!user) return reply.code(401).send({ error: 'Usuário não encontrado' });
+    if (user.blocked) return reply.code(401).send({ error: 'Conta bloqueada' });
+
+    // Reusa o sid atual; token legado (sem sid) ganha uma sessão (vira revogável).
+    const sid =
+      current.sid ?? (await createSession({ userId: String(user._id), ip: clientIp(request) }));
 
     const operationIds = (user.operationIds ?? []).map((id) => String(id));
     const claims: AuthClaims = {
@@ -90,6 +129,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       role: user.role as Role,
       agentId: user.agentId ?? undefined,
       operationIds,
+      sid,
     };
 
     const token = app.jwt.sign(claims);

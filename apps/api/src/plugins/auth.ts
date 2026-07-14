@@ -3,6 +3,22 @@ import fastifyJwt from '@fastify/jwt';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { AuthClaims, Role } from '@cerberus/shared';
 import { isSuperAdmin } from '../modules/scope.js';
+import { isSessionActive } from '../modules/sessions/service.js';
+
+/**
+ * 401 se o token traz um `sid` cuja sessão foi revogada/removida; `null` se ativa
+ * ou se o token não tem `sid` (legado → fail-open, expira em ≤8h). O corpo carrega o
+ * `reason` (kicked/account_blocked/device_blocked) para o cliente decidir a UX.
+ */
+async function sessionRevoked(
+  request: FastifyRequest,
+): Promise<{ error: string; reason: string } | null> {
+  const claims = request.user as AuthClaims;
+  if (!claims.sid) return null;
+  const { active, reason } = await isSessionActive(claims.sid);
+  if (active) return null;
+  return { error: 'Sessão revogada', reason: reason ?? 'session_revoked' };
+}
 
 /**
  * Autenticação JWT. O mesmo token emitido no login é reutilizado como
@@ -21,6 +37,8 @@ export default fp(async function authPlugin(app: FastifyInstance) {
     } catch {
       return reply.code(401).send({ error: 'Não autenticado' });
     }
+    const revoked = await sessionRevoked(request);
+    if (revoked) return reply.code(401).send(revoked);
   });
 
   /** Exige um dos papéis informados. */
@@ -31,6 +49,8 @@ export default fp(async function authPlugin(app: FastifyInstance) {
       } catch {
         return reply.code(401).send({ error: 'Não autenticado' });
       }
+      const revoked = await sessionRevoked(request);
+      if (revoked) return reply.code(401).send(revoked);
       const claims = request.user as AuthClaims;
       // SA transcende o RBAC: passa em qualquer requireRole. Como consequência,
       // requireRole(Role.SUPERADMIN) vira SA-only (admin cai no allow-list → 403).
