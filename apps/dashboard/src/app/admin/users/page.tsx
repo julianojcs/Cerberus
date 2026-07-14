@@ -70,6 +70,21 @@ export default function AdminUsersPage() {
     }
   }
 
+  async function revokeKey(u: UserInfo) {
+    if (
+      !window.confirm(
+        `Revogar a chave E2EE de "${u.username}"? Ele deixa de receber novas mensagens até rotacionar a própria chave. As mensagens antigas continuam legíveis.`,
+      )
+    )
+      return;
+    setError(null);
+    try {
+      await api.revokeUserKey(u.id);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
   async function remove(u: UserInfo) {
     if (!window.confirm(`Excluir o usuário "${u.username}"? Esta ação é irreversível.`)) return;
     setError(null);
@@ -147,6 +162,11 @@ export default function AdminUsersPage() {
                       {isSA && !self && (
                         <button style={rowBtn} onClick={() => toggleBlock(u)}>
                           {u.blocked ? 'Desbloquear' : 'Bloquear'}
+                        </button>
+                      )}
+                      {isSA && !self && (
+                        <button style={rowBtn} onClick={() => revokeKey(u)} title="Revogar chave E2EE">
+                          Revogar chave
                         </button>
                       )}
                       {!self && (

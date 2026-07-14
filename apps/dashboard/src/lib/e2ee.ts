@@ -1,4 +1,4 @@
-import { generateKeyPair, publicFromSecret } from '@cerberus/shared';
+import { generateKeyPair, openMessage, publicFromSecret } from '@cerberus/shared';
 import { api } from './api';
 
 /**
@@ -10,10 +10,16 @@ import { api } from './api';
  * AES-GCM — e só o blob `{salt, iv, ct}` vai ao `localStorage`. A secreta em claro
  * existe apenas EM MEMÓRIA (`unlocked`) durante a sessão, após o desbloqueio; ao
  * recarregar a página é preciso desbloquear de novo (o `E2eeUnlockGate` cuida disso).
+ *
+ * **Histórico de secretas (Fase 5e-2):** ao ROTACIONAR a chave, a secreta ANTIGA é
+ * preservada (não apagada) — senão as mensagens seladas para a chave antiga ficariam
+ * ilegíveis. Guardamos uma LISTA de secretas por usuário (mais nova primeiro): a nova
+ * sela/deriva a pública; qualquer uma pode DECIFRAR (`openForMe` tenta todas). A lista
+ * inteira é cifrada num único blob com a passphrase.
  */
 
-// Chave em claro só em memória, por usuário. Limpa no lock/logout/reload.
-const unlocked = new Map<string, string>();
+// Secretas em claro só em memória, por usuário (mais nova primeiro). Limpa no lock/logout/reload.
+const unlocked = new Map<string, string[]>();
 
 /** Evento disparado quando a chave é desbloqueada — os painéis re-decifram. */
 export const E2EE_UNLOCK_EVENT = 'cerberus:e2ee-unlock';
@@ -78,6 +84,21 @@ async function deriveAesKey(passphrase: string, salt: Uint8Array): Promise<Crypt
   );
 }
 
+// A lista de secretas é serializada como JSON antes de cifrar. Um blob LEGADO
+// (5e-1) guarda uma única secreta em base64 pura — que nunca começa com '['; por
+// isso detectamos o formato antigo pela ausência do colchete e o promovemos a `[sk]`.
+function parseSecrets(decrypted: string): string[] {
+  if (decrypted.startsWith('[')) {
+    try {
+      const arr = JSON.parse(decrypted) as unknown;
+      if (Array.isArray(arr)) return arr.filter((x): x is string => typeof x === 'string');
+    } catch {
+      /* cai no legado */
+    }
+  }
+  return [decrypted]; // legado: uma secreta em base64
+}
+
 async function encryptSecret(secretKeyB64: string, passphrase: string): Promise<EncBlob> {
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const iv = crypto.getRandomValues(new Uint8Array(12));
@@ -106,9 +127,33 @@ async function decryptSecret(blob: EncBlob, passphrase: string): Promise<string 
 
 // --- API pública ---
 
-/** Chave secreta em claro (só se DESBLOQUEADA nesta sessão). `null` senão. */
+/** Chave secreta ATUAL em claro (a mais nova; só se DESBLOQUEADA nesta sessão). `null` senão. */
 export function getSecretKey(userId: string): string | null {
-  return unlocked.get(userId) ?? null;
+  return unlocked.get(userId)?.[0] ?? null;
+}
+
+/** Todas as secretas desbloqueadas (atual + histórico de rotação), mais nova primeiro. */
+export function getSecretKeys(userId: string): string[] {
+  return unlocked.get(userId) ?? [];
+}
+
+/**
+ * Decifra um envelope endereçado a `myDirId` tentando CADA secreta do usuário
+ * (atual ∪ histórico). Após uma rotação, mensagens antigas foram seladas para uma
+ * pública anterior; só a secreta correspondente as abre. `expectedSenderKey` (do
+ * diretório) autentica o remetente igual em todas as tentativas.
+ */
+export function openForMe(
+  userId: string,
+  ciphertext: string,
+  myDirId: string,
+  expectedSenderKey?: string | string[],
+): string | null {
+  for (const sk of getSecretKeys(userId)) {
+    const pt = openMessage(ciphertext, myDirId, sk, expectedSenderKey);
+    if (pt !== null) return pt;
+  }
+  return null;
 }
 
 /** Estado da chave do usuário no armazenamento local. */
@@ -120,19 +165,26 @@ export function keyState(userId: string): KeyState {
   return 'none';
 }
 
-/** Registra (idempotente) a pública derivada da secreta desbloqueada. */
+/** Registra (idempotente) a pública derivada da secreta ATUAL desbloqueada. */
 async function registerPublic(userId: string): Promise<void> {
-  const sk = unlocked.get(userId);
+  const sk = unlocked.get(userId)?.[0];
   if (sk) await api.registerPublicKey(publicFromSecret(sk)).catch(() => {});
+}
+
+/** Persiste a lista de secretas (cifrada) e a mantém em memória. */
+async function persistSecrets(userId: string, keys: string[], passphrase: string): Promise<void> {
+  const blob = await encryptSecret(JSON.stringify(keys), passphrase);
+  localStorage.setItem(encKey(userId), JSON.stringify(blob));
+  unlocked.set(userId, keys);
 }
 
 /** Desbloqueia a chave existente (returning user). `true` se a passphrase abriu. */
 export async function unlock(userId: string, passphrase: string): Promise<boolean> {
   const raw = localStorage.getItem(encKey(userId));
   if (!raw) return false;
-  const sk = await decryptSecret(JSON.parse(raw) as EncBlob, passphrase);
-  if (!sk) return false;
-  unlocked.set(userId, sk);
+  const decrypted = await decryptSecret(JSON.parse(raw) as EncBlob, passphrase);
+  if (decrypted == null) return false;
+  unlocked.set(userId, parseSecrets(decrypted));
   notifyUnlock();
   await registerPublic(userId); // reafirma a pública no diretório
   return true;
@@ -142,10 +194,8 @@ export async function unlock(userId: string, passphrase: string): Promise<boolea
 export async function migrateLegacy(userId: string, passphrase: string): Promise<boolean> {
   const plain = localStorage.getItem(skKey(userId));
   if (!plain) return false;
-  const blob = await encryptSecret(plain, passphrase);
-  localStorage.setItem(encKey(userId), JSON.stringify(blob));
+  await persistSecrets(userId, [plain], passphrase);
   localStorage.removeItem(skKey(userId)); // apaga o texto claro
-  unlocked.set(userId, plain);
   notifyUnlock();
   await registerPublic(userId);
   return true;
@@ -154,11 +204,28 @@ export async function migrateLegacy(userId: string, passphrase: string): Promise
 /** Cria a chave (primeira vez), protegida por passphrase, e registra a pública. */
 export async function createProtectedKeys(userId: string, passphrase: string): Promise<void> {
   const kp = generateKeyPair();
-  const blob = await encryptSecret(kp.secretKey, passphrase);
-  localStorage.setItem(encKey(userId), JSON.stringify(blob));
-  unlocked.set(userId, kp.secretKey);
+  await persistSecrets(userId, [kp.secretKey], passphrase);
   notifyUnlock();
   await api.registerPublicKey(kp.publicKey);
+}
+
+/**
+ * Rotaciona a chave (Fase 5e-2): gera um par novo, coloca a nova secreta À FRENTE da
+ * lista (a antiga fica para decifrar o histórico), re-cifra tudo com a passphrase e
+ * registra a nova pública — o servidor arquiva a anterior no `keyHistory` e limpa a
+ * revogação. Exige a passphrase (re-cifra o blob); devolve a nova pública, ou `null`
+ * se a passphrase não abrir o blob atual.
+ */
+export async function rotateKey(userId: string, passphrase: string): Promise<string | null> {
+  const raw = localStorage.getItem(encKey(userId));
+  if (!raw) return null;
+  const decrypted = await decryptSecret(JSON.parse(raw) as EncBlob, passphrase);
+  if (decrypted == null) return null; // passphrase errada
+  const kp = generateKeyPair();
+  await persistSecrets(userId, [kp.secretKey, ...parseSecrets(decrypted)], passphrase);
+  notifyUnlock();
+  await api.registerPublicKey(kp.publicKey); // versiona a anterior + limpa keyRevoked
+  return kp.publicKey;
 }
 
 /** Trava a chave em memória (logout). NÃO remove o blob cifrado do disco. */

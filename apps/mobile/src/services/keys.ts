@@ -49,8 +49,9 @@ export async function fetchRecipients(
 ): Promise<E2eeRecipient[]> {
   const res = await authedFetch(session.token, `/operations/${operationId}/keys`);
   if (!res.ok) throw new Error(`Erro ${res.status} ao obter chaves`);
-  const dir = (await res.json()) as Array<{ id: string; publicKey: string }>;
-  return dir.map((e) => ({ id: e.id, publicKey: e.publicKey }));
+  const dir = (await res.json()) as Array<{ id: string; publicKey: string; revoked?: boolean }>;
+  // Fase 5e-2 — não selar para chaves revogadas (o destinatário só volta a receber após rotacionar).
+  return dir.filter((e) => !e.revoked).map((e) => ({ id: e.id, publicKey: e.publicKey }));
 }
 
 /**

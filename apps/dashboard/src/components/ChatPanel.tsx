@@ -4,14 +4,13 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties }
 import {
   Role,
   encryptBytes,
-  openMessage,
   sealMessage,
   type KeyDirectoryEntry,
   type TeamInfo,
 } from '@cerberus/shared';
 import { api, type OperationMember, type TacticalMessage } from '@/lib/api';
 import { getUser } from '@/lib/auth';
-import { getSecretKey, E2EE_UNLOCK_EVENT } from '@/lib/e2ee';
+import { getSecretKey, openForMe, E2EE_UNLOCK_EVENT } from '@/lib/e2ee';
 import { putCachedCiphertext } from '@/lib/mediaCache';
 import { resolveColor } from '@/lib/tailwind-colors';
 import { AuthImage } from '@/components/AuthImage';
@@ -216,7 +215,7 @@ export function ChatPanel({
       if (m.type === 'media' && m.mediaRef) {
         const meta =
           m.ciphertext && secretKey
-            ? parseMediaMeta(openMessage(m.ciphertext, myDirId, secretKey, senderKeys))
+            ? parseMediaMeta(openForMe(user?.id ?? '', m.ciphertext, myDirId, senderKeys))
             : null;
         return {
           ...base,
@@ -231,7 +230,7 @@ export function ChatPanel({
         ...base,
         text:
           m.ciphertext && secretKey
-            ? openMessage(m.ciphertext, myDirId, secretKey, senderKeys)
+            ? openForMe(user?.id ?? '', m.ciphertext, myDirId, senderKeys)
             : (m.text ?? null),
       };
     },
@@ -353,7 +352,11 @@ export function ChatPanel({
       active.kind === 'team'
         ? new Set([...(teams.find((t) => t.id === active.id)?.agentIds ?? []), myDirId])
         : new Set([active.id, myDirId]);
-    return directory.filter((e) => ids.has(e.id)).map((e) => ({ id: e.id, publicKey: e.publicKey }));
+    // Fase 5e-2 — não selar para chaves revogadas (o destinatário só volta a receber
+    // após rotacionar, o que limpa a revogação no diretório).
+    return directory
+      .filter((e) => ids.has(e.id) && !e.revoked)
+      .map((e) => ({ id: e.id, publicKey: e.publicKey }));
   }
 
   async function handleSend() {
