@@ -4,7 +4,6 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { saveSession } from '@/lib/auth';
-import { provisionKeys } from '@/lib/e2ee';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -20,11 +19,8 @@ export default function LoginPage() {
     try {
       const res = await api.login(username, password);
       saveSession(res);
-      // Provisiona a chave E2EE do operador (não bloqueia o login se falhar — a
-      // cifra do broadcast tolera ausência de chave até o próximo provisionamento).
-      await provisionKeys(res.user.id).catch((err) =>
-        console.warn('[e2ee] falha ao provisionar chave:', err),
-      );
+      // A chave E2EE é criada/migrada/desbloqueada pelo E2eeUnlockGate (Fase 5e-1),
+      // que abre o modal de senha na primeira página autenticada — não mais aqui.
       router.replace('/operations');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Falha no login');
