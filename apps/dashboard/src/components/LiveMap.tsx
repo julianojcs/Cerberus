@@ -88,20 +88,30 @@ function syncTrails(map: MlMap, trails: AgentTrails): void {
   source?.setData(toFeatureCollection(trails));
 }
 
-/** Zona (geofence) circular plotada no mapa. */
+/**
+ * Zona (geofence) plotada no mapa — multiformato (Fase 4). Círculo/retângulo usam
+ * `lng`/`lat` como centro; polígono usa `vertices`. `shape` ausente ⇒ círculo.
+ */
 export interface GeofenceCircle {
   id: string;
-  lng: number;
-  lat: number;
-  radiusMeters: number;
   name: string;
   color?: string; // hex (tom 500 resolvido da familia Tailwind)
+  shape?: string; // 'circle' | 'rectangle' | 'polygon'
+  lng?: number;
+  lat?: number;
+  radiusMeters?: number; // círculo
+  widthMeters?: number; // retângulo
+  heightMeters?: number;
+  rotationDeg?: number;
+  vertices?: [number, number][]; // polígono [[lng,lat],…]
 }
+
+const EARTH_R_M = 6371000;
+const M_PER_DEG_LAT_R = 110540;
 
 /** Anel poligonal aproximando um círculo de `radiusMeters` (MapLibre não tem círculo em metros). */
 function circleRing(lng: number, lat: number, radiusMeters: number, points = 64): number[][] {
-  const earthR = 6371000;
-  const latR = (radiusMeters / earthR) * (180 / Math.PI);
+  const latR = (radiusMeters / EARTH_R_M) * (180 / Math.PI);
   const lngR = latR / Math.cos((lat * Math.PI) / 180);
   const ring: number[][] = [];
   for (let i = 0; i <= points; i++) {
@@ -111,13 +121,55 @@ function circleRing(lng: number, lat: number, radiusMeters: number, points = 64)
   return ring;
 }
 
+/** Anel de um retângulo (metros locais rotacionados `+rotationDeg` CCW → lng/lat). */
+function rectangleRing(
+  lng: number,
+  lat: number,
+  w: number,
+  h: number,
+  rotationDeg: number,
+): number[][] {
+  const th = (rotationDeg * Math.PI) / 180;
+  const cos = Math.cos(th);
+  const sin = Math.sin(th);
+  const hw = w / 2;
+  const hh = h / 2;
+  const mPerLng = 111320 * Math.cos((lat * Math.PI) / 180);
+  const corners: [number, number][] = [
+    [-hw, -hh],
+    [hw, -hh],
+    [hw, hh],
+    [-hw, hh],
+  ];
+  const ring = corners.map(([x, y]) => {
+    const east = x * cos - y * sin;
+    const north = x * sin + y * cos;
+    return [lng + east / mPerLng, lat + north / M_PER_DEG_LAT_R];
+  });
+  ring.push(ring[0]); // fecha o anel
+  return ring;
+}
+
+/** Anel (fechado) da zona conforme a forma. */
+function ringFor(g: GeofenceCircle): number[][] {
+  if (g.shape === 'polygon' && g.vertices && g.vertices.length >= 3) {
+    const ring: number[][] = g.vertices.map(([x, y]) => [x, y]);
+    ring.push(ring[0]);
+    return ring;
+  }
+  if (g.shape === 'rectangle' && g.lng != null && g.lat != null && g.widthMeters && g.heightMeters) {
+    return rectangleRing(g.lng, g.lat, g.widthMeters, g.heightMeters, g.rotationDeg ?? 0);
+  }
+  return circleRing(g.lng ?? 0, g.lat ?? 0, g.radiusMeters ?? 0);
+}
+
 function geofencesFC(geofences: GeofenceCircle[]): GeoJSON.FeatureCollection {
   return {
     type: 'FeatureCollection',
     features: geofences.map((g) => ({
       type: 'Feature',
       properties: { name: g.name, color: g.color ?? '#22c55e' },
-      geometry: { type: 'Polygon', coordinates: [circleRing(g.lng, g.lat, g.radiusMeters)] },
+      geometry: { type: 'Polygon', coordinates: [ringFor(g)] },
     })),
   };
 }
@@ -133,6 +185,8 @@ export interface EditGeofence {
   lng: number;
   lat: number;
   radiusMeters: number;
+  /** Fase 4: forma. O handle de raio (borda) só aparece no círculo. */
+  shape?: string;
 }
 
 const EARTH_R = 6371000;
@@ -475,28 +529,31 @@ export function LiveMap({
     center.on('dragend', () => (draggingRef.current = null));
     editCenterRef.current = center;
 
-    // Borda — arrastar para REDIMENSIONAR o raio.
-    const eEl = document.createElement('div');
-    eEl.title = 'Arraste para redimensionar';
-    eEl.style.cssText =
-      'cursor:ew-resize;width:16px;height:16px;border-radius:50%;background:#fff;border:3px solid #3fb950;box-shadow:0 0 6px rgba(0,0,0,.6);';
-    const edge = new maplibregl.Marker({ element: eEl, draggable: true })
-      .setLngLat(eastPoint(editGeofence.lng, editGeofence.lat, editGeofence.radiusMeters))
-      .addTo(map);
-    edge.on('dragstart', () => (draggingRef.current = 'edge'));
-    edge.on('drag', () => {
-      const cur = editGeoRef.current;
-      if (!cur) return;
-      const e = edge.getLngLat();
-      const r = haversineMeters([cur.lng, cur.lat], [e.lng, e.lat]);
-      editCbRef.current.resize?.(Math.max(1, Math.round(r)));
-    });
-    edge.on('dragend', () => (draggingRef.current = null));
-    editEdgeRef.current = edge;
+    // Borda — arrastar para REDIMENSIONAR o raio. Só CÍRCULO (retângulo/polígono
+    // ajustam por outros controles). Move (centro) vale para todas as formas.
+    if ((editGeofence.shape ?? 'circle') === 'circle') {
+      const eEl = document.createElement('div');
+      eEl.title = 'Arraste para redimensionar';
+      eEl.style.cssText =
+        'cursor:ew-resize;width:16px;height:16px;border-radius:50%;background:#fff;border:3px solid #3fb950;box-shadow:0 0 6px rgba(0,0,0,.6);';
+      const edge = new maplibregl.Marker({ element: eEl, draggable: true })
+        .setLngLat(eastPoint(editGeofence.lng, editGeofence.lat, editGeofence.radiusMeters))
+        .addTo(map);
+      edge.on('dragstart', () => (draggingRef.current = 'edge'));
+      edge.on('drag', () => {
+        const cur = editGeoRef.current;
+        if (!cur) return;
+        const e = edge.getLngLat();
+        const r = haversineMeters([cur.lng, cur.lat], [e.lng, e.lat]);
+        editCbRef.current.resize?.(Math.max(1, Math.round(r)));
+      });
+      edge.on('dragend', () => (draggingRef.current = null));
+      editEdgeRef.current = edge;
+    }
 
     return () => {
       center.remove();
-      edge.remove();
+      editEdgeRef.current?.remove();
       editCenterRef.current = null;
       editEdgeRef.current = null;
     };

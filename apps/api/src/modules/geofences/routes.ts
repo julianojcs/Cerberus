@@ -1,9 +1,9 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { Types } from 'mongoose';
-import { Role } from '@cerberus/shared';
+import { GeofenceShape, Role } from '@cerberus/shared';
 import { Alert, Geofence, GeofenceMembership, Position } from '../../models/index.js';
-import { detectGeofenceEvents } from './detect.js';
+import { detectGeofenceEvents, type GeofenceLike } from './detect.js';
 import { assertOperationScope } from '../scope.js';
 
 // Cor = token de familia da paleta Tailwind (o dashboard restringe as opcoes).
@@ -12,21 +12,73 @@ const colorSchema = z
   .regex(/^[a-z]+$/)
   .max(30);
 
-const createSchema = z.object({
-  name: z.string().min(1).max(120),
-  lng: z.number().min(-180).max(180),
-  lat: z.number().min(-90).max(90),
-  radiusMeters: z.number().min(1).max(100000),
+const shapes = Object.values(GeofenceShape) as [string, ...string[]];
+const lngSchema = z.number().min(-180).max(180);
+const latSchema = z.number().min(-90).max(90);
+const vertexSchema = z.tuple([lngSchema, latSchema]);
+
+/** Base (círculo/retângulo/polígono) — geometria por forma, validada no superRefine. */
+const geometryFields = {
+  lng: lngSchema.optional(),
+  lat: latSchema.optional(),
+  radiusMeters: z.number().min(1).max(100000).optional(),
+  widthMeters: z.number().min(1).max(200000).optional(),
+  heightMeters: z.number().min(1).max(200000).optional(),
+  rotationDeg: z.number().min(-360).max(360).optional(),
+  vertices: z.array(vertexSchema).min(3).max(500).optional(),
   color: colorSchema.optional(),
-});
+};
+
+const createSchema = z
+  .object({
+    name: z.string().min(1).max(120),
+    shape: z.enum(shapes).default(GeofenceShape.CIRCLE),
+    ...geometryFields,
+  })
+  .superRefine((d, ctx) => {
+    if (d.shape === GeofenceShape.CIRCLE && (d.lng == null || d.lat == null || d.radiusMeters == null))
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Círculo exige lng/lat/radiusMeters' });
+    if (
+      d.shape === GeofenceShape.RECTANGLE &&
+      (d.lng == null || d.lat == null || d.widthMeters == null || d.heightMeters == null)
+    )
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Retângulo exige lng/lat/widthMeters/heightMeters',
+      });
+    if (d.shape === GeofenceShape.POLYGON && (!d.vertices || d.vertices.length < 3))
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Polígono exige vertices (≥3)' });
+  });
 
 const patchSchema = z.object({
   name: z.string().min(1).max(120).optional(),
-  lng: z.number().min(-180).max(180).optional(),
-  lat: z.number().min(-90).max(90).optional(),
-  radiusMeters: z.number().min(1).max(100000).optional(),
-  color: colorSchema.optional(),
+  shape: z.enum(shapes).optional(),
+  ...geometryFields,
 });
+
+/** Centroide de um anel de vértices (âncora/center do polígono). */
+function centroid(vertices: number[][]): [number, number] {
+  let lng = 0;
+  let lat = 0;
+  for (const v of vertices) {
+    lng += v[0] ?? 0;
+    lat += v[1] ?? 0;
+  }
+  return [lng / vertices.length, lat / vertices.length];
+}
+
+/** GeoJSON Point de âncora: [lng,lat] (círculo/retângulo) ou centroide (polígono). */
+function centerFor(d: {
+  shape?: string;
+  lng?: number;
+  lat?: number;
+  vertices?: number[][];
+}): { type: 'Point'; coordinates: number[] } | undefined {
+  if (d.shape === GeofenceShape.POLYGON && d.vertices)
+    return { type: 'Point', coordinates: centroid(d.vertices) };
+  if (d.lng != null && d.lat != null) return { type: 'Point', coordinates: [d.lng, d.lat] };
+  return undefined;
+}
 
 /**
  * Geofencing (Fase 4): zonas circulares por operação. A criação/remoção é
@@ -47,8 +99,13 @@ export async function geofenceRoutes(app: FastifyInstance): Promise<void> {
       const g = await Geofence.create({
         operationId: id,
         name: body.data.name,
-        center: { type: 'Point', coordinates: [body.data.lng, body.data.lat] },
+        shape: body.data.shape,
+        center: centerFor(body.data),
         radiusMeters: body.data.radiusMeters,
+        widthMeters: body.data.widthMeters,
+        heightMeters: body.data.heightMeters,
+        rotationDeg: body.data.rotationDeg,
+        vertices: body.data.vertices,
         color: body.data.color ?? 'green',
       });
       return reply.code(201).send(serializeGeofence(g.toObject()));
@@ -81,9 +138,17 @@ export async function geofenceRoutes(app: FastifyInstance): Promise<void> {
 
       const update: Record<string, unknown> = {};
       if (body.data.name !== undefined) update.name = body.data.name;
+      if (body.data.shape !== undefined) update.shape = body.data.shape;
       if (body.data.radiusMeters !== undefined) update.radiusMeters = body.data.radiusMeters;
+      if (body.data.widthMeters !== undefined) update.widthMeters = body.data.widthMeters;
+      if (body.data.heightMeters !== undefined) update.heightMeters = body.data.heightMeters;
+      if (body.data.rotationDeg !== undefined) update.rotationDeg = body.data.rotationDeg;
       if (body.data.color !== undefined) update.color = body.data.color;
-      if (body.data.lng !== undefined && body.data.lat !== undefined) {
+      // Polígono: vertices + center = centroide. (Tem precedência sobre lng/lat abaixo.)
+      if (body.data.vertices !== undefined) {
+        update.vertices = body.data.vertices;
+        update.center = { type: 'Point', coordinates: centroid(body.data.vertices) };
+      } else if (body.data.lng !== undefined && body.data.lat !== undefined) {
         update.center = { type: 'Point', coordinates: [body.data.lng, body.data.lat] };
       }
 
@@ -126,7 +191,10 @@ export async function geofenceRoutes(app: FastifyInstance): Promise<void> {
       await Alert.deleteMany({ operationId: id });
       await GeofenceMembership.deleteMany({ operationId: id });
 
-      const geofences = await Geofence.find({ operationId: id, active: true }).lean();
+      // Cast: o typing lean do Mongoose p/ arrays aninhados (vertices) não casa com
+      // GeofenceLike, mas os dados em runtime são corretos.
+      const geofences = (await Geofence.find({ operationId: id, active: true })
+        .lean()) as unknown as GeofenceLike[];
       if (geofences.length === 0) return { alertsCreated: 0 };
 
       const positions = await Position.find({ operationId: id }).sort({ capturedAt: 1 }).lean();
@@ -183,9 +251,14 @@ function serializeGeofence(g: Record<string, unknown>) {
     id: String(g._id),
     operationId: g.operationId,
     name: g.name,
+    shape: (g.shape as string | undefined) ?? 'circle', // retrocompat: docs antigos sem shape
     lng: center?.coordinates?.[0],
     lat: center?.coordinates?.[1],
     radiusMeters: g.radiusMeters,
+    widthMeters: g.widthMeters,
+    heightMeters: g.heightMeters,
+    rotationDeg: g.rotationDeg,
+    vertices: g.vertices,
     color: g.color ?? 'green',
     active: g.active,
   };

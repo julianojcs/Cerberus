@@ -1067,6 +1067,126 @@ describe('geofencing + alertas', () => {
     });
     expect((list.json() as Array<{ id: string }>).some((g) => g.id === geofenceId)).toBe(false);
   });
+
+  it('cria retângulo via API (201) e detecta enter/exit (replay)', async () => {
+    const create = await app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/geofences`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        name: 'RetânguloAlfa',
+        shape: 'rectangle',
+        lng: -44.5,
+        lat: -20.5,
+        widthMeters: 200,
+        heightMeters: 200,
+        rotationDeg: 30,
+        color: 'amber',
+      },
+    });
+    expect(create.statusCode).toBe(201);
+    expect(create.json()).toMatchObject({ shape: 'rectangle', widthMeters: 200, rotationDeg: 30 });
+
+    const { Position } = await import('../models/index.js');
+    await Position.create({
+      operationId,
+      agentId: 'AG-RECT',
+      location: { type: 'Point', coordinates: [-44.5, -20.5] }, // centro → dentro
+      capturedAt: new Date('2026-07-11T11:00:00Z'),
+      receivedAt: new Date(),
+    });
+    await Position.create({
+      operationId,
+      agentId: 'AG-RECT',
+      location: { type: 'Point', coordinates: [-44.0, -20.0] }, // longe → fora
+      capturedAt: new Date('2026-07-11T11:01:00Z'),
+      receivedAt: new Date(),
+    });
+
+    const rec = await app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/geofences/recompute`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(rec.statusCode).toBe(200);
+
+    const alerts = await app.inject({
+      method: 'GET',
+      url: `/operations/${operationId}/alerts`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const mine = (alerts.json() as Array<{ type: string; agentId: string }>)
+      .filter((a) => a.agentId === 'AG-RECT')
+      .map((a) => a.type);
+    expect(mine).toEqual(expect.arrayContaining(['enter', 'exit']));
+  });
+
+  it('cria polígono via API (201) e detecta enter/exit (replay, ray-casting)', async () => {
+    const create = await app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/geofences`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        name: 'PolígonoAlfa',
+        shape: 'polygon',
+        // Quadrado ~2 km em torno de (-45.5, -21.5).
+        vertices: [
+          [-45.51, -21.51],
+          [-45.49, -21.51],
+          [-45.49, -21.49],
+          [-45.51, -21.49],
+        ],
+        color: 'purple',
+      },
+    });
+    expect(create.statusCode).toBe(201);
+    expect(create.json()).toMatchObject({ shape: 'polygon' });
+    expect(create.json().vertices).toHaveLength(4);
+
+    const { Position } = await import('../models/index.js');
+    await Position.create({
+      operationId,
+      agentId: 'AG-POLY',
+      location: { type: 'Point', coordinates: [-45.5, -21.5] }, // dentro
+      capturedAt: new Date('2026-07-11T12:00:00Z'),
+      receivedAt: new Date(),
+    });
+    await Position.create({
+      operationId,
+      agentId: 'AG-POLY',
+      location: { type: 'Point', coordinates: [-45.0, -21.0] }, // fora
+      capturedAt: new Date('2026-07-11T12:01:00Z'),
+      receivedAt: new Date(),
+    });
+
+    const rec = await app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/geofences/recompute`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(rec.statusCode).toBe(200);
+
+    const alerts = await app.inject({
+      method: 'GET',
+      url: `/operations/${operationId}/alerts`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const mine = (alerts.json() as Array<{ type: string; agentId: string }>)
+      .filter((a) => a.agentId === 'AG-POLY')
+      .map((a) => a.type);
+    expect(mine).toEqual(expect.arrayContaining(['enter', 'exit']));
+  });
+
+  it('círculo sem shape ainda cria (retrocompat) e serializa shape=circle', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/geofences`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'CírculoLegado', lng: -43.9, lat: -19.9, radiusMeters: 100 },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().shape).toBe('circle');
+  });
 });
 
 describe('configurações do sistema', () => {

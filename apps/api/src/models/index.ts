@@ -1,5 +1,12 @@
 import { Schema, model, type InferSchemaType } from 'mongoose';
-import { ActivityType, MessageType, OperationStatus, OperationType, Role } from '@cerberus/shared';
+import {
+  ActivityType,
+  GeofenceShape,
+  MessageType,
+  OperationStatus,
+  OperationType,
+  Role,
+} from '@cerberus/shared';
 
 /* ------------------------------------------------------------------ Users */
 
@@ -124,17 +131,26 @@ messageSchema.index({ operationId: 1, recipientId: 1, capturedAt: -1 });
 export type MessageDoc = InferSchemaType<typeof messageSchema>;
 export const MessageModel = model('Message', messageSchema);
 
-// --- Geofencing (Fase 4) ---
+// --- Geofencing (Fase 4: multiformato) ---
 const geofenceSchema = new Schema(
   {
     operationId: { type: String, required: true, index: true },
     name: { type: String, required: true },
-    /** Centro da zona (círculo): GeoJSON Point [lng, lat]. */
+    /** Formato: círculo (padrão/retrocompat) | retângulo | polígono. */
+    shape: { type: String, enum: Object.values(GeofenceShape), default: GeofenceShape.CIRCLE },
+    /** Centro (círculo/retângulo: âncora; polígono: centroide) — GeoJSON Point [lng, lat]. */
     center: {
-      type: { type: String, enum: ['Point'], required: true },
-      coordinates: { type: [Number], required: true },
+      type: { type: String, enum: ['Point'] },
+      coordinates: { type: [Number] },
     },
-    radiusMeters: { type: Number, required: true, min: 1 },
+    /** Círculo. */
+    radiusMeters: { type: Number, min: 1 },
+    /** Retângulo (metros locais + rotação em graus, sentido anti-horário). */
+    widthMeters: { type: Number, min: 1 },
+    heightMeters: { type: Number, min: 1 },
+    rotationDeg: { type: Number, default: 0 },
+    /** Polígono livre — anel de vértices [[lng, lat], …]. */
+    vertices: { type: [[Number]] },
     /** Cor PRIMARIA da zona: token de familia da paleta Tailwind (ex.: 'green'). */
     color: { type: String, default: 'green' },
     active: { type: Boolean, default: true },

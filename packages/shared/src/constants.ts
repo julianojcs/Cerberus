@@ -30,6 +30,14 @@ export const OperationStatus = {
 } as const;
 export type OperationStatus = (typeof OperationStatus)[keyof typeof OperationStatus];
 
+/** Formato de uma zona (geofence). Sem `shape` ⇒ círculo (retrocompat). */
+export const GeofenceShape = {
+  CIRCLE: 'circle',
+  RECTANGLE: 'rectangle',
+  POLYGON: 'polygon',
+} as const;
+export type GeofenceShape = (typeof GeofenceShape)[keyof typeof GeofenceShape];
+
 /**
  * Estado de movimento reportado pelo reconhecimento de atividade do dispositivo
  * (acelerômetro/giroscópio). Dirige o gerenciamento dinâmico de energia.
