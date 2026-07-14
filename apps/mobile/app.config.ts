@@ -80,6 +80,10 @@ const config: ExpoConfig = {
     // automaticamente (ver src/config.ts). Definir só para túnel/produção.
     apiUrl: process.env.EXPO_PUBLIC_API_URL,
     mqttWsUrl: process.env.EXPO_PUBLIC_MQTT_WS_URL,
+    // Credencial estática do broker gerenciado (HiveMQ Cloud não faz auth JWT).
+    // Quando definida, o app conecta com ela; senão usa jwt+token (on-prem).
+    mqttUsername: process.env.EXPO_PUBLIC_MQTT_USERNAME,
+    mqttPassword: process.env.EXPO_PUBLIC_MQTT_PASSWORD,
   },
 };
 
