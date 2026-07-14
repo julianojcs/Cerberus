@@ -12,7 +12,7 @@ import {
   type Settings,
 } from '@/lib/api';
 import { getToken, getUser } from '@/lib/auth';
-import { getSecretKey } from '@/lib/e2ee';
+import { getSecretKey, E2EE_UNLOCK_EVENT } from '@/lib/e2ee';
 import {
   GEOFENCE_SEVERITY_RANK,
   openMessage,
@@ -309,6 +309,14 @@ export default function LiveOperationPage() {
       })
       .catch(() => {});
   }, [operationId]);
+
+  // Fase 5e-1 — ao DESBLOQUEAR a chave, re-decifra o histórico (antes, o painel
+  // decifrava com a chave ainda travada e mostrava "não foi possível decifrar").
+  useEffect(() => {
+    const rerun = () => refreshMessages();
+    window.addEventListener(E2EE_UNLOCK_EVENT, rerun);
+    return () => window.removeEventListener(E2EE_UNLOCK_EVENT, rerun);
+  }, [refreshMessages]);
 
   // Snapshot inicial (última posição conhecida) via REST + stream ao vivo via MQTT.
   useEffect(() => {

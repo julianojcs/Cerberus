@@ -11,7 +11,7 @@ import {
 } from '@cerberus/shared';
 import { api } from '@/lib/api';
 import { getUser } from '@/lib/auth';
-import { getSecretKey } from '@/lib/e2ee';
+import { getSecretKey, E2EE_UNLOCK_EVENT } from '@/lib/e2ee';
 import { resolveColor } from '@/lib/tailwind-colors';
 import { AuthImage } from '@/components/AuthImage';
 import type { IncomingMessage } from '@/lib/mqtt';
@@ -73,7 +73,17 @@ export function ChatPanel({
   const user = useMemo(() => getUser(), []);
   const myDirId = user?.agentId ?? user?.id ?? '';
   const isAdmin = user?.role === Role.ADMIN || user?.role === Role.SUPERADMIN;
-  const secretKey = useMemo(() => (user ? getSecretKey(user.id) : null), [user]);
+  // Fase 5e-1 — a chave passa a existir só após o desbloqueio; segue o evento de
+  // unlock (senão o painel decifraria com a chave ainda travada e mostraria erro).
+  const [secretKey, setSecretKey] = useState<string | null>(() =>
+    user ? getSecretKey(user.id) : null,
+  );
+  useEffect(() => {
+    const sync = () => setSecretKey(user ? getSecretKey(user.id) : null);
+    sync();
+    window.addEventListener(E2EE_UNLOCK_EVENT, sync);
+    return () => window.removeEventListener(E2EE_UNLOCK_EVENT, sync);
+  }, [user]);
 
   const [teams, setTeams] = useState<TeamInfo[]>([]);
   const [directory, setDirectory] = useState<KeyDirectoryEntry[]>([]);

@@ -15,6 +15,12 @@ import { api } from './api';
 // Chave em claro só em memória, por usuário. Limpa no lock/logout/reload.
 const unlocked = new Map<string, string>();
 
+/** Evento disparado quando a chave é desbloqueada — os painéis re-decifram. */
+export const E2EE_UNLOCK_EVENT = 'cerberus:e2ee-unlock';
+function notifyUnlock(): void {
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event(E2EE_UNLOCK_EVENT));
+}
+
 const ENC_PREFIX = 'cerberus_e2ee_enc:'; // blob cifrado (novo)
 const SK_PREFIX = 'cerberus_e2ee_sk:'; // texto claro LEGADO (fonte da migração)
 
@@ -127,6 +133,7 @@ export async function unlock(userId: string, passphrase: string): Promise<boolea
   const sk = await decryptSecret(JSON.parse(raw) as EncBlob, passphrase);
   if (!sk) return false;
   unlocked.set(userId, sk);
+  notifyUnlock();
   await registerPublic(userId); // reafirma a pública no diretório
   return true;
 }
@@ -139,6 +146,7 @@ export async function migrateLegacy(userId: string, passphrase: string): Promise
   localStorage.setItem(encKey(userId), JSON.stringify(blob));
   localStorage.removeItem(skKey(userId)); // apaga o texto claro
   unlocked.set(userId, plain);
+  notifyUnlock();
   await registerPublic(userId);
   return true;
 }
@@ -149,6 +157,7 @@ export async function createProtectedKeys(userId: string, passphrase: string): P
   const blob = await encryptSecret(kp.secretKey, passphrase);
   localStorage.setItem(encKey(userId), JSON.stringify(blob));
   unlocked.set(userId, kp.secretKey);
+  notifyUnlock();
   await api.registerPublicKey(kp.publicKey);
 }
 
