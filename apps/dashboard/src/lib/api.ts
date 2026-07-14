@@ -100,6 +100,25 @@ export async function fetchAuthedBytes(path: string): Promise<Uint8Array> {
   return new Uint8Array(await res.arrayBuffer());
 }
 
+/**
+ * Upload multipart autenticado (mídia E2EE). NÃO usa `request()` — este força
+ * `Content-Type: application/json`, o que quebraria a detecção de boundary do
+ * multipart. Aqui o browser define o `Content-Type: multipart/form-data; boundary=…`.
+ */
+async function uploadForm<T>(path: string, form: FormData): Promise<T> {
+  const token = getToken();
+  const res = await fetch(`${API_URL}${path}`, {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: form,
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(body.error ?? `Erro ${res.status}`);
+  }
+  return res.json() as Promise<T>;
+}
+
 export const api = {
   login: (username: string, password: string) =>
     request<LoginResponse>('/auth/login', {
@@ -176,6 +195,15 @@ export const api = {
     request<TacticalMessage>(
       `/operations/${operationId}/agents/${encodeURIComponent(agentId)}/messages`,
       { method: 'POST', body: JSON.stringify({ ciphertext }) },
+    ),
+  // Upload de mídia E2EE escopada (Fase 3b-2). `form` = FormData com `ciphertext`
+  // (envelope) ANTES do `file` (blob cifrado). Multipart via uploadForm (não request).
+  uploadTeamMedia: (operationId: string, teamId: string, form: FormData) =>
+    uploadForm<TacticalMessage>(`/operations/${operationId}/teams/${teamId}/media`, form),
+  uploadAgentMedia: (operationId: string, agentId: string, form: FormData) =>
+    uploadForm<TacticalMessage>(
+      `/operations/${operationId}/agents/${encodeURIComponent(agentId)}/media`,
+      form,
     ),
   // Caminho da mídia no GridFS (use com fetchBlobUrl por causa do Authorization).
   mediaPath: (operationId: string, fileId: string) => `/operations/${operationId}/media/${fileId}`,

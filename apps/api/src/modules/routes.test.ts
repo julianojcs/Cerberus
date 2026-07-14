@@ -1926,3 +1926,107 @@ describe('mensageria de equipe/DM (Fase 2b)', () => {
     expect(res.statusCode).toBe(200);
   });
 });
+
+describe('mídia de equipe/DM (Fase 3b-2)', () => {
+  let teamId: string;
+  let emptyTeamId: string;
+  const CT = 'ciphertext-media-envelope';
+  const fileBuf = Buffer.from([0x01, 0x02, 0x03, 0x04]);
+
+  function mediaForm(): FormData {
+    const form = new FormData();
+    // O envelope vem ANTES do arquivo (para o multipart populá-lo em file.fields).
+    form.append('ciphertext', CT);
+    form.append('file', fileBuf, { filename: 'm.bin', contentType: 'application/octet-stream' });
+    return form;
+  }
+
+  beforeAll(async () => {
+    const t1 = await app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/teams`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'MediaTeam', agentIds: ['AG-0456'] },
+    });
+    teamId = t1.json().id;
+    const t2 = await app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/teams`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'MediaEmpty', agentIds: [] },
+    });
+    emptyTeamId = t2.json().id;
+  });
+
+  it('membro envia mídia à equipe (201) com teamId', async () => {
+    const form = mediaForm();
+    const res = await app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/teams/${teamId}/media`,
+      headers: { ...form.getHeaders(), authorization: `Bearer ${agentToken}` },
+      payload: form.getBuffer(),
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toMatchObject({ type: 'media', teamId });
+    expect(res.json().mediaRef).toBeTruthy();
+  });
+
+  it('agente fora da equipe não envia mídia (403)', async () => {
+    const form = mediaForm();
+    const res = await app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/teams/${emptyTeamId}/media`,
+      headers: { ...form.getHeaders(), authorization: `Bearer ${agentToken}` },
+      payload: form.getBuffer(),
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('mídia p/ equipe inexistente (404)', async () => {
+    const form = mediaForm();
+    const res = await app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/teams/ffffffffffffffffffffffff/media`,
+      headers: { ...form.getHeaders(), authorization: `Bearer ${token}` },
+      payload: form.getBuffer(),
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('admin envia mídia DM a um agente (201) com recipientId', async () => {
+    const form = mediaForm();
+    const res = await app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/agents/AG-0456/media`,
+      headers: { ...form.getHeaders(), authorization: `Bearer ${token}` },
+      payload: form.getBuffer(),
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toMatchObject({ type: 'media', recipientId: 'AG-0456' });
+  });
+
+  it('agente não envia mídia DM (403 — requireRole ADMIN)', async () => {
+    const form = mediaForm();
+    const res = await app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/agents/AG-0456/media`,
+      headers: { ...form.getHeaders(), authorization: `Bearer ${agentToken}` },
+      payload: form.getBuffer(),
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('histórico da equipe inclui a mídia (com teamId + mediaRef)', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/operations/${operationId}/teams/${teamId}/messages`,
+      headers: { authorization: `Bearer ${agentToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const media = (res.json() as Array<{ type: string; mediaRef?: string; teamId?: string }>).find(
+      (m) => m.type === 'media',
+    );
+    expect(media?.teamId).toBe(teamId);
+    expect(media?.mediaRef).toBeTruthy();
+  });
+});
