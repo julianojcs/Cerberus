@@ -8,15 +8,19 @@ import { getToken, getUser } from '@/lib/auth';
 import { assignAgentColors, buildRoutes, type Route } from '@/lib/routes';
 import { resolveColor } from '@/lib/tailwind-colors';
 import { AdminHeader } from '@/components/AdminHeader';
-import { LiveMap, type AgentPoint, type PlottedRoute } from '@/components/LiveMap';
+import { LiveMap, type AgentPoint, type AgentTrails, type PlottedRoute } from '@/components/LiveMap';
 import { PeriodRange } from '@/components/PeriodRange';
 import { ColorPalettePicker } from '@/components/ColorPalettePicker';
 import { ResizableSidebar } from '@/components/ResizableSidebar';
 import { STATUS_LABELS } from '@/components/OperationFormModal';
+import { subscribeAllOperations, type LivePosition } from '@/lib/mqtt';
+import { Toggle } from '@/components/Toggle';
 
 const HISTORY_LIMIT = 5000;
 const HOUR_MS = 60 * 60 * 1000;
 const POLL_MS = 12_000;
+/** Máximo de pontos por trilha ao vivo (limita memória/render). */
+const MAX_LIVE_TRAIL = 2000;
 const COLORS_KEY = 'cerberus_admin_agent_colors'; // ≠ chave por-operação da live page
 const TEAM_COLORS_KEY = 'cerberus_admin_team_colors';
 const COLOR_MODE_KEY = 'cerberus_admin_color_mode';
@@ -48,6 +52,10 @@ export default function AdminMapPage() {
   // Histórico por operação (lazy: buscado na 1ª seleção) + últimas posições (poll).
   const [historyByOp, setHistoryByOp] = useState<Record<string, LatestPosition[]>>({});
   const [latestByOp, setLatestByOp] = useState<Record<string, LatestPosition[]>>({});
+  // Ao vivo (MQTT): trilha por agente crescendo + status da conexão ao barramento.
+  const [liveTrails, setLiveTrails] = useState<Record<string, [number, number][]>>({});
+  const [showLiveTrail, setShowLiveTrail] = useState(true);
+  const [liveConnected, setLiveConnected] = useState(false);
   const [settings, setSettings] = useState<Settings>({
     minRoutePoints: 5,
     connectRoutes: false,
@@ -132,6 +140,44 @@ export default function AdminMapPage() {
       if (timer) clearInterval(timer);
     };
   }, [router, refreshLatest]);
+
+  // AO VIVO: uma assinatura MQTT global (todas as operações). Cada posição atualiza
+  // o marcador (via latestByOp) na hora e estende a trilha do agente — entre os polls.
+  useEffect(() => {
+    if (!getToken() || getUser()?.role !== Role.SUPERADMIN) return;
+    const unsubscribe = subscribeAllOperations(
+      (pos: LivePosition) => {
+        setLatestByOp((prev) => {
+          const rest = (prev[pos.operationId] ?? []).filter((p) => p.agentId !== pos.agentId);
+          const merged: LatestPosition = {
+            id: `live-${pos.agentId}-${pos.capturedAt}`,
+            operationId: pos.operationId,
+            agentId: pos.agentId,
+            lng: pos.lng,
+            lat: pos.lat,
+            accuracy: pos.accuracy,
+            speed: pos.speed ?? undefined,
+            heading: pos.heading ?? undefined,
+            battery: pos.battery,
+            activity: pos.activity,
+            capturedAt: pos.capturedAt,
+          };
+          return { ...prev, [pos.operationId]: [...rest, merged] };
+        });
+        setLiveTrails((prev) => {
+          const cur = prev[pos.agentId] ?? [];
+          const next: [number, number][] = [...cur, [pos.lng, pos.lat]];
+          return {
+            ...prev,
+            [pos.agentId]: next.length > MAX_LIVE_TRAIL ? next.slice(-MAX_LIVE_TRAIL) : next,
+          };
+        });
+      },
+      getToken() ?? undefined,
+      setLiveConnected,
+    );
+    return unsubscribe;
+  }, []);
 
   // Lazy: garante o histórico de cada operação selecionada (busca uma vez).
   useEffect(() => {
@@ -267,6 +313,16 @@ export default function AdminMapPage() {
     }
     return out;
   }, [markerAgents, opById]);
+
+  // Trilha ao vivo → formato do mapa (1 traço por agente), só para agentes VISÍVEIS
+  // (markerAgents já aplicou os filtros de operação + equipe).
+  const liveTrailsForMap = useMemo<AgentTrails>(() => {
+    const out: AgentTrails = {};
+    for (const [id, pts] of Object.entries(liveTrails)) {
+      if (markerAgents.has(id)) out[id] = [pts];
+    }
+    return out;
+  }, [liveTrails, markerAgents]);
 
   // Rotas exibíveis (≥ minRoutePoints) por agente.
   const visibleRoutes = useMemo(() => {
@@ -645,10 +701,38 @@ export default function AdminMapPage() {
           </div>
 
           {/* Agentes agrupados por operação */}
-          <h3 style={{ margin: '0 0 8px' }}>Agentes</h3>
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              gap: 8,
+              margin: '0 0 8px',
+            }}
+          >
+            <h3 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
+              Agentes
+              <span
+                title={liveConnected ? 'Barramento ao vivo conectado' : 'Barramento desconectado'}
+                style={{
+                  width: 8,
+                  height: 8,
+                  borderRadius: '50%',
+                  background: liveConnected ? 'var(--ok)' : 'var(--muted)',
+                  boxShadow: liveConnected ? '0 0 6px var(--ok)' : 'none',
+                }}
+              />
+            </h3>
+            <Toggle
+              checked={showLiveTrail}
+              onChange={setShowLiveTrail}
+              label="Trilha ao vivo"
+              title="Desenha o caminho de cada agente ao vivo, conforme se deslocam"
+            />
+          </div>
           <p className="muted" style={{ fontSize: 12, margin: '0 0 8px' }}>
-            Selecione um agente para plotar suas rotas (cor própria). Ajuste o período na barra do
-            topo do mapa.
+            Marcadores e <strong>trilhas</strong> atualizam ao vivo (MQTT). Selecione um agente para
+            plotar o histórico de rotas (cor própria); ajuste o período na barra do topo.
           </p>
           {groupOrder.length === 0 && (
             <p className="muted" style={{ fontSize: 13 }}>
@@ -847,6 +931,8 @@ export default function AdminMapPage() {
           <LiveMap
             agents={agents}
             routes={plottedRoutes}
+            trails={liveTrailsForMap}
+            showTrails={showLiveTrail}
             agentColors={agentColors}
             fitNonce={fitNonce}
             fitPoints={fitPoints}

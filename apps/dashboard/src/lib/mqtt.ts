@@ -1,5 +1,6 @@
 import mqtt, { type MqttClient } from 'mqtt';
 import {
+  bridgeIngestTopic,
   operationWildcardTopic,
   parseAgentTopic,
   parseTeamTopic,
@@ -123,6 +124,47 @@ export function subscribeToOperation(
     const teamTopic = parseTeamTopic(topic);
     if (teamTopic && teamTopic.channel === 'broadcast') {
       deliverMessage(payload, onMessage, { scope: 'equipe', teamId: teamTopic.teamId });
+    }
+  });
+
+  return () => {
+    client.end(true);
+  };
+}
+
+/**
+ * Assinatura GLOBAL (console do SuperAdmin): UMA conexão que assina todas as
+ * operações (`operacao/+/agente/+/#`) e entrega só as posições ao vivo. O SA
+ * transcende o escopo por design (ver isSuperAdmin) e a credencial estática do
+ * broker já é privilegiada — então o mapa global vê tudo com 1 conexão, em vez
+ * de N (uma por operação). Só posições; ignora chat/status.
+ */
+export function subscribeAllOperations(
+  onPosition: (pos: LivePosition) => void,
+  token?: string,
+  onStatus?: (connected: boolean) => void,
+): () => void {
+  const client: MqttClient = mqtt.connect(MQTT_WS_URL, {
+    username: MQTT_USERNAME || (token ? 'jwt' : undefined),
+    password: MQTT_USERNAME ? MQTT_PASSWORD : token,
+    reconnectPeriod: 2000,
+  });
+
+  client.on('connect', () => {
+    onStatus?.(true);
+    client.subscribe(bridgeIngestTopic(), { qos: 1 });
+  });
+  client.on('close', () => onStatus?.(false));
+  client.on('offline', () => onStatus?.(false));
+
+  client.on('message', (topic, payload) => {
+    const parsed = parseAgentTopic(topic);
+    if (!parsed || parsed.channel !== AgentChannel.POSICAO) return;
+    try {
+      const sample = positionSampleSchema.parse(JSON.parse(payload.toString()));
+      onPosition({ ...sample, operationId: parsed.operationId, agentId: parsed.agentId });
+    } catch {
+      /* payload inválido — ignora */
     }
   });
 
