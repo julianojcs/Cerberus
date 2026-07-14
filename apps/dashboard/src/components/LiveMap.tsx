@@ -114,7 +114,7 @@ const EARTH_R_M = 6371000;
 const M_PER_DEG_LAT_R = 110540;
 
 /** Anel poligonal aproximando um círculo de `radiusMeters` (MapLibre não tem círculo em metros). */
-function circleRing(lng: number, lat: number, radiusMeters: number, points = 64): number[][] {
+export function circleRing(lng: number, lat: number, radiusMeters: number, points = 64): number[][] {
   const latR = (radiusMeters / EARTH_R_M) * (180 / Math.PI);
   const lngR = latR / Math.cos((lat * Math.PI) / 180);
   const ring: number[][] = [];
@@ -126,7 +126,7 @@ function circleRing(lng: number, lat: number, radiusMeters: number, points = 64)
 }
 
 /** Anel de um retângulo (metros locais rotacionados `+rotationDeg` CCW → lng/lat). */
-function rectangleRing(
+export function rectangleRing(
   lng: number,
   lat: number,
   w: number,
@@ -191,6 +191,8 @@ export interface EditGeofence {
   radiusMeters: number;
   /** Fase 4: forma. O handle de raio (borda) só aparece no círculo. */
   shape?: string;
+  /** Polígono (Fase 4b): vértices editáveis [[lng,lat],…]. */
+  vertices?: [number, number][];
 }
 
 const EARTH_R = 6371000;
@@ -231,6 +233,7 @@ export function LiveMap({
   editGeofence = null,
   onGeofenceMove,
   onGeofenceResize,
+  onGeofenceReshape,
   focus = null,
   fitNonce = 0,
   fitPoints,
@@ -248,6 +251,8 @@ export function LiveMap({
   editGeofence?: EditGeofence | null;
   onGeofenceMove?: (lng: number, lat: number) => void;
   onGeofenceResize?: (radiusMeters: number) => void;
+  /** Polígono (Fase 4b): emite a lista de vértices atualizada ao arrastar/adicionar/remover. */
+  onGeofenceReshape?: (vertices: [number, number][]) => void;
   focus?: { lng: number; lat: number; bearing: number; type: 'enter' | 'exit' } | null;
   /** Muda de valor → o mapa enquadra (fitBounds) todas as rotas plotadas. */
   fitNonce?: number;
@@ -273,12 +278,16 @@ export function LiveMap({
   // Handles de edição de geofence (centro = mover; borda = redimensionar).
   const editCenterRef = useRef<Marker | null>(null);
   const editEdgeRef = useRef<Marker | null>(null);
-  const draggingRef = useRef<'center' | 'edge' | null>(null);
+  // Polígono (4b): um marcador por vértice (arrastável) + um "add" no midpoint de cada aresta.
+  const editVertsRef = useRef<Marker[]>([]);
+  const editMidsRef = useRef<Marker[]>([]);
+  const dragVertexRef = useRef<number | null>(null);
+  const draggingRef = useRef<'center' | 'edge' | 'vertex' | null>(null);
   const focusMarkerRef = useRef<Marker | null>(null);
   const editGeoRef = useRef<EditGeofence | null>(editGeofence);
   editGeoRef.current = editGeofence;
-  const editCbRef = useRef({ move: onGeofenceMove, resize: onGeofenceResize });
-  editCbRef.current = { move: onGeofenceMove, resize: onGeofenceResize };
+  const editCbRef = useRef({ move: onGeofenceMove, resize: onGeofenceResize, reshape: onGeofenceReshape });
+  editCbRef.current = { move: onGeofenceMove, resize: onGeofenceResize, reshape: onGeofenceReshape };
   const fittedRef = useRef(false);
   const styleReadyRef = useRef(false);
   // Mantém a trilha/visibilidade correntes acessíveis ao handler de 'load'
@@ -518,7 +527,75 @@ export function LiveMap({
     editEdgeRef.current?.remove();
     editCenterRef.current = null;
     editEdgeRef.current = null;
+    editVertsRef.current.forEach((m) => m.remove());
+    editMidsRef.current.forEach((m) => m.remove());
+    editVertsRef.current = [];
+    editMidsRef.current = [];
     if (!editGeofence) return;
+
+    // POLÍGONO (4b): alça arrastável em cada vértice + alça "add" no midpoint de cada
+    // aresta (estilo clippy). Sem centro/borda — a forma é definida só pelos vértices.
+    if ((editGeofence.shape ?? 'circle') === 'polygon') {
+      const verts = editGeofence.vertices ?? [];
+      verts.forEach((v, i) => {
+        const vEl = document.createElement('div');
+        vEl.title = 'Arraste para mover · duplo-clique remove';
+        vEl.style.cssText =
+          'cursor:move;width:16px;height:16px;border-radius:50%;background:#fff;border:3px solid #3fb950;box-shadow:0 0 6px rgba(0,0,0,.6);';
+        const vm = new maplibregl.Marker({ element: vEl, draggable: true }).setLngLat(v).addTo(map);
+        vm.on('dragstart', () => {
+          draggingRef.current = 'vertex';
+          dragVertexRef.current = i;
+        });
+        vm.on('drag', () => {
+          const cur = editGeoRef.current;
+          if (!cur?.vertices) return;
+          const { lng, lat } = vm.getLngLat();
+          const next = cur.vertices.map((vv, k): [number, number] => (k === i ? [lng, lat] : vv));
+          editCbRef.current.reshape?.(next);
+        });
+        vm.on('dragend', () => {
+          draggingRef.current = null;
+          dragVertexRef.current = null;
+        });
+        // Duplo-clique remove o vértice (mantém no mínimo um triângulo).
+        vEl.addEventListener('dblclick', (ev) => {
+          ev.stopPropagation();
+          const cur = editGeoRef.current;
+          if (!cur?.vertices || cur.vertices.length <= 3) return;
+          editCbRef.current.reshape?.(cur.vertices.filter((_, k) => k !== i));
+        });
+        editVertsRef.current.push(vm);
+      });
+      // "Add" nos midpoints — clique insere um vértice naquela aresta.
+      verts.forEach((v, i) => {
+        const nextV = verts[(i + 1) % verts.length];
+        if (!nextV) return;
+        const mid: [number, number] = [(v[0] + nextV[0]) / 2, (v[1] + nextV[1]) / 2];
+        const mEl = document.createElement('div');
+        mEl.title = 'Clique para adicionar vértice';
+        mEl.style.cssText =
+          'cursor:copy;width:12px;height:12px;border-radius:50%;background:#3fb950;border:2px solid #fff;opacity:.65;';
+        const mm = new maplibregl.Marker({ element: mEl }).setLngLat(mid).addTo(map);
+        mEl.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          const cur = editGeoRef.current;
+          if (!cur?.vertices) return;
+          const at = mm.getLngLat();
+          const nv = cur.vertices.slice();
+          nv.splice(i + 1, 0, [at.lng, at.lat]);
+          editCbRef.current.reshape?.(nv);
+        });
+        editMidsRef.current.push(mm);
+      });
+
+      return () => {
+        editVertsRef.current.forEach((m) => m.remove());
+        editMidsRef.current.forEach((m) => m.remove());
+        editVertsRef.current = [];
+        editMidsRef.current = [];
+      };
+    }
 
     // Centro — arrastar para MOVER a zona.
     const cEl = document.createElement('div');
@@ -564,7 +641,8 @@ export function LiveMap({
       editCenterRef.current = null;
       editEdgeRef.current = null;
     };
-  }, [editGeofence?.id]);
+    // Reconstrói ao trocar de zona/forma ou quando o nº de vértices muda (add/remove).
+  }, [editGeofence?.id, editGeofence?.shape, editGeofence?.vertices?.length]);
 
   // Liga/desliga a exibição das zonas.
   useEffect(() => {
@@ -602,6 +680,21 @@ export function LiveMap({
   // Reposiciona os handles conforme os valores mudam (sem brigar com o arraste em curso).
   useEffect(() => {
     if (!editGeofence) return;
+    if ((editGeofence.shape ?? 'circle') === 'polygon') {
+      const verts = editGeofence.vertices ?? [];
+      // Vértices: reposiciona todos menos o que está sendo arrastado.
+      verts.forEach((v, i) => {
+        if (dragVertexRef.current === i) return;
+        editVertsRef.current[i]?.setLngLat(v);
+      });
+      // Midpoints: seguem o centro de cada aresta (acompanham qualquer arraste).
+      editMidsRef.current.forEach((m, i) => {
+        const a = verts[i];
+        const b = verts[(i + 1) % verts.length];
+        if (a && b) m.setLngLat([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]);
+      });
+      return;
+    }
     if (draggingRef.current !== 'center') {
       editCenterRef.current?.setLngLat([editGeofence.lng, editGeofence.lat]);
     }
