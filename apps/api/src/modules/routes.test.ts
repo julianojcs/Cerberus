@@ -1636,3 +1636,155 @@ describe('sessões e dispositivos (1b)', () => {
     expect(Array.isArray(devs.json())).toBe(true);
   });
 });
+
+describe('equipes (Fase 2a)', () => {
+  let teamId: string;
+  const FOREIGN_OP = 'ffffffffffffffffffffffff'; // operação fora do escopo do admin
+
+  it('admin cria equipe na sua operação (201) com membro e líder válidos', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/teams`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'Alfa', color: 'blue', agentIds: ['AG-0456'], leadId: 'AG-0456' },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toMatchObject({
+      name: 'Alfa',
+      color: 'blue',
+      agentIds: ['AG-0456'],
+      leadId: 'AG-0456',
+      operationId,
+    });
+    teamId = res.json().id;
+  });
+
+  it('lista as equipes da operação (contém a criada)', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/operations/${operationId}/teams`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as Array<{ name: string }>).map((t) => t.name)).toContain('Alfa');
+  });
+
+  it('rejeita membro fora da operação (400)', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/teams`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'Bravo', agentIds: ['AG-0457'] }, // AG-0457 não está na operação
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('rejeita líder que não é membro (400)', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/teams`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'Charlie', agentIds: ['AG-0456'], leadId: 'AG-9999' },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('nome duplicado na mesma operação (409)', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/teams`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'Alfa' },
+    });
+    expect(res.statusCode).toBe(409);
+  });
+
+  it('agente não cria equipe (403)', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/teams`,
+      headers: { authorization: `Bearer ${agentToken}` },
+      payload: { name: 'Delta' },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('sem token (401)', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/teams`,
+      payload: { name: 'Echo' },
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('operação fora do escopo do admin (403)', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/operations/${FOREIGN_OP}/teams`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'Foxtrot' },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('superadmin cria em qualquer operação (bypass de escopo)', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/teams`,
+      headers: { authorization: `Bearer ${saToken}` },
+      payload: { name: 'SA-Team', agentIds: ['AG-0456'] },
+    });
+    expect(res.statusCode).toBe(201);
+  });
+
+  it('PATCH troca cor e esvazia membros/líder (200)', async () => {
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/operations/${operationId}/teams/${teamId}`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { color: 'amber', agentIds: [], leadId: '' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ color: 'amber', agentIds: [] });
+    expect(res.json().leadId).toBeUndefined();
+  });
+
+  it('GET /teams: admin vê as da sua operação; SA vê ao menos o mesmo', async () => {
+    const adminList = await app.inject({
+      method: 'GET',
+      url: '/teams',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(adminList.statusCode).toBe(200);
+    const adminOps = new Set(
+      (adminList.json() as Array<{ operationId: string }>).map((t) => t.operationId),
+    );
+    expect(adminOps.has(operationId)).toBe(true);
+
+    const saList = await app.inject({
+      method: 'GET',
+      url: '/teams',
+      headers: { authorization: `Bearer ${saToken}` },
+    });
+    expect(saList.statusCode).toBe(200);
+    expect((saList.json() as unknown[]).length).toBeGreaterThanOrEqual(
+      (adminList.json() as unknown[]).length,
+    );
+  });
+
+  it('DELETE remove a equipe (204) e some da lista', async () => {
+    const del = await app.inject({
+      method: 'DELETE',
+      url: `/operations/${operationId}/teams/${teamId}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(del.statusCode).toBe(204);
+    const list = await app.inject({
+      method: 'GET',
+      url: `/operations/${operationId}/teams`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect((list.json() as Array<{ id: string }>).map((t) => t.id)).not.toContain(teamId);
+  });
+});

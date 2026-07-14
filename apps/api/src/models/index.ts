@@ -41,6 +41,30 @@ const operationSchema = new Schema(
 export type OperationDoc = InferSchemaType<typeof operationSchema>;
 export const Operation = model('Operation', operationSchema);
 
+/* ------------------------------------------------------------------ Teams */
+
+/**
+ * Equipe (sub-grupo de uma operação). Pertence a uma operação — preserva o
+ * isolamento multitenant (escopo por `operationId`) e reusa o diretório de chaves
+ * E2EE da op. `agentIds` são canais de agente (⊆ agentes da operação), casando com
+ * `Position.agentId`. `color` é um token de família Tailwind (como `Geofence.color`).
+ */
+const teamSchema = new Schema(
+  {
+    operationId: { type: String, required: true, index: true },
+    name: { type: String, required: true },
+    color: { type: String, default: 'blue' },
+    agentIds: { type: [String], default: [] },
+    /** agentId do líder da equipe (opcional; deve ∈ agentIds). */
+    leadId: { type: String },
+    createdBy: { type: Schema.Types.ObjectId, ref: 'User' },
+  },
+  { timestamps: true },
+);
+teamSchema.index({ operationId: 1, name: 1 }, { unique: true });
+export type TeamDoc = InferSchemaType<typeof teamSchema>;
+export const Team = model('Team', teamSchema);
+
 /* -------------------------------------------------------------- Positions */
 
 const positionSchema = new Schema(
