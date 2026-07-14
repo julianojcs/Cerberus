@@ -1,8 +1,9 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import bcrypt from 'bcryptjs';
-import { Role } from '@cerberus/shared';
+import { Role, type AuthClaims } from '@cerberus/shared';
 import { User } from '../../models/index.js';
+import { isSuperAdmin } from '../scope.js';
 
 const roles = Object.values(Role) as [string, ...string[]];
 
@@ -26,15 +27,23 @@ const updateUserSchema = z
   .partial();
 
 /**
- * Provisionamento de usuários/agentes (RBAC). Apenas a administração central
- * cria e gerencia contas. Senhas são armazenadas apenas como hash (argon2/bcrypt)
- * e nunca retornadas. A associação a operações (escopo multitenant) é feita pelos
- * endpoints de membros em `/operations/:id/members`.
+ * Provisionamento de usuários (RBAC hierárquico). Admin gerencia apenas Agentes de
+ * Campo; SuperAdmin gerencia qualquer papel. Senhas só como hash, nunca retornadas.
+ * A associação a operações (escopo) é feita em `/operations/:id/members`.
+ *
+ * Visibilidade: o Admin só enxerga/age sobre `agente` — alvos de outro papel respondem
+ * 404 (anti-enumeração). Exceção: o próprio registro é sempre visível/editável
+ * (name/password), evitando lockout do próprio operador.
  */
 export async function userRoutes(app: FastifyInstance): Promise<void> {
   app.post('/users', { onRequest: [app.requireRole(Role.ADMIN)] }, async (request, reply) => {
+    const claims = request.user as AuthClaims;
     const body = createUserSchema.safeParse(request.body);
     if (!body.success) return reply.code(400).send({ error: 'Dados inválidos' });
+    // Admin só cria agentes; criar admin/superadmin é escalada de privilégio.
+    if (!isSuperAdmin(claims) && body.data.role !== Role.AGENTE) {
+      return reply.code(403).send({ error: 'Acesso negado ao recurso' });
+    }
     if (body.data.role === Role.AGENTE && !body.data.agentId) {
       return reply.code(400).send({ error: 'agentId é obrigatório para agentes' });
     }
@@ -58,23 +67,55 @@ export async function userRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
-  app.get('/users', { onRequest: [app.requireRole(Role.ADMIN)] }, async () => {
-    const users = await User.find().sort({ createdAt: -1 }).lean();
+  app.get('/users', { onRequest: [app.requireRole(Role.ADMIN)] }, async (request) => {
+    const claims = request.user as AuthClaims;
+    // SA vê todos; admin só os agentes.
+    const filter = isSuperAdmin(claims) ? {} : { role: Role.AGENTE };
+    const users = await User.find(filter).sort({ createdAt: -1 }).lean();
     return users.map(serialize);
   });
 
   app.get('/users/:id', { onRequest: [app.requireRole(Role.ADMIN)] }, async (request, reply) => {
+    const claims = request.user as AuthClaims;
     const { id } = request.params as { id: string };
     const user = await User.findById(id).lean();
     if (!user) return reply.code(404).send({ error: 'Usuário não encontrado' });
+    // Admin só enxerga agentes (o próprio registro é exceção).
+    if (!isSuperAdmin(claims) && id !== claims.sub && user.role !== Role.AGENTE) {
+      return reply.code(404).send({ error: 'Usuário não encontrado' });
+    }
     return serialize(user);
   });
 
   app.patch('/users/:id', { onRequest: [app.requireRole(Role.ADMIN)] }, async (request, reply) => {
+    const claims = request.user as AuthClaims;
     const { id } = request.params as { id: string };
     const body = updateUserSchema.safeParse(request.body);
     if (!body.success || Object.keys(body.data).length === 0) {
       return reply.code(400).send({ error: 'Dados inválidos' });
+    }
+
+    const target = await User.findById(id).lean();
+    if (!target) return reply.code(404).send({ error: 'Usuário não encontrado' });
+
+    const actorIsSA = isSuperAdmin(claims);
+    const isSelf = id === claims.sub;
+    // Visibilidade: admin só age sobre agentes (o próprio registro é exceção).
+    if (!actorIsSA && !isSelf && target.role !== Role.AGENTE) {
+      return reply.code(404).send({ error: 'Usuário não encontrado' });
+    }
+
+    // Mudança de papel: admin nunca muda papéis; SA não pode zerar os superadmins.
+    if (body.data.role !== undefined && body.data.role !== target.role) {
+      if (!actorIsSA) {
+        return reply.code(403).send({ error: 'Acesso negado ao recurso' });
+      }
+      if (target.role === Role.SUPERADMIN) {
+        const saCount = await User.countDocuments({ role: Role.SUPERADMIN });
+        if (saCount <= 1) {
+          return reply.code(409).send({ error: 'Não é possível rebaixar o último superadmin' });
+        }
+      }
     }
 
     const update: Record<string, unknown> = {};
@@ -91,9 +132,28 @@ export async function userRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.delete('/users/:id', { onRequest: [app.requireRole(Role.ADMIN)] }, async (request, reply) => {
+    const claims = request.user as AuthClaims;
     const { id } = request.params as { id: string };
-    const removed = await User.findByIdAndDelete(id).lean();
-    if (!removed) return reply.code(404).send({ error: 'Usuário não encontrado' });
+    // Autoexclusão bloqueada (evita lockout) — checada primeiro.
+    if (id === claims.sub) {
+      return reply.code(403).send({ error: 'Não é possível excluir a si mesmo' });
+    }
+
+    const target = await User.findById(id).lean();
+    if (!target) return reply.code(404).send({ error: 'Usuário não encontrado' });
+    // Admin só enxerga agentes.
+    if (!isSuperAdmin(claims) && target.role !== Role.AGENTE) {
+      return reply.code(404).send({ error: 'Usuário não encontrado' });
+    }
+    // Invariante: nunca zerar os superadmins (reforço além do self-guard).
+    if (target.role === Role.SUPERADMIN) {
+      const saCount = await User.countDocuments({ role: Role.SUPERADMIN });
+      if (saCount <= 1) {
+        return reply.code(409).send({ error: 'Não é possível excluir o último superadmin' });
+      }
+    }
+
+    await User.findByIdAndDelete(id);
     return reply.code(204).send();
   });
 }

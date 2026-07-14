@@ -28,6 +28,7 @@ let operationId: string;
 let token: string;
 let agentToken: string;
 let assignUserId: string;
+let saToken: string;
 
 beforeAll(async () => {
   mongod = await MongoMemoryServer.create();
@@ -76,6 +77,20 @@ beforeAll(async () => {
     payload: { username: 'agente01', password: 'cerberus123' },
   });
   agentToken = agentLogin.json().token;
+
+  await User.create({
+    username: 'superadmin',
+    name: 'Super Central',
+    passwordHash: await bcrypt.hash('cerberus123', 10),
+    role: 'superadmin',
+    operationIds: [],
+  });
+  const saLogin = await app.inject({
+    method: 'POST',
+    url: '/auth/login',
+    payload: { username: 'superadmin', password: 'cerberus123' },
+  });
+  saToken = saLogin.json().token;
 
   await Position.create({
     operationId,
@@ -1110,5 +1125,334 @@ describe('configurações do sistema', () => {
       payload: { minRoutePoints: 0 },
     });
     expect(res.statusCode).toBe(400);
+  });
+});
+
+describe('RBAC superadmin (bypass de guardas)', () => {
+  it('SA passa em rota admin+escopo de que não é membro (PATCH operação)', async () => {
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/operations/${operationId}`,
+      headers: { authorization: `Bearer ${saToken}` },
+      payload: { status: 'ativa' },
+    });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('SA lê dados fora do seu escopo (bypass de assertOperationScope)', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/operations/${operationId}/positions/latest`,
+      headers: { authorization: `Bearer ${saToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('SA lista TODAS as operações apesar de escopo vazio', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/operations',
+      headers: { authorization: `Bearer ${saToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const ids = (res.json() as Array<{ id: string }>).map((o) => o.id);
+    expect(ids).toContain(operationId);
+  });
+
+  it('SA vê todos os papéis em /users; admin vê só agentes', async () => {
+    const sa = await app.inject({
+      method: 'GET',
+      url: '/users',
+      headers: { authorization: `Bearer ${saToken}` },
+    });
+    const saRoles = new Set((sa.json() as Array<{ role: string }>).map((u) => u.role));
+    expect(saRoles.has('superadmin')).toBe(true);
+    expect(saRoles.has('admin')).toBe(true);
+
+    const adm = await app.inject({
+      method: 'GET',
+      url: '/users',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const admRoles = new Set((adm.json() as Array<{ role: string }>).map((u) => u.role));
+    expect(admRoles.has('admin')).toBe(false);
+    expect(admRoles.has('superadmin')).toBe(false);
+    expect(admRoles.has('agente')).toBe(true);
+  });
+});
+
+describe('hierarquia de usuários (RBAC)', () => {
+  let adminTargetId: string;
+  let agHierId: string;
+  let agPromoteId: string;
+  let selfAdminToken: string;
+  let selfAdminId: string;
+  let saId: string;
+
+  beforeAll(async () => {
+    const { User } = await import('../models/index.js');
+    const mk = (payload: object) =>
+      app.inject({
+        method: 'POST',
+        url: '/users',
+        headers: { authorization: `Bearer ${saToken}` },
+        payload,
+      });
+    adminTargetId = (
+      await mk({ username: 'admin_target', name: 'Admin Alvo', password: 'cerberus123', role: 'admin' })
+    ).json().id;
+    agHierId = (
+      await mk({
+        username: 'ag_hier',
+        name: 'Agente H',
+        password: 'cerberus123',
+        role: 'agente',
+        agentId: 'AG-H1',
+      })
+    ).json().id;
+    agPromoteId = (
+      await mk({
+        username: 'ag_promote',
+        name: 'Agente P',
+        password: 'cerberus123',
+        role: 'agente',
+        agentId: 'AG-H2',
+      })
+    ).json().id;
+    selfAdminId = (
+      await mk({ username: 'admin_self', name: 'Admin Self', password: 'cerberus123', role: 'admin' })
+    ).json().id;
+    selfAdminToken = (
+      await app.inject({
+        method: 'POST',
+        url: '/auth/login',
+        payload: { username: 'admin_self', password: 'cerberus123' },
+      })
+    ).json().token;
+    const saUser = await User.findOne({ username: 'superadmin' }).lean();
+    if (!saUser) throw new Error('superadmin não semeado');
+    saId = String(saUser._id);
+  });
+
+  it('admin não cria admin nem superadmin (403)', async () => {
+    for (const role of ['admin', 'superadmin']) {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/users',
+        headers: { authorization: `Bearer ${token}` },
+        payload: { username: `x_${role}`, name: 'X', password: 'cerberus123', role },
+      });
+      expect(res.statusCode).toBe(403);
+    }
+  });
+
+  it('SA cria admin e superadmin (201); remove o SA extra p/ manter o invariante', async () => {
+    const a = await app.inject({
+      method: 'POST',
+      url: '/users',
+      headers: { authorization: `Bearer ${saToken}` },
+      payload: { username: 'sa_made_admin', name: 'A', password: 'cerberus123', role: 'admin' },
+    });
+    expect(a.statusCode).toBe(201);
+    const s = await app.inject({
+      method: 'POST',
+      url: '/users',
+      headers: { authorization: `Bearer ${saToken}` },
+      payload: { username: 'sa_made_sa', name: 'S', password: 'cerberus123', role: 'superadmin' },
+    });
+    expect(s.statusCode).toBe(201);
+    const del = await app.inject({
+      method: 'DELETE',
+      url: `/users/${s.json().id}`,
+      headers: { authorization: `Bearer ${saToken}` },
+    });
+    expect(del.statusCode).toBe(204);
+  });
+
+  it('admin não enxerga admin (404 em GET/PATCH/DELETE)', async () => {
+    const g = await app.inject({
+      method: 'GET',
+      url: `/users/${adminTargetId}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(g.statusCode).toBe(404);
+    const p = await app.inject({
+      method: 'PATCH',
+      url: `/users/${adminTargetId}`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'z' },
+    });
+    expect(p.statusCode).toBe(404);
+    const d = await app.inject({
+      method: 'DELETE',
+      url: `/users/${adminTargetId}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(d.statusCode).toBe(404);
+  });
+
+  it('admin edita agente (name 200) mas não o eleva (role→admin 403)', async () => {
+    const ok = await app.inject({
+      method: 'PATCH',
+      url: `/users/${agHierId}`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'Novo Nome' },
+    });
+    expect(ok.statusCode).toBe(200);
+    const esc = await app.inject({
+      method: 'PATCH',
+      url: `/users/${agHierId}`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { role: 'admin' },
+    });
+    expect(esc.statusCode).toBe(403);
+  });
+
+  it('SA promove agente a admin (200)', async () => {
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/users/${agPromoteId}`,
+      headers: { authorization: `Bearer ${saToken}` },
+      payload: { role: 'admin' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().role).toBe('admin');
+  });
+
+  it('autoexclusão bloqueada (403) para admin e SA', async () => {
+    const a = await app.inject({
+      method: 'DELETE',
+      url: `/users/${selfAdminId}`,
+      headers: { authorization: `Bearer ${selfAdminToken}` },
+    });
+    expect(a.statusCode).toBe(403);
+    const s = await app.inject({
+      method: 'DELETE',
+      url: `/users/${saId}`,
+      headers: { authorization: `Bearer ${saToken}` },
+    });
+    expect(s.statusCode).toBe(403);
+  });
+
+  it('rebaixar o último superadmin é bloqueado (409)', async () => {
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/users/${saId}`,
+      headers: { authorization: `Bearer ${saToken}` },
+      payload: { role: 'admin' },
+    });
+    expect(res.statusCode).toBe(409);
+  });
+
+  it('self-exception: admin troca a própria senha e loga com ela (200)', async () => {
+    const patch = await app.inject({
+      method: 'PATCH',
+      url: `/users/${selfAdminId}`,
+      headers: { authorization: `Bearer ${selfAdminToken}` },
+      payload: { password: 'novaSenha1' },
+    });
+    expect(patch.statusCode).toBe(200);
+    const relogin = await app.inject({
+      method: 'POST',
+      url: '/auth/login',
+      payload: { username: 'admin_self', password: 'novaSenha1' },
+    });
+    expect(relogin.statusCode).toBe(200);
+  });
+});
+
+describe('exclusão de operação (superadmin)', () => {
+  let delOpId: string;
+  let memberId: string;
+
+  beforeAll(async () => {
+    const { Operation, Position, MessageModel, Geofence, Alert, GeofenceMembership, User } =
+      await import('../models/index.js');
+    const op = await Operation.create({ name: 'Op Excluir', type: 'escolta', status: 'ativa' });
+    delOpId = String(op._id);
+    await Position.create({
+      operationId: delOpId,
+      agentId: 'AG-DEL',
+      location: { type: 'Point', coordinates: [-43.9, -19.9] },
+      capturedAt: new Date(),
+      receivedAt: new Date(),
+    });
+    await MessageModel.create({
+      operationId: delOpId,
+      senderId: 'AG-DEL',
+      type: 'text',
+      ciphertext: 'x',
+      capturedAt: new Date(),
+      receivedAt: new Date(),
+    });
+    const gf = await Geofence.create({
+      operationId: delOpId,
+      name: 'Z',
+      center: { type: 'Point', coordinates: [-43.9, -19.9] },
+      radiusMeters: 100,
+    });
+    await Alert.create({
+      operationId: delOpId,
+      agentId: 'AG-DEL',
+      geofenceId: String(gf._id),
+      geofenceName: 'Z',
+      type: 'enter',
+      location: { type: 'Point', coordinates: [-43.9, -19.9] },
+      capturedAt: new Date(),
+      receivedAt: new Date(),
+    });
+    await GeofenceMembership.create({
+      operationId: delOpId,
+      agentId: 'AG-DEL',
+      geofenceId: String(gf._id),
+      inside: true,
+      updatedAt: new Date(),
+    });
+    const member = await User.create({
+      username: 'membro_del',
+      name: 'Membro',
+      passwordHash: await bcrypt.hash('cerberus123', 10),
+      role: 'agente',
+      agentId: 'AG-DEL',
+      operationIds: [op._id],
+    });
+    memberId = String(member._id);
+  });
+
+  it('admin não exclui operação (403 — SA-only)', async () => {
+    const res = await app.inject({
+      method: 'DELETE',
+      url: `/operations/${delOpId}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('SA exclui a operação em cascata (204)', async () => {
+    const { Operation, Position, MessageModel, Geofence, Alert, GeofenceMembership, User } =
+      await import('../models/index.js');
+    const res = await app.inject({
+      method: 'DELETE',
+      url: `/operations/${delOpId}`,
+      headers: { authorization: `Bearer ${saToken}` },
+    });
+    expect(res.statusCode).toBe(204);
+    expect(await Operation.findById(delOpId)).toBeNull();
+    expect(await Position.countDocuments({ operationId: delOpId })).toBe(0);
+    expect(await MessageModel.countDocuments({ operationId: delOpId })).toBe(0);
+    expect(await Geofence.countDocuments({ operationId: delOpId })).toBe(0);
+    expect(await Alert.countDocuments({ operationId: delOpId })).toBe(0);
+    expect(await GeofenceMembership.countDocuments({ operationId: delOpId })).toBe(0);
+    const member = await User.findById(memberId).lean();
+    expect((member?.operationIds ?? []).map(String)).not.toContain(delOpId);
+  });
+
+  it('excluir operação inexistente (404)', async () => {
+    const res = await app.inject({
+      method: 'DELETE',
+      url: '/operations/000000000000000000000000',
+      headers: { authorization: `Bearer ${saToken}` },
+    });
+    expect(res.statusCode).toBe(404);
   });
 });

@@ -5,6 +5,8 @@
 
 /** Papéis de acesso (RBAC). */
 export const Role = {
+  /** Superusuário global: transcende o RBAC e o escopo de operação (gestão total). */
+  SUPERADMIN: 'superadmin',
   /** Administração central: enxerga operações e decifra conteúdo E2EE. */
   ADMIN: 'admin',
   /** Agente de campo: publica telemetria apenas no próprio canal. */
