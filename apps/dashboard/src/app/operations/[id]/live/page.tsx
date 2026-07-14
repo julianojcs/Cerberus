@@ -149,7 +149,7 @@ export default function LiveOperationPage() {
   const [agents, setAgents] = useState<Record<string, AgentPoint>>({});
   const [connected, setConnected] = useState(false);
   // Chat (Fase 3a): aba Mapa|Chat + buffer de mensagens ao vivo (equipe/DM) do MQTT.
-  const [mainTab, setMainTab] = useState<'map' | 'chat'>('map');
+  const [mainTab, setMainTab] = useState<'map' | 'chat' | 'gallery'>('map');
   const [incomingChat, setIncomingChat] = useState<IncomingMessage[]>([]);
   // Clique no card "Mensagens" → abre a conversa no Chat (key + nonce p/ re-disparar).
   const [chatFocus, setChatFocus] = useState<{ key: string; nonce: number }>({ key: '', nonce: 0 });
@@ -1858,7 +1858,7 @@ export default function LiveOperationPage() {
             }}
           >
             {layout === 'tabs' &&
-              (['map', 'chat'] as const).map((tab) => (
+              (['map', 'chat', 'gallery'] as const).map((tab) => (
                 <button
                   key={tab}
                   type="button"
@@ -1872,7 +1872,7 @@ export default function LiveOperationPage() {
                     borderColor: mainTab === tab ? 'var(--accent)' : 'var(--border)',
                   }}
                 >
-                  {tab === 'map' ? '🗺 Mapa' : '💬 Chat'}
+                  {tab === 'map' ? '🗺 Mapa' : tab === 'chat' ? '💬 Chat' : '🖼 Galeria'}
                 </button>
               ))}
             {/* Alternador de layout: abas ↔ split (Chat e Mapa lado a lado). */}
@@ -2112,6 +2112,80 @@ export default function LiveOperationPage() {
                   focusKey={chatFocus.key || null}
                   focusNonce={chatFocus.nonce}
                 />
+              </div>
+            )}
+            {layout === 'tabs' && mainTab === 'gallery' && (
+              <div
+                className="thinscroll"
+                style={{ flex: 1, minWidth: 0, minHeight: 0, overflowY: 'auto', padding: 12 }}
+              >
+                <strong style={{ fontSize: 15 }}>🖼 Galeria ({mediaMsgs.length})</strong>
+                {mediaMsgs.length === 0 ? (
+                  <div className="muted" style={{ fontSize: 13, textAlign: 'center', marginTop: 40 }}>
+                    Nenhuma mídia na operação ainda.
+                  </div>
+                ) : (
+                  <div
+                    style={{
+                      marginTop: 10,
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))',
+                      gap: 8,
+                    }}
+                  >
+                    {mediaMsgs.map((m, i) => (
+                      <button
+                        key={m.id}
+                        type="button"
+                        onClick={() => setLightboxIndex(i)}
+                        title={`${nameFor(m.senderId)} · abrir`}
+                        style={{
+                          position: 'relative',
+                          padding: 0,
+                          border: '1px solid var(--border)',
+                          borderRadius: 8,
+                          overflow: 'hidden',
+                          cursor: 'pointer',
+                          background: 'var(--panel-2)',
+                        }}
+                      >
+                        <AuthImage
+                          path={api.mediaPath(operationId, m.mediaRef)}
+                          mediaKey={m.crypto}
+                          mime={m.mime}
+                          alt={`Mídia de ${nameFor(m.senderId)}`}
+                          style={{
+                            width: '100%',
+                            aspectRatio: '1',
+                            objectFit: 'cover',
+                            display: 'block',
+                            background: 'var(--border)',
+                          }}
+                        />
+                        <div
+                          style={{
+                            position: 'absolute',
+                            bottom: 0,
+                            left: 0,
+                            right: 0,
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            padding: '3px 6px',
+                            fontSize: 11,
+                            color: '#fff',
+                            background: 'linear-gradient(transparent, rgba(0,0,0,.7))',
+                          }}
+                        >
+                          <span>👁 {mediaStats[m.id]?.views ?? 0}</span>
+                          {mediaStats[m.id]?.favorited && (
+                            <span style={{ color: '#e3b341' }}>★</span>
+                          )}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </div>
