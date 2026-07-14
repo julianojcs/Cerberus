@@ -18,6 +18,8 @@ import { subscribeToOperation, type IncomingMessage, type LivePosition } from '@
 import { ChatPanel } from '@/components/ChatPanel';
 import {
   LiveMap,
+  circleRing,
+  rectangleRing,
   type AgentPoint,
   type AgentTrails,
   type GeofenceCircle,
@@ -560,7 +562,7 @@ export default function LiveOperationPage() {
       return {
         id: g.id,
         name: g.name,
-        shape: g.shape,
+        shape: e ? (e.shape ?? g.shape) : g.shape,
         lng: e ? e.lng : g.lng,
         lat: e ? e.lat : g.lat,
         radiusMeters: e ? e.radiusMeters : g.radiusMeters,
@@ -689,9 +691,13 @@ export default function LiveOperationPage() {
   async function saveEdit() {
     if (!editGeo) return;
     try {
+      // `shape` SEMPRE explícito: converter círculo→polígono muda a forma, e sem
+      // mandar `shape` o PATCH grava os vértices mas mantém o shape antigo (a zona
+      // volta a renderizar como círculo).
       const data: GeofenceInput =
         editGeo.shape === 'rectangle'
           ? {
+              shape: 'rectangle',
               lng: editGeo.lng,
               lat: editGeo.lat,
               widthMeters: editGeo.widthMeters,
@@ -700,14 +706,38 @@ export default function LiveOperationPage() {
               color: editGeo.color,
             }
           : editGeo.shape === 'polygon'
-            ? { vertices: editGeo.vertices, color: editGeo.color }
-            : { lng: editGeo.lng, lat: editGeo.lat, radiusMeters: editGeo.radiusMeters, color: editGeo.color };
+            ? { shape: 'polygon', vertices: editGeo.vertices, color: editGeo.color }
+            : {
+                shape: 'circle',
+                lng: editGeo.lng,
+                lat: editGeo.lat,
+                radiusMeters: editGeo.radiusMeters,
+                color: editGeo.color,
+              };
       await api.patchGeofence(operationId, editGeo.id, data);
       setGeofences(await api.geofences(operationId));
     } catch {
       /* edição falhou */
     }
     setEditGeo(null);
+  }
+
+  /**
+   * Converte a zona em edição (círculo/retângulo) em POLÍGONO livre, semeando os
+   * vértices a partir da forma atual (círculo → 16 pontos do anel; retângulo → 4
+   * cantos). A partir daí os vértices ficam arrastáveis no mapa (handles do LiveMap).
+   */
+  function convertToPolygon() {
+    setEditGeo((g) => {
+      if (!g || g.shape === 'polygon') return g;
+      const closed =
+        g.shape === 'rectangle'
+          ? rectangleRing(g.lng, g.lat, g.widthMeters ?? 100, g.heightMeters ?? 100, g.rotationDeg ?? 0)
+          : circleRing(g.lng, g.lat, g.radiusMeters || 100, 16);
+      // Anel fechado (último = primeiro) → vértices abertos.
+      const vertices = closed.slice(0, -1).map((p): [number, number] => [p[0] ?? 0, p[1] ?? 0]);
+      return { ...g, shape: 'polygon', vertices };
+    });
   }
 
   async function handleRecompute() {
@@ -1148,14 +1178,33 @@ export default function LiveOperationPage() {
                   </>
                 ) : editGeo.shape === 'polygon' ? (
                   <div className="muted" style={{ fontSize: 12 }}>
-                    Arraste o <strong>centro</strong> para mover o polígono. (Edição de vértices em
-                    breve.)
+                    Arraste os <strong>vértices</strong> ({editGeo.vertices?.length ?? 0}). Clique num
+                    ponto <strong>+</strong> na aresta para adicionar; <strong>duplo-clique</strong>{' '}
+                    num vértice para remover (mín. 3).
                   </div>
                 ) : (
                   <div className="muted" style={{ fontSize: 12 }}>
                     Arraste o <strong>centro</strong> (mover) ou a <strong>borda</strong>{' '}
                     (redimensionar). Raio: {editGeo.radiusMeters} m
                   </div>
+                )}
+                {editGeo.shape !== 'polygon' && (
+                  <button
+                    type="button"
+                    onClick={convertToPolygon}
+                    className="badge"
+                    title="Transforma esta zona num polígono de vértices arrastáveis"
+                    style={{
+                      marginTop: 8,
+                      width: '100%',
+                      cursor: 'pointer',
+                      color: 'var(--text)',
+                      border: '1px solid var(--border)',
+                      background: 'transparent',
+                    }}
+                  >
+                    ⬡ Converter em polígono livre
+                  </button>
                 )}
                 <div style={{ marginTop: 8 }}>
                   <ColorPalettePicker
@@ -1684,6 +1733,7 @@ export default function LiveOperationPage() {
             editGeofence={editGeo}
             onGeofenceMove={(lng, lat) => setEditGeo((e) => (e ? { ...e, lng, lat } : e))}
             onGeofenceResize={(radiusMeters) => setEditGeo((e) => (e ? { ...e, radiusMeters } : e))}
+            onGeofenceReshape={(vertices) => setEditGeo((e) => (e ? { ...e, vertices } : e))}
             focus={alertFocus}
           />
           </div>
