@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import {
   Role,
+  encryptBytes,
   openMessage,
   sealMessage,
   type KeyDirectoryEntry,
@@ -12,6 +13,7 @@ import { api } from '@/lib/api';
 import { getUser } from '@/lib/auth';
 import { getSecretKey } from '@/lib/e2ee';
 import { resolveColor } from '@/lib/tailwind-colors';
+import { AuthImage } from '@/components/AuthImage';
 import type { IncomingMessage } from '@/lib/mqtt';
 
 /** Thread ativo: chat de equipe (grupo) ou DM com um agente. */
@@ -24,6 +26,23 @@ interface ChatMsg {
   text: string | null;
   capturedAt: string;
   mine: boolean;
+  // Mídia (type === 'media'): ref do blob + chave/nonce da imagem (do envelope).
+  mediaRef?: string;
+  mime?: string;
+  crypto?: { k: string; n: string } | null;
+  caption?: string | null;
+}
+
+/** Faz o parse da metadata E2EE da mídia (JSON no envelope). `null` se inválida. */
+function parseMediaMeta(
+  raw: string | null,
+): { caption?: string; mime?: string; k?: string; n?: string } | null {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
 }
 
 const fmtTime = (iso: string): string =>
@@ -65,6 +84,7 @@ export function ChatPanel({
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   // Diretório de chaves + equipes da operação (para a árvore e o sela por subconjunto).
   useEffect(() => {
@@ -73,16 +93,42 @@ export function ChatPanel({
   }, [operationId]);
 
   const toChatMsg = useCallback(
-    (m: { senderId: string; ciphertext?: string; text?: string; capturedAt: string }): ChatMsg => ({
-      key: msgKey(m),
-      senderId: m.senderId,
-      text:
-        m.ciphertext && secretKey
-          ? openMessage(m.ciphertext, myDirId, secretKey)
-          : (m.text ?? null),
-      capturedAt: m.capturedAt,
-      mine: m.senderId === myDirId,
-    }),
+    (m: {
+      senderId: string;
+      type?: string;
+      ciphertext?: string;
+      text?: string;
+      mediaRef?: string;
+      capturedAt: string;
+    }): ChatMsg => {
+      const base = {
+        key: msgKey(m),
+        senderId: m.senderId,
+        capturedAt: m.capturedAt,
+        mine: m.senderId === myDirId,
+      };
+      if (m.type === 'media' && m.mediaRef) {
+        const meta =
+          m.ciphertext && secretKey
+            ? parseMediaMeta(openMessage(m.ciphertext, myDirId, secretKey))
+            : null;
+        return {
+          ...base,
+          text: null,
+          mediaRef: m.mediaRef,
+          mime: meta?.mime ?? 'image/jpeg',
+          crypto: meta?.k && meta?.n ? { k: meta.k, n: meta.n } : null,
+          caption: meta?.caption ?? null,
+        };
+      }
+      return {
+        ...base,
+        text:
+          m.ciphertext && secretKey
+            ? openMessage(m.ciphertext, myDirId, secretKey)
+            : (m.text ?? null),
+      };
+    },
     [secretKey, myDirId],
   );
 
@@ -170,6 +216,50 @@ export function ChatPanel({
           ? await api.sendTeamMessage(operationId, thread.team.id, ciphertext)
           : await api.sendAgentMessage(operationId, thread.agentId, ciphertext);
       appendMsgs([toChatMsg(resp)]); // eco otimista (o MQTT depois deduplica)
+      setDraft('');
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSending(false);
+    }
+  }
+
+  // Envia uma FOTO E2EE ao thread: cifra a imagem (secretbox), embrulha
+  // legenda/mime/chave num envelope selado só para o subconjunto, e faz upload.
+  async function handlePickMedia(file: File) {
+    if (!thread || sending) return;
+    if (!user || !secretKey) {
+      setError('Chave E2EE ausente — refaça o login para provisioná-la.');
+      return;
+    }
+    setSending(true);
+    setError(null);
+    try {
+      const recipients = recipientsFor(thread);
+      if (recipients.length === 0) {
+        setError('Nenhum destinatário com chave E2EE registrada.');
+        return;
+      }
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const { cipher, key, nonce } = encryptBytes(bytes);
+      const envelope = sealMessage(
+        JSON.stringify({ caption: draft.trim() || undefined, mime: file.type, k: key, n: nonce }),
+        secretKey,
+        recipients,
+      );
+      // Fatia num ArrayBuffer concreto (Blob não aceita Uint8Array<ArrayBufferLike>).
+      const blobBuf = cipher.buffer.slice(
+        cipher.byteOffset,
+        cipher.byteOffset + cipher.byteLength,
+      ) as ArrayBuffer;
+      const form = new FormData();
+      form.append('ciphertext', envelope); // ANTES do arquivo (para file.fields)
+      form.append('file', new Blob([blobBuf], { type: 'application/octet-stream' }), 'media.bin');
+      const resp =
+        thread.kind === 'team'
+          ? await api.uploadTeamMedia(operationId, thread.team.id, form)
+          : await api.uploadAgentMedia(operationId, thread.agentId, form);
+      appendMsgs([toChatMsg(resp)]);
       setDraft('');
     } catch (e) {
       setError((e as Error).message);
@@ -292,9 +382,36 @@ export function ChatPanel({
                         {m.senderId}
                       </div>
                     )}
-                    <div style={{ fontSize: 13, lineHeight: 1.35 }}>
-                      {m.text ?? <span style={{ fontStyle: 'italic', opacity: 0.7 }}>🔒 indecifrável</span>}
-                    </div>
+                    {m.mediaRef ? (
+                      <>
+                        {m.crypto ? (
+                          <AuthImage
+                            path={api.mediaPath(operationId, m.mediaRef)}
+                            mediaKey={m.crypto}
+                            mime={m.mime}
+                            alt={m.caption ?? 'mídia'}
+                            style={{
+                              maxWidth: 220,
+                              maxHeight: 220,
+                              borderRadius: 8,
+                              display: 'block',
+                              background: 'var(--border)',
+                            }}
+                          />
+                        ) : (
+                          <span style={{ fontStyle: 'italic', opacity: 0.7, fontSize: 13 }}>
+                            🔒 mídia indecifrável
+                          </span>
+                        )}
+                        {m.caption && <div style={{ fontSize: 12, marginTop: 4 }}>{m.caption}</div>}
+                      </>
+                    ) : (
+                      <div style={{ fontSize: 13, lineHeight: 1.35 }}>
+                        {m.text ?? (
+                          <span style={{ fontStyle: 'italic', opacity: 0.7 }}>🔒 indecifrável</span>
+                        )}
+                      </div>
+                    )}
                     <div
                       style={{
                         fontSize: 10,
@@ -315,6 +432,30 @@ export function ChatPanel({
             )}
             {canSend ? (
               <div style={composerRow}>
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept="image/*"
+                  style={{ display: 'none' }}
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) void handlePickMedia(f);
+                    e.target.value = '';
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => fileRef.current?.click()}
+                  disabled={sending}
+                  title="Enviar foto (E2EE)"
+                  style={{
+                    ...attachBtn,
+                    cursor: sending ? 'not-allowed' : 'pointer',
+                    opacity: sending ? 0.5 : 1,
+                  }}
+                >
+                  📷
+                </button>
                 <textarea
                   value={draft}
                   onChange={(e) => setDraft(e.target.value)}
@@ -435,4 +576,13 @@ const sendBtn: CSSProperties = {
   borderRadius: 8,
   padding: '8px 16px',
   fontWeight: 700,
+};
+const attachBtn: CSSProperties = {
+  background: 'transparent',
+  border: '1px solid var(--border)',
+  color: 'var(--text)',
+  borderRadius: 8,
+  padding: '8px 10px',
+  fontSize: 16,
+  flexShrink: 0,
 };

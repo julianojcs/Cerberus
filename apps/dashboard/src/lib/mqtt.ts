@@ -27,6 +27,7 @@ export interface IncomingMessage {
   type: string;
   ciphertext?: string;
   text?: string;
+  mediaRef?: string; // type === 'media'
   capturedAt: string;
 }
 
@@ -35,6 +36,7 @@ interface RawChat {
   type: string;
   ciphertext?: string;
   text?: string;
+  mediaRef?: string;
   capturedAt: string;
 }
 
@@ -53,6 +55,7 @@ function deliverMessage(
       type: raw.type,
       ciphertext: raw.ciphertext,
       text: raw.text,
+      mediaRef: raw.mediaRef,
       capturedAt: raw.capturedAt,
     });
   } catch {
