@@ -7,12 +7,16 @@
  */
 
 export const TOPIC_ROOT = 'operacao';
+/** Segmento de equipe (sem acento — identificador de rede, não texto de UI). */
+export const TEAM_SEGMENT = 'equipe';
 
 /** Sufixos de canal por agente. */
 export const AgentChannel = {
   POSICAO: 'posicao',
   MENSAGEM: 'mensagem',
   STATUS: 'status',
+  /** Caixa de entrada do agente (DM da central → agente). */
+  INBOX: 'inbox',
 } as const;
 export type AgentChannel = (typeof AgentChannel)[keyof typeof AgentChannel];
 
@@ -31,9 +35,23 @@ export function agentStatusTopic(operationId: string, agentId: string): string {
   return `${TOPIC_ROOT}/${operationId}/agente/${agentId}/${AgentChannel.STATUS}`;
 }
 
+/** `operacao/{operationId}/agente/{agentId}/inbox` — DM da central para um agente. */
+export function agentInboxTopic(operationId: string, agentId: string): string {
+  return `${TOPIC_ROOT}/${operationId}/agente/${agentId}/${AgentChannel.INBOX}`;
+}
+
 /** `operacao/{operationId}/broadcast` — central → todos os agentes da operação. */
 export function operationBroadcastTopic(operationId: string): string {
   return `${TOPIC_ROOT}/${operationId}/broadcast`;
+}
+
+/**
+ * `operacao/{operationId}/equipe/{teamId}/broadcast` — mensagem para os membros de
+ * uma equipe. Isolamento na REDE (só quem assina o tópico recebe) + na CRIPTO (o
+ * envelope E2EE é selado só para os membros).
+ */
+export function teamBroadcastTopic(operationId: string, teamId: string): string {
+  return `${TOPIC_ROOT}/${operationId}/${TEAM_SEGMENT}/${teamId}/broadcast`;
 }
 
 /** Wildcard de escuta da central para uma operação inteira: `operacao/{operationId}/#`. */
@@ -67,4 +85,25 @@ export function parseAgentTopic(topic: string): ParsedAgentTopic | null {
   if (root !== TOPIC_ROOT || agente !== 'agente') return null;
   if (!operationId || !agentId || !channel) return null;
   return { operationId, agentId, channel };
+}
+
+export interface ParsedTeamTopic {
+  operationId: string;
+  teamId: string;
+  channel: string;
+}
+
+/**
+ * Faz o parse de um tópico de equipe. Retorna `null` se não casar com o padrão
+ * `operacao/{operationId}/equipe/{teamId}/{channel}`. Separado de `parseAgentTopic`
+ * para não afetar o parsing de agente (a ponte de ingest continua só com agentes).
+ */
+export function parseTeamTopic(topic: string): ParsedTeamTopic | null {
+  const parts = topic.split('/');
+  // ['operacao', operationId, 'equipe', teamId, channel]
+  if (parts.length !== 5) return null;
+  const [root, operationId, equipe, teamId, channel] = parts;
+  if (root !== TOPIC_ROOT || equipe !== TEAM_SEGMENT) return null;
+  if (!operationId || !teamId || !channel) return null;
+  return { operationId, teamId, channel };
 }

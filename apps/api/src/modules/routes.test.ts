@@ -1788,3 +1788,141 @@ describe('equipes (Fase 2a)', () => {
     expect((list.json() as Array<{ id: string }>).map((t) => t.id)).not.toContain(teamId);
   });
 });
+
+describe('mensageria de equipe/DM (Fase 2b)', () => {
+  let teamWithAgent: string; // equipe com AG-0456
+  let teamWithout: string; // equipe sem AG-0456 (para testar 403 de não-membro)
+  const CT = 'ciphertext-fake-envelope'; // o servidor só armazena/republica opaco
+
+  beforeAll(async () => {
+    const t1 = await app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/teams`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'MsgTeam', agentIds: ['AG-0456'] },
+    });
+    teamWithAgent = t1.json().id;
+    const t2 = await app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/teams`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'EmptyTeam', agentIds: [] },
+    });
+    teamWithout = t2.json().id;
+  });
+
+  it('membro (agente) envia mensagem à equipe (201)', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/teams/${teamWithAgent}/messages`,
+      headers: { authorization: `Bearer ${agentToken}` },
+      payload: { ciphertext: CT },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toMatchObject({ teamId: teamWithAgent, type: 'text' });
+    expect(res.json().ciphertext).toBe(CT);
+  });
+
+  it('admin envia à equipe (201)', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/teams/${teamWithAgent}/messages`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { ciphertext: CT },
+    });
+    expect(res.statusCode).toBe(201);
+  });
+
+  it('agente fora da equipe não envia (403)', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/teams/${teamWithout}/messages`,
+      headers: { authorization: `Bearer ${agentToken}` },
+      payload: { ciphertext: CT },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('histórico da equipe retorna as mensagens (todas com o teamId)', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/operations/${operationId}/teams/${teamWithAgent}/messages`,
+      headers: { authorization: `Bearer ${agentToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const arr = res.json() as Array<{ teamId: string }>;
+    expect(arr.length).toBeGreaterThanOrEqual(2);
+    expect(arr.every((m) => m.teamId === teamWithAgent)).toBe(true);
+  });
+
+  it('equipe inexistente (404)', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/teams/ffffffffffffffffffffffff/messages`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { ciphertext: CT },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('mensagem de equipe fora do escopo (403)', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/operations/ffffffffffffffffffffffff/teams/${teamWithAgent}/messages`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { ciphertext: CT },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('admin envia DM a um agente (201) e persiste recipientId', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/agents/AG-0456/messages`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { ciphertext: CT },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toMatchObject({ recipientId: 'AG-0456', type: 'text' });
+  });
+
+  it('agente não envia DM (403 — requireRole ADMIN)', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/agents/AG-0456/messages`,
+      headers: { authorization: `Bearer ${agentToken}` },
+      payload: { ciphertext: CT },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('DM sem token (401)', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/agents/AG-0456/messages`,
+      payload: { ciphertext: CT },
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('o próprio agente lê seu DM (200); histórico filtra por recipientId', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/operations/${operationId}/agents/AG-0456/messages`,
+      headers: { authorization: `Bearer ${agentToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const arr = res.json() as Array<{ recipientId: string }>;
+    expect(arr.length).toBeGreaterThanOrEqual(1);
+    expect(arr.every((m) => m.recipientId === 'AG-0456')).toBe(true);
+  });
+
+  it('admin também lê o DM do agente (200)', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/operations/${operationId}/agents/AG-0456/messages`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(200);
+  });
+});

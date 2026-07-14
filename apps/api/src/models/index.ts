@@ -101,6 +101,9 @@ const messageSchema = new Schema(
     operationId: { type: String, required: true, index: true },
     senderId: { type: String, required: true },
     type: { type: String, enum: Object.values(MessageType), required: true },
+    /** Escopo (Fase 2b): `teamId` = msg de equipe; `recipientId` = DM (agente destino). */
+    teamId: { type: String },
+    recipientId: { type: String },
     /** Texto em claro (MVP). Substituído por `ciphertext` na fase de E2EE. */
     text: String,
     ciphertext: String,
@@ -116,6 +119,8 @@ const messageSchema = new Schema(
   { timestamps: false },
 );
 messageSchema.index({ operationId: 1, capturedAt: -1 });
+messageSchema.index({ operationId: 1, teamId: 1, capturedAt: -1 });
+messageSchema.index({ operationId: 1, recipientId: 1, capturedAt: -1 });
 export type MessageDoc = InferSchemaType<typeof messageSchema>;
 export const MessageModel = model('Message', messageSchema);
 
