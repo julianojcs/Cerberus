@@ -2119,7 +2119,7 @@ export default function LiveOperationPage() {
               <div style={{ fontSize: 14 }}>
                 {lightbox.caption && <div>{lightbox.caption}</div>}
                 <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
-                  {lightbox.senderId}
+                  {nameFor(lightbox.senderId)}
                   {lightbox.lat != null &&
                     ` · 📍 ${lightbox.lat.toFixed(5)}, ${lightbox.lng?.toFixed(5)}`}
                 </div>
