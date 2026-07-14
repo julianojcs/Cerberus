@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { decryptBytes } from '@cerberus/shared';
 import { fetchAuthedBytes, fetchBlobUrl } from '@/lib/api';
+import { getCachedCiphertext, putCachedCiphertext } from '@/lib/mediaCache';
 
 /**
  * Cache de object URLs por (path+chave+mime) na sessão. Ao trocar de chat o
@@ -55,9 +56,21 @@ export function AuthImage({
     setUrl(null);
     setError(false);
 
+    // Ciphertext: do cache local persistente (IndexedDB) ou, na falta, do servidor
+    // (e então persiste). O blob fica cifrado em repouso — a chave só existe em memória.
+    const ciphertext = () =>
+      getCachedCiphertext(path).then(
+        (cached) =>
+          cached ??
+          fetchAuthedBytes(path).then((bytes) => {
+            void putCachedCiphertext(path, bytes);
+            return bytes;
+          }),
+      );
+
     const load =
       k && n
-        ? fetchAuthedBytes(path).then((bytes) => {
+        ? ciphertext().then((bytes) => {
           const clear = decryptBytes(bytes, k, n);
           if (!clear) throw new Error('Falha ao decifrar a mídia');
           // Copia para um ArrayBuffer próprio (o Blob não aceita ArrayBufferLike genérico).
