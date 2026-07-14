@@ -2403,3 +2403,33 @@ describe('estatísticas de mídia — favoritos + views (Fase 6b)', () => {
     expect(res.statusCode).toBe(401);
   });
 });
+
+describe('rotação de chave E2EE (Fase 5e-2)', () => {
+  const put = (pk: string) =>
+    app.inject({
+      method: 'PUT',
+      url: '/auth/public-key',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { publicKey: pk },
+    });
+
+  it('nova chave vira a atual; a anterior vai ao histórico; re-registrar é idempotente', async () => {
+    const k1 = generateKeyPair();
+    const k2 = generateKeyPair();
+    await put(k1.publicKey); // registra k1 (a chave corrente anterior vai ao histórico)
+    await put(k2.publicKey); // rotaciona → k1 vai ao histórico
+    await put(k2.publicKey); // re-registra a mesma → idempotente
+    const res = await app.inject({
+      method: 'GET',
+      url: `/operations/${operationId}/keys`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const admin = (
+      res.json() as Array<{ role: string; publicKey: string; keyHistory?: string[]; revoked?: boolean }>
+    ).find((e) => e.role === 'admin');
+    expect(admin?.publicKey).toBe(k2.publicKey);
+    expect(admin?.keyHistory).toContain(k1.publicKey);
+    expect(admin?.keyHistory?.filter((h) => h === k1.publicKey).length).toBe(1); // sem duplicar
+    expect(admin?.revoked).toBe(false);
+  });
+});

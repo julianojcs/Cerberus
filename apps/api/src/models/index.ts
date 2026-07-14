@@ -24,6 +24,14 @@ const userSchema = new Schema(
     operationIds: { type: [Schema.Types.ObjectId], ref: 'Operation', default: [] },
     /** Chave pública X25519 (base64) para E2EE. A privada nunca chega ao servidor. */
     publicKey: { type: String },
+    /**
+     * Fase 5e-2 — chaves públicas ANTIGAS (rotação). Ao trocar a chave, a atual vai
+     * para cá; a verificação de remetente (5c) aceita `spk ∈ {atual ∪ histórico}`,
+     * senão mensagens legítimas anteriores à troca seriam rejeitadas.
+     */
+    publicKeyHistory: { type: [String], default: [] },
+    /** Fase 5e-2 — chave atual revogada (admin/SA): o usuário precisa rotacionar. */
+    keyRevoked: { type: Boolean, default: false },
     /** Conta bloqueada pelo SA — barra o login e revoga as sessões existentes. */
     blocked: { type: Boolean, default: false },
   },

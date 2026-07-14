@@ -79,6 +79,10 @@ export interface KeyDirectoryEntry {
   role: Role;
   agentId?: string;
   publicKey: string;
+  /** Fase 5e-2 — chaves públicas antigas (rotação); a verificação de remetente aceita todas. */
+  keyHistory?: string[];
+  /** Fase 5e-2 — chave atual revogada (não selar novas mensagens para ela). */
+  revoked?: boolean;
 }
 
 /** Claims embutidos no JWT (reusado como credencial de conexão MQTT). */

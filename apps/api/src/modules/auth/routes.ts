@@ -99,13 +99,21 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     const body = publicKeyRegistrationSchema.safeParse(request.body);
     if (!body.success) return reply.code(400).send({ error: 'Chave pública inválida' });
     const claims = request.user as AuthClaims;
+    const newKey = body.data.publicKey;
+    const current = await User.findById(claims.sub).select('publicKey').lean();
+    if (!current) return reply.code(401).send({ error: 'Usuário não encontrado' });
+    // Fase 5e-2 — rotação: se a chave mudou, arquiva a antiga no histórico (sem
+    // duplicar) e limpa a revogação. Re-registrar a MESMA chave é idempotente.
+    const changed = current.publicKey && current.publicKey !== newKey;
     const user = await User.findByIdAndUpdate(
       claims.sub,
-      { $set: { publicKey: body.data.publicKey } },
+      {
+        $set: { publicKey: newKey, keyRevoked: false },
+        ...(changed ? { $addToSet: { publicKeyHistory: current.publicKey } } : {}),
+      },
       { new: true },
     );
-    if (!user) return reply.code(401).send({ error: 'Usuário não encontrado' });
-    return reply.send({ publicKey: user.publicKey });
+    return reply.send({ publicKey: user?.publicKey });
   });
 
   /**

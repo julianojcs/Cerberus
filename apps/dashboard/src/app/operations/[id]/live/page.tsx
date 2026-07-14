@@ -329,10 +329,11 @@ export default function LiveOperationPage() {
         const mediaDecoded = msgs
           .filter((m) => m.type === 'media' && !!m.mediaRef)
           .map((m) => {
-            const senderKey = keyDirectoryRef.current.find((e) => e.id === m.senderId)?.publicKey;
+            const sdir = keyDirectoryRef.current.find((e) => e.id === m.senderId);
+            const senderKeys = sdir ? [sdir.publicKey, ...(sdir.keyHistory ?? [])] : undefined;
             const meta =
               m.ciphertext && secretKey
-                ? parseMediaMeta(openMessage(m.ciphertext, myId, secretKey, senderKey))
+                ? parseMediaMeta(openMessage(m.ciphertext, myId, secretKey, senderKeys))
                 : null;
             const mime = meta?.mime ?? 'image/jpeg';
             const crypto = meta?.k && meta?.n ? { k: meta.k, n: meta.n } : null;
@@ -372,24 +373,23 @@ export default function LiveOperationPage() {
         setChatMsgs(
           msgs
             .filter((m) => m.type === 'text' || m.type === 'broadcast')
-            .map((m) => ({
-              id: m.id,
-              senderId: m.senderId,
-              type: m.type,
-              // Envelope E2EE → decifra com a chave local; senão cai no texto legado.
-              text:
-                m.ciphertext && secretKey
-                  ? openMessage(
-                      m.ciphertext,
-                      myId,
-                      secretKey,
-                      keyDirectoryRef.current.find((e) => e.id === m.senderId)?.publicKey,
-                    )
-                  : (m.text ?? null),
-              capturedAt: m.capturedAt,
-              teamId: m.teamId,
-              recipientId: m.recipientId,
-            })),
+            .map((m) => {
+              const sdir = keyDirectoryRef.current.find((e) => e.id === m.senderId);
+              const senderKeys = sdir ? [sdir.publicKey, ...(sdir.keyHistory ?? [])] : undefined;
+              return {
+                id: m.id,
+                senderId: m.senderId,
+                type: m.type,
+                // Envelope E2EE → decifra com a chave local; senão cai no texto legado.
+                text:
+                  m.ciphertext && secretKey
+                    ? openMessage(m.ciphertext, myId, secretKey, senderKeys)
+                    : (m.text ?? null),
+                capturedAt: m.capturedAt,
+                teamId: m.teamId,
+                recipientId: m.recipientId,
+              };
+            }),
         );
       })
       .catch(() => {});
