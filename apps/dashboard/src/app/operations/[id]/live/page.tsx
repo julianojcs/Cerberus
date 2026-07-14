@@ -926,13 +926,17 @@ export default function LiveOperationPage() {
 
   // Atalho no card p/ mudar a quantidade — persiste nas Configurações do sistema.
   async function changeSidebarCount(delta: number) {
-    const next = Math.min(50, Math.max(1, settings.sidebarMessageCount + delta));
-    if (next === settings.sidebarMessageCount) return;
+    // Fallback 5: a API deployada pode ainda não devolver o campo (pré-deploy).
+    const cur = settings.sidebarMessageCount ?? 5;
+    const next = Math.min(50, Math.max(1, cur + delta));
+    if (next === cur) return;
     setSettings((s) => ({ ...s, sidebarMessageCount: next }));
     try {
-      setSettings(await api.patchSettings({ sidebarMessageCount: next }));
+      const saved = await api.patchSettings({ sidebarMessageCount: next });
+      // Mantém o valor pedido se a API (pré-deploy) ainda não ecoar o campo.
+      setSettings({ ...saved, sidebarMessageCount: saved.sidebarMessageCount ?? next });
     } catch {
-      /* revertido no próximo GET */
+      /* mantém o valor otimista */
     }
   }
 
@@ -1073,7 +1077,7 @@ export default function LiveOperationPage() {
                     style={{ fontSize: 12, minWidth: 16, textAlign: 'center' }}
                     title="Mensagens exibidas no card"
                   >
-                    {settings.sidebarMessageCount}
+                    {settings.sidebarMessageCount ?? 5}
                   </span>
                   <button
                     type="button"
@@ -1092,7 +1096,7 @@ export default function LiveOperationPage() {
                 className="thinscroll"
                 style={{ display: 'grid', gap: 6, maxHeight: 320, overflowY: 'auto' }}
               >
-                {cardMsgs.slice(0, settings.sidebarMessageCount).map((m) => {
+                {cardMsgs.slice(0, settings.sidebarMessageCount ?? 5).map((m) => {
                   const isBroadcast = m.type === 'broadcast';
                   const who = nameFor(m.senderId, m.type);
                   const when = new Date(m.capturedAt).toLocaleString('pt-BR', {

@@ -24,7 +24,7 @@ export function SettingsModal({
   const [connectRoutes, setConnectRoutes] = useState(initial.connectRoutes);
   const [maxGapMinutes, setMaxGapMinutes] = useState(String(initial.maxGapMinutes));
   const [sidebarMessageCount, setSidebarMessageCount] = useState(
-    String(initial.sidebarMessageCount),
+    String(initial.sidebarMessageCount ?? 5),
   );
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
