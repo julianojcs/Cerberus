@@ -96,6 +96,13 @@ export const api = {
     }),
   operations: () => request<Operation[]>('/operations'),
   operation: (id: string) => request<Operation>(`/operations/${id}`),
+  // CRUD de operações (Fase 1 · slice 1c-2). Criar/editar exigem admin (+ escopo no
+  // editar; SA transcende); excluir é SUPERADMIN (cascata de alto impacto).
+  createOperation: (data: { name: string; type: string; status?: string }) =>
+    request<Operation>('/operations', { method: 'POST', body: JSON.stringify(data) }),
+  updateOperation: (id: string, data: Partial<{ name: string; type: string; status: string }>) =>
+    request<Operation>(`/operations/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  deleteOperation: (id: string) => request<void>(`/operations/${id}`, { method: 'DELETE' }),
   // E2EE: registra a própria chave pública e lê o diretório de chaves da operação.
   registerPublicKey: (publicKey: string) =>
     request<{ publicKey: string }>('/auth/public-key', {
