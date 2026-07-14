@@ -38,6 +38,31 @@ export const GeofenceShape = {
 } as const;
 export type GeofenceShape = (typeof GeofenceShape)[keyof typeof GeofenceShape];
 
+/** Qual transição de uma zona dispara alerta (Fase 5b). Padrão: ambas. */
+export const GeofenceTrigger = {
+  ENTER: 'enter',
+  EXIT: 'exit',
+  BOTH: 'both',
+} as const;
+export type GeofenceTrigger = (typeof GeofenceTrigger)[keyof typeof GeofenceTrigger];
+
+/** Severidade/prioridade de uma zona → cor do alerta + ordenação (Fase 5b). */
+export const GeofenceSeverity = {
+  LOW: 'low',
+  MEDIUM: 'medium',
+  HIGH: 'high',
+  CRITICAL: 'critical',
+} as const;
+export type GeofenceSeverity = (typeof GeofenceSeverity)[keyof typeof GeofenceSeverity];
+
+/** Peso de ordenação por severidade (crítica primeiro). */
+export const GEOFENCE_SEVERITY_RANK: Record<string, number> = {
+  critical: 0,
+  high: 1,
+  medium: 2,
+  low: 3,
+};
+
 /**
  * Estado de movimento reportado pelo reconhecimento de atividade do dispositivo
  * (acelerômetro/giroscópio). Dirige o gerenciamento dinâmico de energia.
