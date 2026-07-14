@@ -312,7 +312,13 @@ export function ChatPanel({
     if (focusKey) setActiveKey(focusKey);
   }, [focusNonce, focusKey]);
 
-  // Marca a conversa ativa como lida (persiste).
+  // Reset a busca só ao TROCAR de conversa (não a cada tecla — senão o filtro muda
+  // o tamanho do thread e o efeito de "marcar lida" limpava o input a cada caractere).
+  useEffect(() => {
+    setMsgSearch('');
+  }, [activeKey]);
+
+  // Marca a conversa ativa como lida — ao abrir e quando chega mensagem nova.
   useEffect(() => {
     if (!activeKey) return;
     setLastRead((prev) => {
@@ -324,8 +330,7 @@ export function ChatPanel({
       }
       return next;
     });
-    setMsgSearch('');
-  }, [activeKey, operationId, threadMsgs.length]);
+  }, [activeKey, operationId, active?.lastAt]);
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });

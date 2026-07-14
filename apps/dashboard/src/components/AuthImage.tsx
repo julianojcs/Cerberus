@@ -29,6 +29,10 @@ export function AuthImage({
 }) {
   const [url, setUrl] = useState<string | null>(null);
   const [error, setError] = useState(false);
+  // Depende dos VALORES da chave (não do objeto): senão cada re-render recria o
+  // `{k,n}` e o efeito rebaixa/redecifra a imagem à toa (piscada periódica).
+  const k = mediaKey?.k;
+  const n = mediaKey?.n;
 
   useEffect(() => {
     let active = true;
@@ -36,9 +40,10 @@ export function AuthImage({
     setUrl(null);
     setError(false);
 
-    const load = mediaKey
-      ? fetchAuthedBytes(path).then((bytes) => {
-          const clear = decryptBytes(bytes, mediaKey.k, mediaKey.n);
+    const load =
+      k && n
+        ? fetchAuthedBytes(path).then((bytes) => {
+          const clear = decryptBytes(bytes, k, n);
           if (!clear) throw new Error('Falha ao decifrar a mídia');
           // Copia para um ArrayBuffer próprio (o Blob não aceita ArrayBufferLike genérico).
           const buf = clear.buffer.slice(
@@ -63,7 +68,7 @@ export function AuthImage({
       active = false;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [path, mediaKey, mime]);
+  }, [path, k, n, mime]);
 
   if (error) {
     return (
