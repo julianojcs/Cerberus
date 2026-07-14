@@ -2,6 +2,7 @@ import fp from 'fastify-plugin';
 import fastifyJwt from '@fastify/jwt';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { AuthClaims, Role } from '@cerberus/shared';
+import { isSuperAdmin } from '../modules/scope.js';
 
 /**
  * Autenticação JWT. O mesmo token emitido no login é reutilizado como
@@ -31,6 +32,9 @@ export default fp(async function authPlugin(app: FastifyInstance) {
         return reply.code(401).send({ error: 'Não autenticado' });
       }
       const claims = request.user as AuthClaims;
+      // SA transcende o RBAC: passa em qualquer requireRole. Como consequência,
+      // requireRole(Role.SUPERADMIN) vira SA-only (admin cai no allow-list → 403).
+      if (isSuperAdmin(claims)) return;
       if (!roles.includes(claims.role as Role)) {
         return reply.code(403).send({ error: 'Acesso negado ao recurso' });
       }

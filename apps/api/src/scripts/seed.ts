@@ -15,7 +15,7 @@ async function seed(): Promise<void> {
   console.log('Conectado ao MongoDB para seed...');
 
   await Promise.all([
-    User.deleteMany({ username: { $in: ['admin', 'agente01'] } }),
+    User.deleteMany({ username: { $in: ['superadmin', 'admin', 'agente01'] } }),
     Operation.deleteMany({ name: 'Operação Cérbero (Demo)' }),
   ]);
 
@@ -29,7 +29,14 @@ async function seed(): Promise<void> {
   const passwordHash = await bcrypt.hash('cerberus123', 10);
   const agentId = 'AG-0456';
 
-  const [admin, agente] = await Promise.all([
+  const [superadmin, admin, agente] = await Promise.all([
+    User.create({
+      username: 'superadmin',
+      name: 'Super Central',
+      passwordHash,
+      role: Role.SUPERADMIN,
+      operationIds: [],
+    }),
     User.create({
       username: 'admin',
       name: 'Central de Comando',
@@ -48,7 +55,8 @@ async function seed(): Promise<void> {
   ]);
 
   console.log('\n=== Seed concluído ===');
-  console.log('Senha (ambos):   cerberus123');
+  console.log('Senha (todos):   cerberus123');
+  console.log(`SuperAdmin:      ${superadmin.username}`);
   console.log(`Admin:           ${admin.username}`);
   console.log(`Agente:          ${agente.username}  (agentId=${agentId})`);
   console.log(`OPERATION_ID:    ${operationId}`);

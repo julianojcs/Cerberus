@@ -7,8 +7,17 @@ import {
   type AuthClaims,
   type KeyDirectoryEntry,
 } from '@cerberus/shared';
-import { Operation, User } from '../../models/index.js';
-import { assertOperationScope } from '../scope.js';
+import { Types } from 'mongoose';
+import {
+  Alert,
+  Geofence,
+  GeofenceMembership,
+  MessageModel,
+  Operation,
+  Position,
+  User,
+} from '../../models/index.js';
+import { assertOperationScope, isSuperAdmin } from '../scope.js';
 
 const operationTypes = Object.values(OperationType) as [string, ...string[]];
 const operationStatuses = Object.values(OperationStatus) as [string, ...string[]];
@@ -36,10 +45,11 @@ const memberSchema = z.object({ userId: z.string().min(1) });
  * escrita e gestão de membros exigem papel de administração central.
  */
 export async function operationRoutes(app: FastifyInstance): Promise<void> {
-  // Lista apenas as operações dentro do escopo do usuário.
+  // Lista as operações dentro do escopo do usuário (SA enxerga todas).
   app.get('/operations', { onRequest: [app.authenticate] }, async (request) => {
     const claims = request.user as AuthClaims;
-    const ops = await Operation.find({ _id: { $in: claims.operationIds } }).sort({ createdAt: -1 });
+    const filter = isSuperAdmin(claims) ? {} : { _id: { $in: claims.operationIds } };
+    const ops = await Operation.find(filter).sort({ createdAt: -1 });
     return ops.map(serialize);
   });
 
@@ -137,6 +147,67 @@ export async function operationRoutes(app: FastifyInstance): Promise<void> {
         { new: true },
       );
       if (!user) return reply.code(404).send({ error: 'Usuário não encontrado' });
+      return reply.code(204).send();
+    },
+  );
+
+  // Exclusão definitiva de uma operação — SUPERADMIN apenas (alto blast-radius).
+  // Cascata: apaga toda a telemetria/zonas/mídia da operação e remove a operação do
+  // escopo dos membros. Sem transação multi-doc (Mongo standalone) — best-effort, com
+  // o doc da operação apagado POR ÚLTIMO (falha no meio deixa a op ainda retentável).
+  app.delete(
+    '/operations/:id',
+    { onRequest: [app.requireRole(Role.SUPERADMIN)] },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      if (!Types.ObjectId.isValid(id)) {
+        return reply.code(400).send({ error: 'Identificador inválido' });
+      }
+      const op = await Operation.findById(id);
+      if (!op) return reply.code(404).send({ error: 'Operação não encontrada' });
+
+      const [positions, messages, geofences, alerts, memberships] = await Promise.all([
+        Position.deleteMany({ operationId: id }),
+        MessageModel.deleteMany({ operationId: id }),
+        Geofence.deleteMany({ operationId: id }),
+        Alert.deleteMany({ operationId: id }),
+        GeofenceMembership.deleteMany({ operationId: id }),
+      ]);
+
+      // Blobs de mídia E2EE no GridFS ficam órfãos após apagar as mensagens.
+      let mediaDeleted = 0;
+      const db = app.mongoose.connection.db;
+      if (db) {
+        const bucket = new app.mongoose.mongo.GridFSBucket(db, { bucketName: 'media' });
+        const files = await bucket.find({ 'metadata.operationId': id }).toArray();
+        for (const f of files) {
+          await bucket.delete(f._id).catch(() => {});
+          mediaDeleted += 1;
+        }
+      }
+
+      // Usuários são globais: só remove a operação do escopo (não apaga contas).
+      const unscoped = await User.updateMany(
+        { operationIds: id },
+        { $pull: { operationIds: id } },
+      );
+
+      // Doc da operação por ÚLTIMO (idempotência sob falha parcial).
+      await Operation.findByIdAndDelete(id);
+
+      request.log.info(
+        {
+          operationId: id,
+          positions: positions.deletedCount,
+          messages: messages.deletedCount,
+          geofences: geofences.deletedCount,
+          alerts: alerts.deletedCount,
+          memberships: memberships.deletedCount,
+          mediaDeleted,
+          membersUnscoped: unscoped.modifiedCount,
+        },
+        'Operação excluída (cascata)',
+      );
       return reply.code(204).send();
     },
   );
