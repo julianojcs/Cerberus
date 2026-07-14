@@ -14,12 +14,16 @@ import {
 } from 'react-native';
 import type { Session } from '../services/auth';
 import { getSecretKey } from '../services/keys';
-import { sendText } from '../services/messages';
+import { sendTeamMessage, sendText } from '../services/messages';
+import { fetchMyTeams, type MyTeam } from '../services/teams';
 import {
   connectMqtt,
   disconnectMqtt,
   isConnected,
+  setBroadcastIdentity,
   subscribeBroadcast,
+  subscribeInbox,
+  subscribeTeam,
   type BroadcastMessage,
 } from '../services/mqtt';
 import {
@@ -84,6 +88,9 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
   const [caption, setCaption] = useState('');
   const [messageText, setMessageText] = useState('');
   const [sendingText, setSendingText] = useState(false);
+  const [myTeams, setMyTeams] = useState<MyTeam[]>([]);
+  // Destino do composer: `null` = operação (central); MyTeam = a equipe escolhida.
+  const [composeTeam, setComposeTeam] = useState<MyTeam | null>(null);
 
   useEffect(() => {
     connectMqtt(session.token, agentId);
@@ -119,25 +126,45 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
     [],
   );
 
-  // Recebe diretivas da central (canal broadcast da operação). Carrega a chave
-  // secreta local (SecureStore, assíncrono) para decifrar o envelope E2EE — o id
-  // do agente deve casar com o `rid` que a central usou (agentId ?? userId).
+  // Descobre as equipes do agente (para assinar os tópicos de equipe + enviar a elas).
   useEffect(() => {
     if (!operationId) return;
-    let unsubscribe: (() => void) | undefined;
     let cancelled = false;
+    void fetchMyTeams(session, operationId)
+      .then((teams) => {
+        if (!cancelled) setMyTeams(teams);
+      })
+      .catch(() => {
+        /* sem equipes / falha de rede — segue só com a operação */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [operationId, session]);
+
+  // Recebe mensagens: broadcast da operação + inbox (DM) + cada equipe do agente.
+  // Carrega a chave secreta local (SecureStore) para decifrar o envelope E2EE — o
+  // `myId` deve casar com o `rid` usado pela central (agentId ?? userId). Menor
+  // privilégio: assina só esses tópicos, nunca wildcard.
+  useEffect(() => {
+    if (!operationId) return;
+    let cancelled = false;
+    const unsubs: Array<() => void> = [];
     void (async () => {
       const secretKey = await getSecretKey(session.userId);
       if (cancelled) return;
-      unsubscribe = subscribeBroadcast(operationId, { myId: agentId, secretKey }, (message) => {
-        setBroadcasts((prev) => [message, ...prev].slice(0, 20));
-      });
+      setBroadcastIdentity({ myId: agentId, secretKey });
+      const onMessage = (message: BroadcastMessage) =>
+        setBroadcasts((prev) => [message, ...prev].slice(0, 30));
+      unsubs.push(subscribeBroadcast(operationId, onMessage));
+      unsubs.push(subscribeInbox(operationId, agentId, onMessage));
+      for (const team of myTeams) unsubs.push(subscribeTeam(operationId, team.id, onMessage));
     })();
     return () => {
       cancelled = true;
-      unsubscribe?.();
+      for (const u of unsubs) u();
     };
-  }, [operationId, agentId, session.userId]);
+  }, [operationId, agentId, session.userId, myTeams]);
 
   async function toggleTracking(value: boolean) {
     if (!operationId) return;
@@ -199,7 +226,11 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
     if (!text || !operationId || sendingText) return;
     setSendingText(true);
     try {
-      await sendText(session, operationId, text);
+      if (composeTeam) {
+        await sendTeamMessage(session, operationId, composeTeam, text);
+      } else {
+        await sendText(session, operationId, text);
+      }
       setMessageText('');
     } catch (e) {
       Alert.alert('Falha', e instanceof Error ? e.message : 'Não foi possível enviar a mensagem.');
@@ -329,27 +360,68 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
         </TouchableOpacity>
 
         <View style={styles.card}>
-          <Text style={styles.label}>Mensagens da central</Text>
+          <Text style={styles.label}>Mensagens</Text>
           {broadcasts.length === 0 ? (
-            <Text style={styles.hint}>Nenhuma diretiva recebida ainda.</Text>
+            <Text style={styles.hint}>Nenhuma mensagem recebida ainda.</Text>
           ) : (
-            broadcasts.map((m, i) => (
-              <View key={`${m.capturedAt}-${i}`} style={styles.broadcastItem}>
-                <Text style={styles.broadcastText}>{m.text}</Text>
-                <Text style={styles.broadcastMeta}>
-                  {m.senderId} · {formatTime(m.capturedAt)}
-                </Text>
-              </View>
-            ))
+            broadcasts.map((m, i) => {
+              const badge =
+                m.scope === 'central'
+                  ? 'CENTRAL'
+                  : m.scope === 'dm'
+                    ? 'DM'
+                    : `EQUIPE ${myTeams.find((t) => t.id === m.teamId)?.name ?? ''}`.trim();
+              const badgeColor =
+                m.scope === 'central' ? '#f0a0a0' : m.scope === 'dm' ? '#d0a0f0' : '#a0c0f0';
+              return (
+                <View key={`${m.capturedAt}-${i}`} style={styles.broadcastItem}>
+                  <Text style={[styles.scopeBadge, { color: badgeColor }]}>{badge}</Text>
+                  <Text style={styles.broadcastText}>{m.text}</Text>
+                  <Text style={styles.broadcastMeta}>
+                    {m.senderId} · {formatTime(m.capturedAt)}
+                  </Text>
+                </View>
+              );
+            })
           )}
 
-          {/* Compositor: o agente responde à central (E2EE — cifrado no aparelho). */}
+          {/* Destino do envio: operação (central) ou uma das equipes do agente. */}
+          {myTeams.length > 0 && (
+            <View style={styles.scopeRow}>
+              <TouchableOpacity
+                style={[styles.scopeChip, !composeTeam && styles.scopeChipActive]}
+                onPress={() => setComposeTeam(null)}
+              >
+                <Text style={[styles.scopeChipText, !composeTeam && styles.scopeChipTextActive]}>
+                  Operação
+                </Text>
+              </TouchableOpacity>
+              {myTeams.map((t) => {
+                const active = composeTeam?.id === t.id;
+                return (
+                  <TouchableOpacity
+                    key={t.id}
+                    style={[styles.scopeChip, active && styles.scopeChipActive]}
+                    onPress={() => setComposeTeam(t)}
+                  >
+                    <Text style={[styles.scopeChipText, active && styles.scopeChipTextActive]}>
+                      {t.name}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          )}
+
+          {/* Compositor E2EE (cifrado no aparelho) — envia à operação ou à equipe. */}
           <View style={styles.replyRow}>
             <TextInput
               style={styles.replyInput}
               value={messageText}
               onChangeText={setMessageText}
-              placeholder="Reportar à central…"
+              placeholder={
+                composeTeam ? `Mensagem à equipe ${composeTeam.name}…` : 'Reportar à central…'
+              }
               placeholderTextColor="#8b9aa8"
               multiline
               editable={!sendingText}
@@ -552,6 +624,18 @@ const styles = StyleSheet.create({
   },
   broadcastText: { color: '#e6edf3', fontSize: 15, lineHeight: 20 },
   broadcastMeta: { color: '#8b9aa8', fontSize: 12, marginTop: 2 },
+  scopeBadge: { fontSize: 10, fontWeight: '700', letterSpacing: 0.5, marginBottom: 2 },
+  scopeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 14 },
+  scopeChip: {
+    borderWidth: 1,
+    borderColor: '#263543',
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+  },
+  scopeChipActive: { backgroundColor: '#1c2733', borderColor: '#c1121f' },
+  scopeChipText: { color: '#8b9aa8', fontSize: 12 },
+  scopeChipTextActive: { color: '#e6edf3', fontWeight: '600' },
   replyRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, marginTop: 16 },
   replyInput: {
     flex: 1,

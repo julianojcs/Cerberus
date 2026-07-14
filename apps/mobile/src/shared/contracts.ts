@@ -9,6 +9,8 @@
  */
 
 export const TOPIC_ROOT = 'operacao';
+/** Segmento de equipe (sem acento — identificador de rede). */
+export const TEAM_SEGMENT = 'equipe';
 
 export function agentPositionTopic(operationId: string, agentId: string): string {
   return `${TOPIC_ROOT}/${operationId}/agente/${agentId}/posicao`;
@@ -18,9 +20,19 @@ export function agentMessageTopic(operationId: string, agentId: string): string 
   return `${TOPIC_ROOT}/${operationId}/agente/${agentId}/mensagem`;
 }
 
+/** `operacao/{operationId}/agente/{agentId}/inbox` — DM da central para o agente. */
+export function agentInboxTopic(operationId: string, agentId: string): string {
+  return `${TOPIC_ROOT}/${operationId}/agente/${agentId}/inbox`;
+}
+
 /** `operacao/{operationId}/broadcast` — central → todos os agentes da operação. */
 export function operationBroadcastTopic(operationId: string): string {
   return `${TOPIC_ROOT}/${operationId}/broadcast`;
+}
+
+/** `operacao/{operationId}/equipe/{teamId}/broadcast` — mensagem aos membros da equipe. */
+export function teamBroadcastTopic(operationId: string, teamId: string): string {
+  return `${TOPIC_ROOT}/${operationId}/${TEAM_SEGMENT}/${teamId}/broadcast`;
 }
 
 export interface PositionSample {

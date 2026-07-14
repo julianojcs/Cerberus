@@ -1,8 +1,10 @@
 import mqtt, { type MqttClient } from 'mqtt';
 import { config } from '../config';
 import {
+  agentInboxTopic,
   agentPositionTopic,
   operationBroadcastTopic,
+  teamBroadcastTopic,
   type PositionSample,
 } from '../shared/contracts';
 import { openMessage } from '../shared/e2ee';
@@ -10,20 +12,27 @@ import { flushOutbox, queuePosition } from './outbox';
 
 let client: MqttClient | null = null;
 
+/** Escopo da mensagem recebida (deriva do tópico/payload). */
+export type MessageScope = 'central' | 'equipe' | 'dm';
+
 /** Diretiva recebida da central, com o texto já decifrado (ou em claro se sistema). */
 export interface BroadcastMessage {
   senderId: string;
   type: string;
   text: string;
+  scope: MessageScope;
+  teamId?: string;
   capturedAt: string;
 }
 
-/** Payload cru no canal: broadcast E2EE (`ciphertext`) ou sistema em claro (`text`). */
+/** Payload cru no canal: E2EE (`ciphertext`) ou sistema em claro (`text`). */
 interface RawBroadcast {
   senderId: string;
   type: string;
   text?: string;
   ciphertext?: string;
+  teamId?: string;
+  recipientId?: string;
   capturedAt: string;
 }
 
@@ -34,56 +43,95 @@ export interface BroadcastIdentity {
 }
 
 type BroadcastListener = (message: BroadcastMessage) => void;
-const broadcastListeners = new Set<BroadcastListener>();
-let broadcastOperationId: string | null = null;
-let broadcastIdentity: BroadcastIdentity = { myId: '', secretKey: null };
+/** Identidade E2EE do agente — a mesma para todos os tópicos assinados. */
+let identity: BroadcastIdentity = { myId: '', secretKey: null };
+/**
+ * Registro de tópicos assinados → seus listeners. Menor privilégio (regra
+ * mqtt-multitenant): o agente só recebe dos tópicos que assinou explicitamente
+ * (broadcast da operação, sua(s) equipe(s) e seu inbox) — nunca wildcard.
+ */
+const subscriptions = new Map<string, Set<BroadcastListener>>();
 
-/** Decifra o broadcast E2EE ou repassa a mensagem de sistema em claro (alertas). */
+/** Decifra o envelope E2EE ou repassa a mensagem de sistema em claro (alertas). */
 function resolveText(m: RawBroadcast): string | null {
   if (typeof m.ciphertext === 'string' && m.ciphertext.length > 0) {
-    if (!broadcastIdentity.secretKey) return null; // sem chave local para decifrar
-    return openMessage(m.ciphertext, broadcastIdentity.myId, broadcastIdentity.secretKey);
+    if (!identity.secretKey) return null; // sem chave local para decifrar
+    return openMessage(m.ciphertext, identity.myId, identity.secretKey);
   }
   return typeof m.text === 'string' ? m.text : null;
 }
 
 function handleIncoming(topic: string, payload: Uint8Array): void {
-  if (!broadcastOperationId || topic !== operationBroadcastTopic(broadcastOperationId)) return;
+  const listeners = subscriptions.get(topic);
+  if (!listeners || listeners.size === 0) return; // tópico não assinado — descarta
   try {
     const m = JSON.parse(Buffer.from(payload).toString()) as RawBroadcast;
     const text = resolveText(m);
     if (text === null) return; // cifrado e não decifrável por este agente — ignora
+    const scope: MessageScope = m.teamId ? 'equipe' : m.recipientId ? 'dm' : 'central';
     const message: BroadcastMessage = {
       senderId: m.senderId,
       type: m.type,
       text,
+      scope,
+      teamId: m.teamId,
       capturedAt: m.capturedAt,
     };
-    for (const listener of broadcastListeners) listener(message);
+    for (const listener of listeners) listener(message);
   } catch {
     /* payload inválido — ignora */
   }
 }
 
-/**
- * Assina o canal de broadcast da operação (central → agentes). O menor privilégio
- * da regra mqtt-multitenant: o agente ouve apenas `operacao/{opId}/broadcast`. A
- * `identity` permite decifrar o envelope E2EE destinado a este agente.
- */
+/** Assina um tópico específico e registra o listener. Retorna a função de desinscrição. */
+function subscribeTopic(topic: string, listener: BroadcastListener): () => void {
+  let set = subscriptions.get(topic);
+  if (!set) {
+    set = new Set();
+    subscriptions.set(topic, set);
+  }
+  set.add(listener);
+  if (client?.connected) client.subscribe(topic, { qos: 1 });
+  return () => {
+    const s = subscriptions.get(topic);
+    if (!s) return;
+    s.delete(listener);
+    if (s.size === 0) {
+      subscriptions.delete(topic);
+      client?.unsubscribe(topic);
+    }
+  };
+}
+
+/** Define a identidade E2EE usada para decifrar (chamado uma vez, no boot da tela). */
+export function setBroadcastIdentity(id: BroadcastIdentity): void {
+  identity = id;
+}
+
+/** Assina o canal de broadcast da operação (central → agentes). Identidade já definida. */
 export function subscribeBroadcast(
   operationId: string,
-  identity: BroadcastIdentity,
   listener: BroadcastListener,
 ): () => void {
-  broadcastOperationId = operationId;
-  broadcastIdentity = identity;
-  broadcastListeners.add(listener);
-  if (client?.connected) {
-    client.subscribe(operationBroadcastTopic(operationId), { qos: 1 });
-  }
-  return () => {
-    broadcastListeners.delete(listener);
-  };
+  return subscribeTopic(operationBroadcastTopic(operationId), listener);
+}
+
+/** Assina o tópico de uma equipe (mensagens da equipe). Identidade já definida. */
+export function subscribeTeam(
+  operationId: string,
+  teamId: string,
+  listener: BroadcastListener,
+): () => void {
+  return subscribeTopic(teamBroadcastTopic(operationId, teamId), listener);
+}
+
+/** Assina o inbox do agente (DMs da central). Identidade já definida. */
+export function subscribeInbox(
+  operationId: string,
+  agentId: string,
+  listener: BroadcastListener,
+): () => void {
+  return subscribeTopic(agentInboxTopic(operationId, agentId), listener);
 }
 
 /**
@@ -105,9 +153,9 @@ export function connectMqtt(token: string, agentId: string): MqttClient {
   client.on('connect', () => {
     // Ao reconectar, descarrega o buffer offline (resiliência de rede).
     void flushOutbox(publishNow);
-    // Re-assina o broadcast (sobrevive a reconexões).
-    if (broadcastOperationId) {
-      client?.subscribe(operationBroadcastTopic(broadcastOperationId), { qos: 1 });
+    // Re-assina TODOS os tópicos registrados (broadcast + equipes + inbox).
+    for (const topic of subscriptions.keys()) {
+      client?.subscribe(topic, { qos: 1 });
     }
   });
 
