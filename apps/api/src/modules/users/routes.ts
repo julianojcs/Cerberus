@@ -166,6 +166,7 @@ function serialize(u: {
   role: string;
   agentId?: string | null;
   operationIds?: unknown[];
+  blocked?: boolean;
 }) {
   return {
     id: String(u._id),
@@ -174,5 +175,6 @@ function serialize(u: {
     role: u.role,
     agentId: u.agentId ?? undefined,
     operationIds: (u.operationIds ?? []).map(String),
+    blocked: !!u.blocked,
   };
 }

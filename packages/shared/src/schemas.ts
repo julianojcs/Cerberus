@@ -160,3 +160,14 @@ export interface AuditLogEntry {
   ip?: string;
   createdAt: string;
 }
+
+/** Usuário serializado (lista/CRUD do painel Admin). Nunca inclui o hash da senha. */
+export interface UserInfo {
+  id: string;
+  username: string;
+  name: string;
+  role: Role;
+  agentId?: string;
+  operationIds: string[];
+  blocked: boolean;
+}

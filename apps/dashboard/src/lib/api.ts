@@ -1,4 +1,12 @@
-import type { KeyDirectoryEntry, LoginResponse, Operation } from '@cerberus/shared';
+import type {
+  AuditLogEntry,
+  DeviceBlockInfo,
+  KeyDirectoryEntry,
+  LoginResponse,
+  Operation,
+  SessionInfo,
+  UserInfo,
+} from '@cerberus/shared';
 import { clearSession, getToken } from './auth';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3000';
@@ -143,6 +151,35 @@ export const api = {
   settings: () => request<Settings>('/settings'),
   patchSettings: (data: Partial<Settings>) =>
     request<Settings>('/settings', { method: 'PATCH', body: JSON.stringify(data) }),
+
+  // --- Admin: usuários / dispositivos / auditoria (Fase 1 · slice 1c) ---
+  users: () => request<UserInfo[]>('/users'),
+  createUser: (data: {
+    username: string;
+    name: string;
+    password: string;
+    role: string;
+    agentId?: string;
+    operationIds?: string[];
+  }) => request<UserInfo>('/users', { method: 'POST', body: JSON.stringify(data) }),
+  updateUser: (
+    id: string,
+    data: Partial<{ name: string; role: string; agentId: string; password: string }>,
+  ) => request<UserInfo>(`/users/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  deleteUser: (id: string) => request<void>(`/users/${id}`, { method: 'DELETE' }),
+  userDevices: (id: string) => request<SessionInfo[]>(`/users/${id}/devices`),
+  kickSession: (sid: string) => request<void>(`/sessions/${sid}/kick`, { method: 'POST' }),
+  blockUser: (id: string) => request<void>(`/users/${id}/block`, { method: 'POST' }),
+  unblockUser: (id: string) => request<void>(`/users/${id}/unblock`, { method: 'POST' }),
+  blockDevice: (deviceId: string, reason?: string) =>
+    request<void>(`/devices/${encodeURIComponent(deviceId)}/block`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    }),
+  unblockDevice: (deviceId: string) =>
+    request<void>(`/devices/${encodeURIComponent(deviceId)}/unblock`, { method: 'POST' }),
+  blockedDevices: () => request<DeviceBlockInfo[]>('/devices/blocked'),
+  audit: (limit = 200) => request<AuditLogEntry[]>(`/audit?limit=${limit}`),
 };
 
 export interface Settings {

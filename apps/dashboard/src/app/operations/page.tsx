@@ -55,6 +55,16 @@ export default function OperationsPage() {
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <span className="muted">{user?.name}</span>
+          {(user?.role === 'admin' || user?.role === 'superadmin') && (
+            <Link
+              href="/admin/users"
+              className="btn"
+              style={{ background: 'var(--panel-2)', color: '#fff' }}
+              title="Painel administrativo"
+            >
+              👥 Admin
+            </Link>
+          )}
           <button
             type="button"
             className="btn"
