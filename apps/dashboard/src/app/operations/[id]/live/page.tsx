@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import {
@@ -92,6 +92,13 @@ export default function LiveOperationPage() {
   // Chat (Fase 3a): aba Mapa|Chat + buffer de mensagens ao vivo (equipe/DM) do MQTT.
   const [mainTab, setMainTab] = useState<'map' | 'chat'>('map');
   const [incomingChat, setIncomingChat] = useState<IncomingMessage[]>([]);
+  // Fase 3b-1: layout abas OU split (Chat|Mapa lado a lado, divisor arrastável).
+  const [layout, setLayout] = useState<'tabs' | 'split'>('tabs');
+  const [chatWidth, setChatWidth] = useState(400);
+  const splitRootRef = useRef<HTMLDivElement>(null);
+  const chatWidthRef = useRef(chatWidth);
+  chatWidthRef.current = chatWidth;
+  const draggingSplit = useRef(false);
 
   // Histórico cru. As rotas são DERIVADAS (com o gap configurável).
   const [rawPositions, setRawPositions] = useState<LatestPosition[]>([]);
@@ -164,6 +171,33 @@ export default function LiveOperationPage() {
       /* preferência corrompida — ignora */
     }
   }, [colorsKey]);
+
+  // Layout (abas/split) + largura do chat no split: carrega a preferência e liga o
+  // arraste do divisor (mesmo padrão do ResizableSidebar).
+  useEffect(() => {
+    if (localStorage.getItem('cerberus_live_layout') === 'split') setLayout('split');
+    const w = Number(localStorage.getItem('cerberus_live_chatmap_w'));
+    if (Number.isFinite(w) && w >= 280 && w <= 900) setChatWidth(w);
+
+    const onMove = (e: MouseEvent) => {
+      if (!draggingSplit.current || !splitRootRef.current) return;
+      const rect = splitRootRef.current.getBoundingClientRect();
+      setChatWidth(Math.min(900, Math.max(280, rect.right - e.clientX)));
+    };
+    const onUp = () => {
+      if (!draggingSplit.current) return;
+      draggingSplit.current = false;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      localStorage.setItem('cerberus_live_chatmap_w', String(chatWidthRef.current));
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, []);
 
   // Busca o histórico e decifra texto/broadcast localmente (E2EE). A mídia sai do
   // mesmo fetch. Reusado pelo polling e logo após enviar um broadcast.
@@ -1205,39 +1239,66 @@ export default function LiveOperationPage() {
               gap: 6,
               padding: '6px 8px',
               borderBottom: '1px solid var(--border)',
+              alignItems: 'center',
             }}
           >
-            {(['map', 'chat'] as const).map((tab) => (
-              <button
-                key={tab}
-                type="button"
-                onClick={() => setMainTab(tab)}
-                className="badge"
-                style={{
-                  cursor: 'pointer',
-                  border: '1px solid var(--border)',
-                  color: 'var(--text)',
-                  background: mainTab === tab ? 'var(--panel-2)' : 'transparent',
-                  borderColor: mainTab === tab ? 'var(--accent)' : 'var(--border)',
-                }}
-              >
-                {tab === 'map' ? '🗺 Mapa' : '💬 Chat'}
-              </button>
-            ))}
+            {layout === 'tabs' &&
+              (['map', 'chat'] as const).map((tab) => (
+                <button
+                  key={tab}
+                  type="button"
+                  onClick={() => setMainTab(tab)}
+                  className="badge"
+                  style={{
+                    cursor: 'pointer',
+                    border: '1px solid var(--border)',
+                    color: 'var(--text)',
+                    background: mainTab === tab ? 'var(--panel-2)' : 'transparent',
+                    borderColor: mainTab === tab ? 'var(--accent)' : 'var(--border)',
+                  }}
+                >
+                  {tab === 'map' ? '🗺 Mapa' : '💬 Chat'}
+                </button>
+              ))}
+            {/* Alternador de layout: abas ↔ split (Chat e Mapa lado a lado). */}
+            <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+              {(['tabs', 'split'] as const).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => {
+                    setLayout(mode);
+                    localStorage.setItem('cerberus_live_layout', mode);
+                  }}
+                  className="badge"
+                  title={mode === 'tabs' ? 'Abas Mapa/Chat' : 'Mapa e Chat lado a lado'}
+                  style={{
+                    cursor: 'pointer',
+                    border: '1px solid var(--border)',
+                    color: 'var(--text)',
+                    background: layout === mode ? 'var(--panel-2)' : 'transparent',
+                    borderColor: layout === mode ? 'var(--accent)' : 'var(--border)',
+                  }}
+                >
+                  {mode === 'tabs' ? '▭ Abas' : '⊟ Split'}
+                </button>
+              ))}
+            </div>
           </div>
-          <div
-            style={{
-              flex: 1,
-              minHeight: 0,
-              position: 'relative',
-              display: mainTab === 'map' ? 'block' : 'none',
-            }}
-            onMouseMove={(e) => {
-              const rect = e.currentTarget.getBoundingClientRect();
-              setBarHover(e.clientY - rect.top < 72);
-            }}
-            onMouseLeave={() => setBarHover(false)}
-          >
+          <div ref={splitRootRef} style={{ flex: 1, minHeight: 0, display: 'flex', minWidth: 0 }}>
+            <div
+              style={{
+                flex: 1,
+                minWidth: 0,
+                position: 'relative',
+                display: layout === 'tabs' && mainTab !== 'map' ? 'none' : 'block',
+              }}
+              onMouseMove={(e) => {
+                const rect = e.currentTarget.getBoundingClientRect();
+                setBarHover(e.clientY - rect.top < 72);
+              }}
+              onMouseLeave={() => setBarHover(false)}
+            >
           {/* Barra de período (topo do mapa): DOIS controles (início e fim) definem o
               intervalo das rotas plotadas. Fica OCULTA e DESCE do topo quando o cursor
               passa na faixa superior; o "pin" a mantém fixa. O wrapper com overflow
@@ -1400,11 +1461,34 @@ export default function LiveOperationPage() {
             focus={alertFocus}
           />
           </div>
-          {mainTab === 'chat' && (
-            <div style={{ flex: 1, minHeight: 0 }}>
-              <ChatPanel operationId={operationId} incoming={incomingChat} />
-            </div>
-          )}
+            {layout === 'split' && (
+              <div
+                onMouseDown={() => {
+                  draggingSplit.current = true;
+                  document.body.style.cursor = 'col-resize';
+                  document.body.style.userSelect = 'none';
+                }}
+                title="Arraste para ajustar a divisão"
+                style={{
+                  width: 6,
+                  flexShrink: 0,
+                  cursor: 'col-resize',
+                  background: 'var(--border)',
+                }}
+              />
+            )}
+            {(layout === 'split' || mainTab === 'chat') && (
+              <div
+                style={
+                  layout === 'split'
+                    ? { width: chatWidth, flexShrink: 0, minWidth: 0, minHeight: 0 }
+                    : { flex: 1, minWidth: 0, minHeight: 0 }
+                }
+              >
+                <ChatPanel operationId={operationId} incoming={incomingChat} />
+              </div>
+            )}
+          </div>
         </main>
       </div>
 
