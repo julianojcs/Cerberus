@@ -75,9 +75,13 @@ A API é o único serviço que hospedamos aqui; banco e broker são serviços ge
 
 ## 4. Semear o banco (uma vez)
 
-O seed cria admin, operação e um agente de teste. Rode da sua máquina apontando para o Atlas:
+O seed cria superadmin, admin, operação demo e um agente de teste. **⚠️ Ele é DESTRUTIVO** —
+apaga e recria esses usuários e a operação demo. Por isso o seed **recusa** rodar contra um
+banco remoto (Atlas) sem confirmação explícita (`SEED_ALLOW_REMOTE=1`). Rode da sua máquina
+apontando para o Atlas **só na primeira vez** (ou quando aceitar recriar os dados):
 
 ```bash
+SEED_ALLOW_REMOTE=1 \
 MONGO_URI="mongodb+srv://cerberus_api:<senha>@<cluster>.mongodb.net/cerberus_db" \
 JWT_SECRET="qualquer_coisa_para_o_seed" \
 MQTT_BROKER_URL="mqtt://localhost:1883" \
@@ -85,6 +89,10 @@ npm run api:seed
 ```
 
 (O seed não usa MQTT; a `MQTT_BROKER_URL` só satisfaz a validação de env.)
+
+> **Para dev local**, defina `MONGO_URI_DEV=mongodb://localhost:27017/cerberus` — o seed prefere
+> essa URI e dispensa o flag (banco local é liberado). Sem o flag e apontando para o Atlas, o
+> seed **aborta** em vez de zerar produção.
 
 ## 5. Apontar dashboard e app para a API pública
 
