@@ -9,6 +9,7 @@
     "build": "tsc -p tsconfig.json",
     "start": "node --env-file-if-exists=../../.env dist/server.js",
     "seed": "tsx --env-file-if-exists=../../.env src/scripts/seed.ts",
+    "ensure-superadmin": "tsx --env-file-if-exists=../../.env src/scripts/ensure-superadmin.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
     "test": "vitest run"
