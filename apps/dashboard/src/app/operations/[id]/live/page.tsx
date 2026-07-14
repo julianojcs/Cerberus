@@ -13,11 +13,10 @@ import {
   type Settings,
 } from '@/lib/api';
 import { getToken, getUser } from '@/lib/auth';
-import { getSecretKey, E2EE_UNLOCK_EVENT } from '@/lib/e2ee';
+import { getSecretKey, openForMe, E2EE_UNLOCK_EVENT } from '@/lib/e2ee';
 import {
   GEOFENCE_SEVERITY_RANK,
   encryptBytes,
-  openMessage,
   sealMessage,
   type KeyDirectoryEntry,
   type TeamInfo,
@@ -333,7 +332,7 @@ export default function LiveOperationPage() {
             const senderKeys = sdir ? [sdir.publicKey, ...(sdir.keyHistory ?? [])] : undefined;
             const meta =
               m.ciphertext && secretKey
-                ? parseMediaMeta(openMessage(m.ciphertext, myId, secretKey, senderKeys))
+                ? parseMediaMeta(openForMe(myId, m.ciphertext, myId, senderKeys))
                 : null;
             const mime = meta?.mime ?? 'image/jpeg';
             const crypto = meta?.k && meta?.n ? { k: meta.k, n: meta.n } : null;
@@ -383,7 +382,7 @@ export default function LiveOperationPage() {
                 // Envelope E2EE → decifra com a chave local; senão cai no texto legado.
                 text:
                   m.ciphertext && secretKey
-                    ? openMessage(m.ciphertext, myId, secretKey, senderKeys)
+                    ? openForMe(myId, m.ciphertext, myId, senderKeys)
                     : (m.text ?? null),
                 capturedAt: m.capturedAt,
                 teamId: m.teamId,
@@ -794,7 +793,9 @@ export default function LiveOperationPage() {
         setBroadcastMsg('Nenhum agente com chave E2EE registrada ainda.');
         return;
       }
-      const recipients = directory.map((e) => ({ id: e.id, publicKey: e.publicKey }));
+      const recipients = directory
+        .filter((e) => !e.revoked) // Fase 5e-2 — não selar para chaves revogadas
+        .map((e) => ({ id: e.id, publicKey: e.publicKey }));
       const ciphertext = sealMessage(text, secretKey, recipients);
       await api.broadcast(operationId, ciphertext);
       setBroadcastText('');
@@ -993,7 +994,9 @@ export default function LiveOperationPage() {
     const u = getUser();
     const secretKey = u ? getSecretKey(u.id) : null;
     if (!secretKey) return;
-    const recipients = keyDirectory.map((e) => ({ id: e.id, publicKey: e.publicKey }));
+    const recipients = keyDirectory
+      .filter((e) => !e.revoked) // Fase 5e-2 — não selar para chaves revogadas
+      .map((e) => ({ id: e.id, publicKey: e.publicKey }));
     if (recipients.length === 0) return;
     setDocBusy(true);
     try {

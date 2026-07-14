@@ -2432,4 +2432,41 @@ describe('rotação de chave E2EE (Fase 5e-2)', () => {
     expect(admin?.keyHistory?.filter((h) => h === k1.publicKey).length).toBe(1); // sem duplicar
     expect(admin?.revoked).toBe(false);
   });
+
+  it('revogar chave (SA) marca revoked; agente comum 403; rotacionar limpa a flag', async () => {
+    const adminId = (app.jwt.decode(token) as { sub: string }).sub;
+    const revokedOf = async () => {
+      const res = await app.inject({
+        method: 'GET',
+        url: `/operations/${operationId}/keys`,
+        headers: { authorization: `Bearer ${token}` },
+      });
+      return (res.json() as Array<{ role: string; revoked?: boolean }>).find(
+        (e) => e.role === 'admin',
+      )?.revoked;
+    };
+    // só SUPERADMIN revoga; agente comum → 403.
+    const forbidden = await app.inject({
+      method: 'POST',
+      url: `/users/${adminId}/revoke-key`,
+      headers: { authorization: `Bearer ${agentToken}` },
+    });
+    expect(forbidden.statusCode).toBe(403);
+    // SA revoga → o diretório passa a devolver revoked:true.
+    const revoke = await app.inject({
+      method: 'POST',
+      url: `/users/${adminId}/revoke-key`,
+      headers: { authorization: `Bearer ${saToken}` },
+    });
+    expect(revoke.statusCode).toBe(204);
+    expect(await revokedOf()).toBe(true);
+    // rotacionar (PUT nova pública) limpa a revogação.
+    await app.inject({
+      method: 'PUT',
+      url: '/auth/public-key',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { publicKey: generateKeyPair().publicKey },
+    });
+    expect(await revokedOf()).toBe(false);
+  });
 });

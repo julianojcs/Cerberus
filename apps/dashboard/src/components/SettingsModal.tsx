@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { api, type Settings } from '@/lib/api';
 import { getUser } from '@/lib/auth';
+import { keyState, rotateKey } from '@/lib/e2ee';
 import { Toggle } from './Toggle';
 
 /**
@@ -19,7 +20,14 @@ export function SettingsModal({
   onClose: () => void;
   onSaved: (s: Settings) => void;
 }) {
-  const isAdmin = getUser()?.role === 'admin';
+  const me = getUser();
+  const isAdmin = me?.role === 'admin';
+  // Fase 5e-2 — o operador rotaciona a PRÓPRIA chave E2EE (gera um par novo; a secreta
+  // antiga é preservada para decifrar o histórico; a pública nova versiona a anterior).
+  const canRotate = me ? keyState(me.id) === 'unlocked' || keyState(me.id) === 'locked' : false;
+  const [rotatePass, setRotatePass] = useState('');
+  const [rotating, setRotating] = useState(false);
+  const [rotateMsg, setRotateMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [minRoutePoints, setMinRoutePoints] = useState(String(initial.minRoutePoints));
   const [connectRoutes, setConnectRoutes] = useState(initial.connectRoutes);
   const [maxGapMinutes, setMaxGapMinutes] = useState(String(initial.maxGapMinutes));
@@ -54,6 +62,25 @@ export function SettingsModal({
       setMsg(e instanceof Error ? e.message : 'Falha ao salvar');
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function rotate() {
+    if (!me || !rotatePass || rotating) return;
+    setRotating(true);
+    setRotateMsg(null);
+    try {
+      const pub = await rotateKey(me.id, rotatePass);
+      if (!pub) {
+        setRotateMsg({ ok: false, text: 'Senha da chave incorreta.' });
+        return;
+      }
+      setRotatePass('');
+      setRotateMsg({ ok: true, text: 'Chave rotacionada. A anterior segue decifrando o histórico.' });
+    } catch (e) {
+      setRotateMsg({ ok: false, text: e instanceof Error ? e.message : 'Falha ao rotacionar.' });
+    } finally {
+      setRotating(false);
     }
   }
 
@@ -214,6 +241,62 @@ export function SettingsModal({
             onChange={setConnectRoutes}
             title="Ligar o fim de uma rota ao início da próxima"
           />
+        </div>
+
+        <div style={{ borderTop: '1px solid var(--border)', margin: '16px 0 12px', paddingTop: 14 }}>
+          <div style={{ fontSize: 14 }}>🔑 Chave E2EE</div>
+          <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
+            Rotaciona sua chave (gera um par novo). A anterior é preservada localmente para decifrar
+            mensagens antigas; a nova passa a selar os envios. Informe a senha da chave para confirmar.
+          </div>
+          {canRotate ? (
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <input
+                type="password"
+                autoComplete="off"
+                placeholder="Senha da chave"
+                value={rotatePass}
+                onChange={(e) => setRotatePass(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && rotate()}
+                style={{
+                  flex: 1,
+                  minWidth: 160,
+                  background: 'var(--bg, #0b0f14)',
+                  color: 'var(--text, #e6edf3)',
+                  colorScheme: 'dark',
+                  border: '1px solid var(--border)',
+                  borderRadius: 6,
+                  padding: 8,
+                  fontSize: 13,
+                  boxSizing: 'border-box',
+                }}
+              />
+              <button
+                type="button"
+                onClick={rotate}
+                disabled={rotating || !rotatePass}
+                style={{
+                  ...ghostBtn,
+                  borderRadius: 6,
+                  padding: '8px 12px',
+                  fontSize: 13,
+                  cursor: rotating || !rotatePass ? 'not-allowed' : 'pointer',
+                  opacity: rotating || !rotatePass ? 0.5 : 1,
+                }}
+              >
+                {rotating ? 'Rotacionando…' : 'Rotacionar chave'}
+              </button>
+            </div>
+          ) : (
+            <div className="muted" style={{ fontSize: 12 }}>
+              Desbloqueie sua chave E2EE para poder rotacioná-la.
+            </div>
+          )}
+          {rotateMsg && (
+            <div style={{ fontSize: 12, marginTop: 8, color: rotateMsg.ok ? '#3fb950' : '#c1121f' }}>
+              {rotateMsg.text}
+            </div>
+          )}
         </div>
 
         {!isAdmin && (

@@ -278,6 +278,8 @@ export const api = {
   kickSession: (sid: string) => request<void>(`/sessions/${sid}/kick`, { method: 'POST' }),
   blockUser: (id: string) => request<void>(`/users/${id}/block`, { method: 'POST' }),
   unblockUser: (id: string) => request<void>(`/users/${id}/unblock`, { method: 'POST' }),
+  /** Revoga a chave E2EE do usuário (Fase 5e-2): para de receber novas mensagens até rotacionar. */
+  revokeUserKey: (id: string) => request<void>(`/users/${id}/revoke-key`, { method: 'POST' }),
   blockDevice: (deviceId: string, reason?: string) =>
     request<void>(`/devices/${encodeURIComponent(deviceId)}/block`, {
       method: 'POST',

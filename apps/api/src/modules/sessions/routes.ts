@@ -68,6 +68,21 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
     return reply.code(204).send();
   });
 
+  // Revoga a chave E2EE de um usuário (Fase 5e-2): marca `keyRevoked` — o diretório
+  // passa a devolver `revoked:true` e os remetentes deixam de selar novas mensagens
+  // para essa chave. A pública + o histórico permanecem (seguem verificando mensagens
+  // antigas). Quando o usuário rotaciona (PUT /auth/public-key), a flag é limpa e ele
+  // volta a receber. Não apaga nada nem revoga sessões — não é um bloqueio de conta.
+  app.post('/users/:id/revoke-key', SA, async (request, reply) => {
+    const claims = request.user as AuthClaims;
+    const { id } = request.params as { id: string };
+    if (!Types.ObjectId.isValid(id)) return reply.code(400).send({ error: 'Identificador inválido' });
+    const res = await User.updateOne({ _id: id }, { $set: { keyRevoked: true } });
+    if (res.matchedCount === 0) return reply.code(404).send({ error: 'Usuário não encontrado' });
+    await writeAudit({ actorId: claims.sub, action: 'user.revoke_key', targetUserId: id, ip: clientIp(request) });
+    return reply.code(204).send();
+  });
+
   // Bloqueia um dispositivo permanentemente: denylist + revoga as sessões do device.
   app.post('/devices/:deviceId/block', SA, async (request, reply) => {
     const claims = request.user as AuthClaims;
