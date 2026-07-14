@@ -16,11 +16,14 @@ import { getToken, getUser } from '@/lib/auth';
 import { getSecretKey, E2EE_UNLOCK_EVENT } from '@/lib/e2ee';
 import {
   GEOFENCE_SEVERITY_RANK,
+  encryptBytes,
   openMessage,
   sealMessage,
   type KeyDirectoryEntry,
   type TeamInfo,
 } from '@cerberus/shared';
+import { putCachedCiphertext } from '@/lib/mediaCache';
+import { bytesToObjectUrl, loadDecryptedBytes } from '@/lib/media';
 import {
   AdvancedZoneFields,
   localTimeToUtcMin,
@@ -112,9 +115,21 @@ interface CardMsg {
   caption?: string | null;
 }
 
+/** Documento (Fase 6d): mídia E2EE com mime NÃO-imagem + nome de arquivo. */
+interface DecryptedDoc {
+  id: string;
+  senderId: string;
+  mediaRef: string;
+  filename: string;
+  mime: string;
+  crypto: { k: string; n: string } | null;
+  capturedAt: string;
+}
+
 /** Faz o parse da metadata E2EE da mídia (JSON no envelope). `null` se inválida. */
 function parseMediaMeta(raw: string | null): {
   caption?: string;
+  filename?: string;
   lat?: number;
   lng?: number;
   mime?: string;
@@ -149,7 +164,7 @@ export default function LiveOperationPage() {
   const [agents, setAgents] = useState<Record<string, AgentPoint>>({});
   const [connected, setConnected] = useState(false);
   // Chat (Fase 3a): aba Mapa|Chat + buffer de mensagens ao vivo (equipe/DM) do MQTT.
-  const [mainTab, setMainTab] = useState<'map' | 'chat'>('map');
+  const [mainTab, setMainTab] = useState<'map' | 'chat' | 'gallery' | 'docs'>('map');
   const [incomingChat, setIncomingChat] = useState<IncomingMessage[]>([]);
   // Clique no card "Mensagens" → abre a conversa no Chat (key + nonce p/ re-disparar).
   const [chatFocus, setChatFocus] = useState<{ key: string; nonce: number }>({ key: '', nonce: 0 });
@@ -205,10 +220,13 @@ export default function LiveOperationPage() {
 
   // Mídia (fotos) enviadas pelos agentes — com metadata E2EE já decifrada.
   const [mediaMsgs, setMediaMsgs] = useState<DecryptedMedia[]>([]);
+  const [docMsgs, setDocMsgs] = useState<DecryptedDoc[]>([]);
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   // Fase 6b — estatísticas de mídia (views + favoritos) + dedupe de views na sessão.
   const [mediaStats, setMediaStats] = useState<Record<string, MediaStatInfo>>({});
   const viewedRef = useRef<Set<string>>(new Set());
+  const docFileRef = useRef<HTMLInputElement>(null); // Fase 6d — upload de documento
+  const [docBusy, setDocBusy] = useState(false);
 
   // Histórico de texto/broadcast (E2EE) decifrado localmente para exibição.
   const [chatMsgs, setChatMsgs] = useState<DecryptedMessage[]>([]);
@@ -306,29 +324,50 @@ export default function LiveOperationPage() {
         const user = getUser();
         const secretKey = user ? getSecretKey(user.id) : null;
         const myId = user?.id ?? '';
+        // Decodifica toda a mídia e separa IMAGENS (galeria) de DOCUMENTOS (aba Docs).
+        // Documento = envelope com `filename` OU mime não-imagem.
+        const mediaDecoded = msgs
+          .filter((m) => m.type === 'media' && !!m.mediaRef)
+          .map((m) => {
+            const senderKey = keyDirectoryRef.current.find((e) => e.id === m.senderId)?.publicKey;
+            const meta =
+              m.ciphertext && secretKey
+                ? parseMediaMeta(openMessage(m.ciphertext, myId, secretKey, senderKey))
+                : null;
+            const mime = meta?.mime ?? 'image/jpeg';
+            const crypto = meta?.k && meta?.n ? { k: meta.k, n: meta.n } : null;
+            const isDoc = !!meta?.filename || !mime.startsWith('image/');
+            return { m, meta, mime, crypto, isDoc };
+          });
         setMediaMsgs(
-          msgs
-            .filter((m) => m.type === 'media' && !!m.mediaRef)
-            .map((m) => {
-              const senderKey = keyDirectoryRef.current.find((e) => e.id === m.senderId)?.publicKey;
-              const meta =
-                m.ciphertext && secretKey
-                  ? parseMediaMeta(openMessage(m.ciphertext, myId, secretKey, senderKey))
-                  : null;
-              return {
-                id: m.id,
-                senderId: m.senderId,
-                mediaRef: m.mediaRef as string,
-                caption: meta?.caption ?? null,
-                lat: meta?.lat,
-                lng: meta?.lng,
-                mime: meta?.mime ?? 'image/jpeg',
-                crypto: meta?.k && meta?.n ? { k: meta.k, n: meta.n } : null,
-                capturedAt: m.capturedAt,
-                teamId: m.teamId,
-                recipientId: m.recipientId,
-              };
-            }),
+          mediaDecoded
+            .filter((d) => !d.isDoc)
+            .map(({ m, meta, mime, crypto }) => ({
+              id: m.id,
+              senderId: m.senderId,
+              mediaRef: m.mediaRef as string,
+              caption: meta?.caption ?? null,
+              lat: meta?.lat,
+              lng: meta?.lng,
+              mime,
+              crypto,
+              capturedAt: m.capturedAt,
+              teamId: m.teamId,
+              recipientId: m.recipientId,
+            })),
+        );
+        setDocMsgs(
+          mediaDecoded
+            .filter((d) => d.isDoc)
+            .map(({ m, meta, mime, crypto }) => ({
+              id: m.id,
+              senderId: m.senderId,
+              mediaRef: m.mediaRef as string,
+              filename: meta?.filename ?? `documento-${m.id.slice(-6)}`,
+              mime,
+              crypto,
+              capturedAt: m.capturedAt,
+            })),
         );
         setChatMsgs(
           msgs
@@ -917,6 +956,18 @@ export default function LiveOperationPage() {
   const nameFor = (senderId: string, type?: string): string =>
     type === 'broadcast' ? 'Central' : (memberNames[senderId] ?? senderId);
 
+  // Ícone por tipo de documento (Fase 6d).
+  const docIcon = (mime: string): string =>
+    mime.includes('pdf')
+      ? '📕'
+      : mime.includes('word') || mime.includes('document')
+        ? '📘'
+        : mime.includes('sheet') || mime.includes('excel') || mime.includes('csv')
+          ? '📗'
+          : mime.includes('zip') || mime.includes('compress')
+            ? '🗜️'
+            : '📄';
+
   // Fase 6b — conta a visualização (uma vez por mídia na sessão) e atualiza o total.
   async function handleViewMedia(item: { id: string }) {
     if (viewedRef.current.has(item.id)) return;
@@ -934,6 +985,66 @@ export default function LiveOperationPage() {
       }));
     } catch {
       /* ignora */
+    }
+  }
+
+  // Fase 6d — envia um DOCUMENTO (qualquer arquivo) E2EE, selado a todos os membros.
+  async function uploadDoc(file: File) {
+    const u = getUser();
+    const secretKey = u ? getSecretKey(u.id) : null;
+    if (!secretKey) return;
+    const recipients = keyDirectory.map((e) => ({ id: e.id, publicKey: e.publicKey }));
+    if (recipients.length === 0) return;
+    setDocBusy(true);
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const { cipher, key, nonce } = encryptBytes(bytes);
+      const envelope = sealMessage(
+        JSON.stringify({
+          filename: file.name,
+          mime: file.type || 'application/octet-stream',
+          k: key,
+          n: nonce,
+        }),
+        secretKey,
+        recipients,
+      );
+      const blobBuf = cipher.buffer.slice(
+        cipher.byteOffset,
+        cipher.byteOffset + cipher.byteLength,
+      ) as ArrayBuffer;
+      const form = new FormData();
+      form.append('ciphertext', envelope);
+      form.append('file', new Blob([blobBuf], { type: 'application/octet-stream' }), 'doc.bin');
+      const resp = await api.uploadMedia(operationId, form);
+      if (resp.mediaRef) void putCachedCiphertext(api.mediaPath(operationId, resp.mediaRef), cipher);
+      refreshMessages();
+    } catch {
+      /* upload falhou */
+    } finally {
+      setDocBusy(false);
+    }
+  }
+
+  // Fase 6d — baixa e decifra um documento, salvando com o nome original.
+  async function downloadDoc(doc: DecryptedDoc) {
+    if (!doc.crypto) return;
+    try {
+      const bytes = await loadDecryptedBytes(
+        api.mediaPath(operationId, doc.mediaRef),
+        doc.crypto.k,
+        doc.crypto.n,
+      );
+      const url = bytesToObjectUrl(bytes, doc.mime);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = doc.filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+    } catch {
+      /* download falhou */
     }
   }
 
@@ -1858,7 +1969,7 @@ export default function LiveOperationPage() {
             }}
           >
             {layout === 'tabs' &&
-              (['map', 'chat'] as const).map((tab) => (
+              (['map', 'chat', 'gallery', 'docs'] as const).map((tab) => (
                 <button
                   key={tab}
                   type="button"
@@ -1872,7 +1983,13 @@ export default function LiveOperationPage() {
                     borderColor: mainTab === tab ? 'var(--accent)' : 'var(--border)',
                   }}
                 >
-                  {tab === 'map' ? '🗺 Mapa' : '💬 Chat'}
+                  {tab === 'map'
+                    ? '🗺 Mapa'
+                    : tab === 'chat'
+                      ? '💬 Chat'
+                      : tab === 'gallery'
+                        ? '🖼 Galeria'
+                        : '📄 Docs'}
                 </button>
               ))}
             {/* Alternador de layout: abas ↔ split (Chat e Mapa lado a lado). */}
@@ -2112,6 +2229,186 @@ export default function LiveOperationPage() {
                   focusKey={chatFocus.key || null}
                   focusNonce={chatFocus.nonce}
                 />
+              </div>
+            )}
+            {layout === 'tabs' && mainTab === 'gallery' && (
+              <div
+                className="thinscroll"
+                style={{ flex: 1, minWidth: 0, minHeight: 0, overflowY: 'auto', padding: 12 }}
+              >
+                <strong style={{ fontSize: 15 }}>🖼 Galeria ({mediaMsgs.length})</strong>
+                {mediaMsgs.length === 0 ? (
+                  <div className="muted" style={{ fontSize: 13, textAlign: 'center', marginTop: 40 }}>
+                    Nenhuma mídia na operação ainda.
+                  </div>
+                ) : (
+                  <div
+                    style={{
+                      marginTop: 10,
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))',
+                      gap: 8,
+                    }}
+                  >
+                    {mediaMsgs.map((m, i) => (
+                      <button
+                        key={m.id}
+                        type="button"
+                        onClick={() => setLightboxIndex(i)}
+                        title={`${nameFor(m.senderId)} · abrir`}
+                        style={{
+                          position: 'relative',
+                          padding: 0,
+                          border: '1px solid var(--border)',
+                          borderRadius: 8,
+                          overflow: 'hidden',
+                          cursor: 'pointer',
+                          background: 'var(--panel-2)',
+                        }}
+                      >
+                        <AuthImage
+                          path={api.mediaPath(operationId, m.mediaRef)}
+                          mediaKey={m.crypto}
+                          mime={m.mime}
+                          alt={`Mídia de ${nameFor(m.senderId)}`}
+                          style={{
+                            width: '100%',
+                            aspectRatio: '1',
+                            objectFit: 'cover',
+                            display: 'block',
+                            background: 'var(--border)',
+                          }}
+                        />
+                        <div
+                          style={{
+                            position: 'absolute',
+                            bottom: 0,
+                            left: 0,
+                            right: 0,
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            padding: '3px 6px',
+                            fontSize: 11,
+                            color: '#fff',
+                            background: 'linear-gradient(transparent, rgba(0,0,0,.7))',
+                          }}
+                        >
+                          <span>👁 {mediaStats[m.id]?.views ?? 0}</span>
+                          {mediaStats[m.id]?.favorited && (
+                            <span style={{ color: '#e3b341' }}>★</span>
+                          )}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+            {layout === 'tabs' && mainTab === 'docs' && (
+              <div
+                className="thinscroll"
+                style={{ flex: 1, minWidth: 0, minHeight: 0, overflowY: 'auto', padding: 12 }}
+              >
+                <div
+                  style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}
+                >
+                  <strong style={{ fontSize: 15 }}>📄 Documentos ({docMsgs.length})</strong>
+                  <input
+                    ref={docFileRef}
+                    type="file"
+                    style={{ display: 'none' }}
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) void uploadDoc(f);
+                      e.target.value = '';
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => docFileRef.current?.click()}
+                    disabled={docBusy}
+                    className="badge"
+                    style={{
+                      cursor: docBusy ? 'not-allowed' : 'pointer',
+                      border: '1px solid var(--border)',
+                      color: 'var(--text)',
+                      background: 'transparent',
+                      opacity: docBusy ? 0.5 : 1,
+                    }}
+                  >
+                    {docBusy ? 'Enviando…' : '⤒ Enviar documento'}
+                  </button>
+                </div>
+                <p className="muted" style={{ fontSize: 12, margin: '4px 0 10px' }}>
+                  Arquivos cifrados (E2EE) — o servidor nunca vê o conteúdo.
+                </p>
+                {docMsgs.length === 0 ? (
+                  <div className="muted" style={{ fontSize: 13, textAlign: 'center', marginTop: 30 }}>
+                    Nenhum documento ainda.
+                  </div>
+                ) : (
+                  <div style={{ display: 'grid', gap: 6 }}>
+                    {docMsgs.map((d) => (
+                      <div
+                        key={d.id}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 10,
+                          padding: '8px 10px',
+                          border: '1px solid var(--border)',
+                          borderRadius: 8,
+                          background: 'var(--panel-2)',
+                        }}
+                      >
+                        <span style={{ fontSize: 22 }}>{docIcon(d.mime)}</span>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div
+                            style={{
+                              fontSize: 13,
+                              color: 'var(--text)',
+                              whiteSpace: 'nowrap',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                            }}
+                          >
+                            {d.filename}
+                          </div>
+                          <div className="muted" style={{ fontSize: 11 }}>
+                            {nameFor(d.senderId)} ·{' '}
+                            {new Date(d.capturedAt).toLocaleString('pt-BR', {
+                              day: '2-digit',
+                              month: '2-digit',
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })}
+                          </div>
+                        </div>
+                        {d.crypto ? (
+                          <button
+                            type="button"
+                            onClick={() => void downloadDoc(d)}
+                            title="Baixar (decifrado)"
+                            className="badge"
+                            style={{
+                              cursor: 'pointer',
+                              border: '1px solid var(--border)',
+                              color: 'var(--text)',
+                              background: 'transparent',
+                            }}
+                          >
+                            ⤓ Baixar
+                          </button>
+                        ) : (
+                          <span className="muted" style={{ fontSize: 12 }}>
+                            🔒
+                          </span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </div>

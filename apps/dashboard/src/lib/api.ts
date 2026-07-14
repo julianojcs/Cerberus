@@ -213,6 +213,9 @@ export const api = {
       `/operations/${operationId}/agents/${encodeURIComponent(agentId)}/media`,
       form,
     ),
+  // Upload op-wide (Fase 6d — documentos): mesma rota de mídia, blob E2EE opaco.
+  uploadMedia: (operationId: string, form: FormData) =>
+    uploadForm<TacticalMessage>(`/operations/${operationId}/media`, form),
   // Caminho da mídia no GridFS (use com fetchBlobUrl por causa do Authorization).
   mediaPath: (operationId: string, fileId: string) => `/operations/${operationId}/media/${fileId}`,
   // --- Estatísticas de mídia: favoritos + visualizações (Fase 6b) ---
