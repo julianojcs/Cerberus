@@ -212,6 +212,24 @@ export type AlertDoc = InferSchemaType<typeof alertSchema>;
 export const Alert = model('Alert', alertSchema);
 
 /**
+ * Estatísticas de uma mídia (Fase 6b): quem já VIU (visualizações únicas) e quem
+ * FAVORITOU. Escopado por operação e chaveado pelo id da mensagem de mídia. Só
+ * metadados — a imagem em si continua E2EE (o servidor nunca vê o conteúdo).
+ */
+const mediaStatSchema = new Schema(
+  {
+    operationId: { type: String, required: true, index: true },
+    mediaId: { type: String, required: true }, // id da mensagem (type=media)
+    viewedBy: { type: [String], default: [] }, // userIds — contagem = tamanho
+    favoritedBy: { type: [String], default: [] }, // userIds
+  },
+  { timestamps: true },
+);
+mediaStatSchema.index({ operationId: 1, mediaId: 1 }, { unique: true });
+export type MediaStatDoc = InferSchemaType<typeof mediaStatSchema>;
+export const MediaStat = model('MediaStat', mediaStatSchema);
+
+/**
  * Estado de pertencimento agente↔zona: guarda se o agente está DENTRO de cada
  * geofence. É a fonte de verdade para detectar transições enter/exit sem depender
  * de reconstruir a "posição anterior" (frágil a rajadas/ordem de chegada).

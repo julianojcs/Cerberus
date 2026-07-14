@@ -9,7 +9,7 @@ import {
   teamBroadcastTopic,
   type AuthClaims,
 } from '@cerberus/shared';
-import { MessageModel, Team } from '../../models/index.js';
+import { MediaStat, MessageModel, Team } from '../../models/index.js';
 import { assertOperationScope } from '../scope.js';
 
 const BUCKET = 'media';
@@ -207,6 +207,65 @@ export async function mediaRoutes(app: FastifyInstance): Promise<void> {
       reply.header('Content-Type', f.contentType ?? 'application/octet-stream');
       reply.header('Content-Length', String(f.length));
       return reply.send(bucket().openDownloadStream(_id));
+    },
+  );
+
+  // --- Fase 6b: estatísticas de mídia (favoritos + visualizações) ---
+
+  // Estatísticas de todas as mídias da operação (views + se EU favoritei).
+  app.get(
+    '/operations/:id/media-stats',
+    { onRequest: [app.authenticate] },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      if (!assertOperationScope(request, reply, id)) return;
+      const me = (request.user as AuthClaims).sub;
+      const docs = await MediaStat.find({ operationId: id }).lean();
+      return docs.map((d) => ({
+        mediaId: d.mediaId,
+        views: (d.viewedBy ?? []).length,
+        favorites: (d.favoritedBy ?? []).length,
+        favorited: (d.favoritedBy ?? []).includes(me),
+      }));
+    },
+  );
+
+  // Registra uma visualização (única por usuário — idempotente via $addToSet).
+  app.post(
+    '/operations/:id/media/:mediaId/view',
+    { onRequest: [app.authenticate] },
+    async (request, reply) => {
+      const { id, mediaId } = request.params as { id: string; mediaId: string };
+      if (!assertOperationScope(request, reply, id)) return;
+      const me = (request.user as AuthClaims).sub;
+      const doc = await MediaStat.findOneAndUpdate(
+        { operationId: id, mediaId },
+        { $addToSet: { viewedBy: me } },
+        { new: true, upsert: true, setDefaultsOnInsert: true },
+      ).lean();
+      return { views: (doc?.viewedBy ?? []).length };
+    },
+  );
+
+  // Alterna o favorito do usuário nesta mídia.
+  app.post(
+    '/operations/:id/media/:mediaId/favorite',
+    { onRequest: [app.authenticate] },
+    async (request, reply) => {
+      const { id, mediaId } = request.params as { id: string; mediaId: string };
+      if (!assertOperationScope(request, reply, id)) return;
+      const me = (request.user as AuthClaims).sub;
+      const existing = await MediaStat.findOne({ operationId: id, mediaId }).lean();
+      const isFav = (existing?.favoritedBy ?? []).includes(me);
+      const doc = await MediaStat.findOneAndUpdate(
+        { operationId: id, mediaId },
+        isFav ? { $pull: { favoritedBy: me } } : { $addToSet: { favoritedBy: me } },
+        { new: true, upsert: true, setDefaultsOnInsert: true },
+      ).lean();
+      return {
+        favorited: (doc?.favoritedBy ?? []).includes(me),
+        favorites: (doc?.favoritedBy ?? []).length,
+      };
     },
   );
 }

@@ -9,6 +9,7 @@ import {
   type Geofence,
   type GeofenceAlert,
   type GeofenceInput,
+  type MediaStatInfo,
   type Settings,
 } from '@/lib/api';
 import { getToken, getUser } from '@/lib/auth';
@@ -41,6 +42,7 @@ import {
 } from '@/components/LiveMap';
 import { Toggle } from '@/components/Toggle';
 import { AuthImage } from '@/components/AuthImage';
+import { MediaViewer } from '@/components/MediaViewer';
 import { ResizableSidebar } from '@/components/ResizableSidebar';
 import { ColorPalettePicker } from '@/components/ColorPalettePicker';
 import { SettingsModal } from '@/components/SettingsModal';
@@ -203,7 +205,10 @@ export default function LiveOperationPage() {
 
   // Mídia (fotos) enviadas pelos agentes — com metadata E2EE já decifrada.
   const [mediaMsgs, setMediaMsgs] = useState<DecryptedMedia[]>([]);
-  const [lightbox, setLightbox] = useState<DecryptedMedia | null>(null);
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  // Fase 6b — estatísticas de mídia (views + favoritos) + dedupe de views na sessão.
+  const [mediaStats, setMediaStats] = useState<Record<string, MediaStatInfo>>({});
+  const viewedRef = useRef<Set<string>>(new Set());
 
   // Histórico de texto/broadcast (E2EE) decifrado localmente para exibição.
   const [chatMsgs, setChatMsgs] = useState<DecryptedMessage[]>([]);
@@ -456,6 +461,15 @@ export default function LiveOperationPage() {
           map[m.id] = m.name;
         }
         setMemberNames(map);
+      })
+      .catch(() => {});
+    // Fase 6b — estatísticas de mídia (views + favoritos).
+    api
+      .mediaStats(operationId)
+      .then((list) => {
+        const map: Record<string, MediaStatInfo> = {};
+        for (const s of list) map[s.mediaId] = s;
+        setMediaStats(map);
       })
       .catch(() => {});
     // Fase 5c — diretório de chaves para autenticar remetentes ao decifrar.
@@ -903,6 +917,39 @@ export default function LiveOperationPage() {
   const nameFor = (senderId: string, type?: string): string =>
     type === 'broadcast' ? 'Central' : (memberNames[senderId] ?? senderId);
 
+  // Fase 6b — conta a visualização (uma vez por mídia na sessão) e atualiza o total.
+  async function handleViewMedia(item: { id: string }) {
+    if (viewedRef.current.has(item.id)) return;
+    viewedRef.current.add(item.id);
+    try {
+      const { views } = await api.viewMedia(operationId, item.id);
+      setMediaStats((s) => ({
+        ...s,
+        [item.id]: {
+          mediaId: item.id,
+          views,
+          favorites: s[item.id]?.favorites ?? 0,
+          favorited: s[item.id]?.favorited ?? false,
+        },
+      }));
+    } catch {
+      /* ignora */
+    }
+  }
+
+  // Fase 6b — alterna o favorito da mídia.
+  async function handleToggleFav(item: { id: string }) {
+    try {
+      const { favorited, favorites } = await api.toggleFavoriteMedia(operationId, item.id);
+      setMediaStats((s) => ({
+        ...s,
+        [item.id]: { mediaId: item.id, views: s[item.id]?.views ?? 0, favorites, favorited },
+      }));
+    } catch {
+      /* ignora */
+    }
+  }
+
   // Feed unificado do card: texto/broadcast + fotos, mais recentes primeiro.
   const cardMsgs = useMemo<CardMsg[]>(() => {
     const texts: CardMsg[] = chatMsgs.map((m) => ({ ...m }));
@@ -1196,14 +1243,14 @@ export default function LiveOperationPage() {
                   deformam. `column-width: 32px` mantém as miniaturas bem pequenas
                   (o nº de colunas se adapta à largura do sidebar). */}
               <div style={{ columns: '32px', columnGap: 4, marginTop: 8 }}>
-                {mediaMsgs.map((m) => (
+                {mediaMsgs.map((m, i) => (
                   <div key={m.id} style={{ breakInside: 'avoid', marginBottom: 4 }}>
                     <AuthImage
                       path={api.mediaPath(operationId, m.mediaRef)}
                       mediaKey={m.crypto}
                       mime={m.mime}
-                      alt={`Mídia de ${m.senderId}`}
-                      onClick={() => setLightbox(m)}
+                      alt={`Mídia de ${nameFor(m.senderId)}`}
+                      onClick={() => setLightboxIndex(i)}
                       style={{
                         width: '100%',
                         height: 'auto',
@@ -2019,7 +2066,10 @@ export default function LiveOperationPage() {
             agentColors={agentColors}
             fitNonce={fitNonce}
             mediaMarkers={mediaMarkers}
-            onMediaClick={(id) => setLightbox(mediaMsgs.find((m) => m.id === id) ?? null)}
+            onMediaClick={(id) => {
+              const i = mediaMsgs.findIndex((m) => m.id === id);
+              if (i >= 0) setLightboxIndex(i);
+            }}
             geofences={displayGeofences}
             showGeofences={showZones}
             onMapClick={(lng, lat) => {
@@ -2076,71 +2126,45 @@ export default function LiveOperationPage() {
         />
       )}
 
-      {lightbox && (
-        <div
-          onClick={() => setLightbox(null)}
-          className="animate__animated animate__fadeIn animate__faster"
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0,0,0,0.85)',
-            display: 'grid',
-            placeItems: 'center',
-            zIndex: 1000,
-            padding: 24,
-          }}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: '92vw' }}
-          >
-            <AuthImage
-              path={api.mediaPath(operationId, lightbox.mediaRef)}
-              mediaKey={lightbox.crypto}
-              mime={lightbox.mime}
-              alt={lightbox.caption ?? 'mídia'}
+      {lightboxIndex != null && mediaMsgs[lightboxIndex] && (
+        <MediaViewer
+          items={mediaMsgs}
+          index={lightboxIndex}
+          onIndex={(i) => setLightboxIndex(i)}
+          onClose={() => setLightboxIndex(null)}
+          operationId={operationId}
+          nameOf={(id) => nameFor(id)}
+          onView={(it) => void handleViewMedia(it)}
+          actions={(it) => (
+            <button
+              type="button"
+              onClick={() => void handleToggleFav(it)}
+              title={mediaStats[it.id]?.favorited ? 'Desfavoritar' : 'Favoritar'}
               style={{
-                maxWidth: '92vw',
-                maxHeight: '80vh',
-                objectFit: 'contain',
+                width: 34,
+                height: 34,
                 borderRadius: 8,
-                background: '#141b24',
-              }}
-            />
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                gap: 16,
-                color: '#fff',
+                border: '1px solid rgba(255,255,255,.25)',
+                background: 'rgba(0,0,0,.4)',
+                color: mediaStats[it.id]?.favorited ? '#e3b341' : '#fff',
+                cursor: 'pointer',
+                fontSize: 16,
               }}
             >
-              <div style={{ fontSize: 14 }}>
-                {lightbox.caption && <div>{lightbox.caption}</div>}
-                <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
-                  {lightbox.senderId}
-                  {lightbox.lat != null &&
-                    ` · 📍 ${lightbox.lat.toFixed(5)}, ${lightbox.lng?.toFixed(5)}`}
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setLightbox(null)}
-                className="badge"
-                style={{
-                  cursor: 'pointer',
-                  border: '1px solid var(--border)',
-                  background: 'transparent',
-                  color: '#fff',
-                  flexShrink: 0,
-                }}
-              >
-                Fechar ✕
-              </button>
+              {mediaStats[it.id]?.favorited ? '★' : '☆'}
+            </button>
+          )}
+          extraInfo={(it) => (
+            <div
+              style={{ display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: 12 }}
+            >
+              <span className="muted">Visualizações · Favoritos</span>
+              <span style={{ color: 'var(--text)' }}>
+                👁 {mediaStats[it.id]?.views ?? 0} · ★ {mediaStats[it.id]?.favorites ?? 0}
+              </span>
             </div>
-          </div>
-        </div>
+          )}
+        />
       )}
     </div>
   );

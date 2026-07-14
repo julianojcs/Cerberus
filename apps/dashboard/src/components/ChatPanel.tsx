@@ -12,6 +12,7 @@ import {
 import { api, type OperationMember, type TacticalMessage } from '@/lib/api';
 import { getUser } from '@/lib/auth';
 import { getSecretKey, E2EE_UNLOCK_EVENT } from '@/lib/e2ee';
+import { putCachedCiphertext } from '@/lib/mediaCache';
 import { resolveColor } from '@/lib/tailwind-colors';
 import { AuthImage } from '@/components/AuthImage';
 import { Avatar } from '@/components/Avatar';
@@ -114,6 +115,14 @@ export function ChatPanel({
   const [error, setError] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  // Foto escolhida aguardando legenda + envio (não posta direto — dá pra legendar).
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const [pendingPreview, setPendingPreview] = useState<string | null>(null);
+  useEffect(() => {
+    return () => {
+      if (pendingPreview) URL.revokeObjectURL(pendingPreview);
+    };
+  }, [pendingPreview]);
 
   // Diretório + equipes + membros da operação.
   useEffect(() => {
@@ -368,8 +377,22 @@ export function ChatPanel({
     }
   }
 
-  async function handlePickMedia(file: File) {
-    if (!active || sending) return;
+  // Escolhe a foto (mostra prévia + campo de legenda; NÃO envia ainda).
+  function pickFile(f: File) {
+    if (pendingPreview) URL.revokeObjectURL(pendingPreview);
+    setPendingFile(f);
+    setPendingPreview(URL.createObjectURL(f));
+  }
+  function clearPending() {
+    if (pendingPreview) URL.revokeObjectURL(pendingPreview);
+    setPendingFile(null);
+    setPendingPreview(null);
+  }
+
+  // Envia a foto pendente com a legenda do composer (E2EE).
+  async function sendMedia() {
+    const file = pendingFile;
+    if (!file || !active || sending) return;
     if (!user || !secretKey) return setError('Chave E2EE bloqueada — desbloqueie para enviar.');
     setSending(true);
     setError(null);
@@ -394,7 +417,10 @@ export function ChatPanel({
         active.kind === 'team'
           ? await api.uploadTeamMedia(operationId, active.id, form)
           : await api.uploadAgentMedia(operationId, active.id, form);
+      // Cacheia o cipher no path retornado → a própria bolha carrega na hora (sem re-baixar).
+      if (resp.mediaRef) void putCachedCiphertext(api.mediaPath(operationId, resp.mediaRef), cipher);
       setRawMsgs((prev) => [resp, ...prev]);
+      clearPending();
       setDraft('');
     } catch (e) {
       setError((e as Error).message);
@@ -552,50 +578,82 @@ export function ChatPanel({
               <div style={{ color: 'var(--accent)', fontSize: 12, padding: '0 12px 6px' }}>{error}</div>
             )}
             {canSend ? (
-              <div style={composerRow}>
-                <input
-                  ref={fileRef}
-                  type="file"
-                  accept="image/*"
-                  style={{ display: 'none' }}
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (f) void handlePickMedia(f);
-                    e.target.value = '';
-                  }}
-                />
-                <button
-                  type="button"
-                  onClick={() => fileRef.current?.click()}
-                  disabled={sending}
-                  title="Enviar foto (E2EE)"
-                  style={{ ...attachBtn, cursor: sending ? 'not-allowed' : 'pointer', opacity: sending ? 0.5 : 1 }}
-                >
-                  📷
-                </button>
-                <textarea
-                  value={draft}
-                  onChange={(e) => setDraft(e.target.value)}
-                  onKeyDown={(e) => {
-                    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') void handleSend();
-                  }}
-                  placeholder={`Mensagem para ${active.name}…`}
-                  rows={2}
-                  style={composerInput}
-                />
-                <button
-                  type="button"
-                  onClick={() => void handleSend()}
-                  disabled={sending || !draft.trim()}
-                  style={{
-                    ...sendBtn,
-                    cursor: sending || !draft.trim() ? 'not-allowed' : 'pointer',
-                    opacity: sending || !draft.trim() ? 0.5 : 1,
-                  }}
-                >
-                  {sending ? '…' : 'Enviar'}
-                </button>
-              </div>
+              <>
+                {pendingFile && pendingPreview && (
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      padding: '8px 12px',
+                      borderTop: '1px solid var(--border)',
+                    }}
+                  >
+                    <img
+                      src={pendingPreview}
+                      alt="prévia"
+                      style={{ width: 44, height: 44, borderRadius: 6, objectFit: 'cover', flexShrink: 0 }}
+                    />
+                    <span className="muted" style={{ fontSize: 12, flex: 1, minWidth: 0 }}>
+                      Foto pronta — adicione uma legenda (opcional) e envie.
+                    </span>
+                    <button
+                      type="button"
+                      onClick={clearPending}
+                      disabled={sending}
+                      title="Descartar foto"
+                      style={attachBtn}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                )}
+                <div style={composerRow}>
+                  <input
+                    ref={fileRef}
+                    type="file"
+                    accept="image/*"
+                    style={{ display: 'none' }}
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) pickFile(f);
+                      e.target.value = '';
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => fileRef.current?.click()}
+                    disabled={sending}
+                    title="Anexar foto (E2EE)"
+                    style={{ ...attachBtn, cursor: sending ? 'not-allowed' : 'pointer', opacity: sending ? 0.5 : 1 }}
+                  >
+                    📷
+                  </button>
+                  <textarea
+                    value={draft}
+                    onChange={(e) => setDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if ((e.metaKey || e.ctrlKey) && e.key === 'Enter')
+                        void (pendingFile ? sendMedia() : handleSend());
+                    }}
+                    placeholder={pendingFile ? 'Legenda (opcional)…' : `Mensagem para ${active.name}…`}
+                    rows={2}
+                    style={composerInput}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void (pendingFile ? sendMedia() : handleSend())}
+                    disabled={sending || (!pendingFile && !draft.trim())}
+                    style={{
+                      ...sendBtn,
+                      cursor: sending || (!pendingFile && !draft.trim()) ? 'not-allowed' : 'pointer',
+                      opacity: sending || (!pendingFile && !draft.trim()) ? 0.5 : 1,
+                    }}
+                  >
+                    {sending ? '…' : 'Enviar'}
+                  </button>
+                </div>
+              </>
             ) : (
               <div className="muted" style={{ fontSize: 12, padding: 12 }}>
                 Apenas a central (admin) envia mensagens de equipe/DM.

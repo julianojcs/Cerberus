@@ -76,6 +76,14 @@ export interface TacticalMessage {
   capturedAt: string;
 }
 
+/** Estatísticas de uma mídia (Fase 6b): views + favoritos + se EU favoritei. */
+export interface MediaStatInfo {
+  mediaId: string;
+  views: number;
+  favorites: number;
+  favorited: boolean;
+}
+
 /**
  * Baixa um recurso protegido (ex.: mídia do GridFS) com o Bearer token e devolve
  * um object URL — necessário porque `<img src>` não envia o header Authorization.
@@ -207,6 +215,18 @@ export const api = {
     ),
   // Caminho da mídia no GridFS (use com fetchBlobUrl por causa do Authorization).
   mediaPath: (operationId: string, fileId: string) => `/operations/${operationId}/media/${fileId}`,
+  // --- Estatísticas de mídia: favoritos + visualizações (Fase 6b) ---
+  mediaStats: (operationId: string) =>
+    request<MediaStatInfo[]>(`/operations/${operationId}/media-stats`),
+  viewMedia: (operationId: string, mediaId: string) =>
+    request<{ views: number }>(`/operations/${operationId}/media/${mediaId}/view`, {
+      method: 'POST',
+    }),
+  toggleFavoriteMedia: (operationId: string, mediaId: string) =>
+    request<{ favorited: boolean; favorites: number }>(
+      `/operations/${operationId}/media/${mediaId}/favorite`,
+      { method: 'POST' },
+    ),
   // --- Geofencing (Fase 4) ---
   geofences: (operationId: string) => request<Geofence[]>(`/operations/${operationId}/geofences`),
   createGeofence: (operationId: string, data: GeofenceInput & { name: string }) =>
