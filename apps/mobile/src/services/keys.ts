@@ -1,5 +1,5 @@
 import * as SecureStore from 'expo-secure-store';
-import { config } from '../config';
+import { authedFetch } from './http';
 import {
   generateKeyPair,
   publicFromSecret,
@@ -34,6 +34,11 @@ export async function getSecretKey(userId: string): Promise<string | null> {
   return SecureStore.getItemAsync(skKey(userId));
 }
 
+/** Apaga a chave secreta local — usado quando o dispositivo é bloqueado (perdido). */
+export async function clearSecretKey(userId: string): Promise<void> {
+  await SecureStore.deleteItemAsync(skKey(userId));
+}
+
 /**
  * Busca o diretório de chaves da operação e o devolve como destinatários de
  * envelope E2EE (id + chave pública). Reusado por texto e mídia.
@@ -42,9 +47,7 @@ export async function fetchRecipients(
   session: { token: string },
   operationId: string,
 ): Promise<E2eeRecipient[]> {
-  const res = await fetch(`${config.apiUrl}/operations/${operationId}/keys`, {
-    headers: { Authorization: `Bearer ${session.token}` },
-  });
+  const res = await authedFetch(session.token, `/operations/${operationId}/keys`);
   if (!res.ok) throw new Error(`Erro ${res.status} ao obter chaves`);
   const dir = (await res.json()) as Array<{ id: string; publicKey: string }>;
   return dir.map((e) => ({ id: e.id, publicKey: e.publicKey }));
@@ -57,9 +60,9 @@ export async function fetchRecipients(
  */
 export async function provisionKeys(session: { userId: string; token: string }): Promise<void> {
   const kp = await ensureKeyPair(session.userId);
-  const res = await fetch(`${config.apiUrl}/auth/public-key`, {
+  const res = await authedFetch(session.token, '/auth/public-key', {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.token}` },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ publicKey: kp.publicKey }),
   });
   if (!res.ok) throw new Error(`Erro ${res.status} ao registrar chave pública`);

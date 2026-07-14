@@ -1,6 +1,7 @@
 import * as SecureStore from 'expo-secure-store';
 import { config } from '../config';
 import { provisionKeys } from './keys';
+import { getDeviceId, getDeviceLabel, getDevicePlatform } from './device';
 
 const TOKEN_KEY = 'cerberus_token';
 const SESSION_KEY = 'cerberus_session';
@@ -16,10 +17,17 @@ export interface Session {
 
 /** Autentica na API e guarda o token no armazenamento seguro do dispositivo. */
 export async function login(username: string, password: string): Promise<Session> {
+  const deviceId = await getDeviceId().catch(() => undefined);
   const res = await fetch(`${config.apiUrl}/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username, password }),
+    body: JSON.stringify({
+      username,
+      password,
+      deviceId,
+      deviceLabel: getDeviceLabel(),
+      platform: getDevicePlatform(),
+    }),
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({ error: 'Falha no login' }));
