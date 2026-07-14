@@ -13,7 +13,8 @@ import {
 import { getToken, getUser } from '@/lib/auth';
 import { getSecretKey } from '@/lib/e2ee';
 import { openMessage, sealMessage } from '@cerberus/shared';
-import { subscribeToOperation, type LivePosition } from '@/lib/mqtt';
+import { subscribeToOperation, type IncomingMessage, type LivePosition } from '@/lib/mqtt';
+import { ChatPanel } from '@/components/ChatPanel';
 import { LiveMap, type AgentPoint, type PlottedRoute } from '@/components/LiveMap';
 import { Toggle } from '@/components/Toggle';
 import { AuthImage } from '@/components/AuthImage';
@@ -88,6 +89,9 @@ export default function LiveOperationPage() {
 
   const [agents, setAgents] = useState<Record<string, AgentPoint>>({});
   const [connected, setConnected] = useState(false);
+  // Chat (Fase 3a): aba Mapa|Chat + buffer de mensagens ao vivo (equipe/DM) do MQTT.
+  const [mainTab, setMainTab] = useState<'map' | 'chat'>('map');
+  const [incomingChat, setIncomingChat] = useState<IncomingMessage[]>([]);
 
   // Histórico cru. As rotas são DERIVADAS (com o gap configurável).
   const [rawPositions, setRawPositions] = useState<LatestPosition[]>([]);
@@ -311,6 +315,7 @@ export default function LiveOperationPage() {
       },
       getToken() ?? undefined,
       setConnected,
+      (m: IncomingMessage) => setIncomingChat((prev) => [...prev, m].slice(-300)),
     );
 
     return () => {
@@ -1191,14 +1196,48 @@ export default function LiveOperationPage() {
           })}
         </ResizableSidebar>
 
-        <main
-          style={{ flex: 1, minWidth: 0, position: 'relative' }}
-          onMouseMove={(e) => {
-            const rect = e.currentTarget.getBoundingClientRect();
-            setBarHover(e.clientY - rect.top < 72);
-          }}
-          onMouseLeave={() => setBarHover(false)}
-        >
+        <main style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+          {/* Abas Mapa | Chat (Fase 3a). O mapa fica montado (display:none) para não
+              perder estado/marcadores ao alternar. */}
+          <div
+            style={{
+              display: 'flex',
+              gap: 6,
+              padding: '6px 8px',
+              borderBottom: '1px solid var(--border)',
+            }}
+          >
+            {(['map', 'chat'] as const).map((tab) => (
+              <button
+                key={tab}
+                type="button"
+                onClick={() => setMainTab(tab)}
+                className="badge"
+                style={{
+                  cursor: 'pointer',
+                  border: '1px solid var(--border)',
+                  color: 'var(--text)',
+                  background: mainTab === tab ? 'var(--panel-2)' : 'transparent',
+                  borderColor: mainTab === tab ? 'var(--accent)' : 'var(--border)',
+                }}
+              >
+                {tab === 'map' ? '🗺 Mapa' : '💬 Chat'}
+              </button>
+            ))}
+          </div>
+          <div
+            style={{
+              flex: 1,
+              minHeight: 0,
+              position: 'relative',
+              display: mainTab === 'map' ? 'block' : 'none',
+            }}
+            onMouseMove={(e) => {
+              const rect = e.currentTarget.getBoundingClientRect();
+              setBarHover(e.clientY - rect.top < 72);
+            }}
+            onMouseLeave={() => setBarHover(false)}
+          >
           {/* Barra de período (topo do mapa): DOIS controles (início e fim) definem o
               intervalo das rotas plotadas. Fica OCULTA e DESCE do topo quando o cursor
               passa na faixa superior; o "pin" a mantém fixa. O wrapper com overflow
@@ -1360,6 +1399,12 @@ export default function LiveOperationPage() {
             onGeofenceResize={(radiusMeters) => setEditGeo((e) => (e ? { ...e, radiusMeters } : e))}
             focus={alertFocus}
           />
+          </div>
+          {mainTab === 'chat' && (
+            <div style={{ flex: 1, minHeight: 0 }}>
+              <ChatPanel operationId={operationId} incoming={incomingChat} />
+            </div>
+          )}
         </main>
       </div>
 
