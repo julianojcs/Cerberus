@@ -2202,25 +2202,39 @@ describe('mensageria de equipe/DM (Fase 2b)', () => {
     expect(res.statusCode).toBe(401);
   });
 
-  it('o próprio agente lê seu DM (200); histórico filtra por recipientId', async () => {
+  it('o próprio agente lê seu DM (200); só mensagens do canal DM do agente', async () => {
     const res = await app.inject({
       method: 'GET',
       url: `/operations/${operationId}/agents/AG-0456/messages`,
       headers: { authorization: `Bearer ${agentToken}` },
     });
     expect(res.statusCode).toBe(200);
-    const arr = res.json() as Array<{ recipientId: string }>;
+    const arr = res.json() as Array<{ recipientId?: string; senderId: string }>;
     expect(arr.length).toBeGreaterThanOrEqual(1);
-    expect(arr.every((m) => m.recipientId === 'AG-0456')).toBe(true);
+    // Bidirecional: central→agente (recipientId) OU agente→central (senderId).
+    expect(arr.every((m) => m.recipientId === 'AG-0456' || m.senderId === 'AG-0456')).toBe(true);
   });
 
-  it('admin também lê o DM do agente (200)', async () => {
+  it('DM traz as mensagens DO agente (senderId, sem teamId), não só as recebidas', async () => {
+    const { MessageModel } = await import('../models/index.js');
+    await MessageModel.create({
+      operationId,
+      senderId: 'AG-0456',
+      type: 'text',
+      ciphertext: 'ct-do-agente-para-central',
+      capturedAt: new Date(),
+      receivedAt: new Date(),
+    }); // sem teamId nem recipientId — mensagem direta do agente à central (via ponte MQTT)
     const res = await app.inject({
       method: 'GET',
       url: `/operations/${operationId}/agents/AG-0456/messages`,
       headers: { authorization: `Bearer ${token}` },
     });
     expect(res.statusCode).toBe(200);
+    const arr = res.json() as Array<{ senderId: string; ciphertext?: string }>;
+    expect(arr.some((m) => m.senderId === 'AG-0456' && m.ciphertext === 'ct-do-agente-para-central')).toBe(
+      true,
+    );
   });
 });
 

@@ -54,6 +54,8 @@ const HISTORY_LIMIT = 5000;
 /** Máximo de pontos por trilha ao vivo (limita memória/render num turno longo). */
 const MAX_LIVE_TRAIL = 2000;
 const HOUR_MS = 60 * 60 * 1000;
+/** Últimas N mensagens no card lateral (o Chat é o local principal). Configurável. */
+const SIDEBAR_MSG_LIMIT = 5;
 
 /** Mensagem de texto/broadcast já decifrada para exibição (`text: null` = falha). */
 interface DecryptedMessage {
@@ -62,6 +64,8 @@ interface DecryptedMessage {
   type: string;
   text: string | null;
   capturedAt: string;
+  teamId?: string; // roteia o clique p/ a conversa da equipe
+  recipientId?: string; // roteia o clique p/ o DM
 }
 
 /** Mídia com a metadata (legenda/geotag/chave da imagem) decifrada. */
@@ -117,6 +121,8 @@ export default function LiveOperationPage() {
   // Chat (Fase 3a): aba Mapa|Chat + buffer de mensagens ao vivo (equipe/DM) do MQTT.
   const [mainTab, setMainTab] = useState<'map' | 'chat'>('map');
   const [incomingChat, setIncomingChat] = useState<IncomingMessage[]>([]);
+  // Clique no card "Mensagens" → abre a conversa no Chat (key + nonce p/ re-disparar).
+  const [chatFocus, setChatFocus] = useState<{ key: string; nonce: number }>({ key: '', nonce: 0 });
   // Fase 3b-1: layout abas OU split (Chat|Mapa lado a lado, divisor arrastável).
   const [layout, setLayout] = useState<'tabs' | 'split'>('tabs');
   const [chatWidth, setChatWidth] = useState(400);
@@ -304,6 +310,8 @@ export default function LiveOperationPage() {
                     )
                   : (m.text ?? null),
               capturedAt: m.capturedAt,
+              teamId: m.teamId,
+              recipientId: m.recipientId,
             })),
         );
       })
@@ -831,6 +839,21 @@ export default function LiveOperationPage() {
     });
   }
 
+  // Clique numa mensagem do card → abre a conversa correspondente no Chat.
+  function openInChat(m: DecryptedMessage) {
+    const me = getUser()?.id;
+    const key = m.teamId
+      ? `team:${m.teamId}`
+      : m.recipientId
+        ? `dm:${m.recipientId}`
+        : m.senderId && m.senderId !== me
+          ? `dm:${m.senderId}`
+          : null;
+    if (!key) return;
+    setMainTab('chat');
+    setChatFocus((prev) => ({ key, nonce: prev.nonce + 1 }));
+  }
+
   async function handleRecompute() {
     setRecomputing(true);
     try {
@@ -946,10 +969,10 @@ export default function LiveOperationPage() {
             <div className="card" style={{ padding: 12, marginBottom: 16 }}>
               <strong style={{ fontSize: 14 }}>Mensagens (E2EE) ({chatMsgs.length})</strong>
               <p className="muted" style={{ fontSize: 12, margin: '4px 0 8px' }}>
-                Decifradas neste dispositivo — o servidor só vê texto cifrado.
+                Últimas {SIDEBAR_MSG_LIMIT} — clique para abrir no Chat. Decifradas neste dispositivo.
               </p>
-              <div style={{ maxHeight: 260, overflowY: 'auto', display: 'grid', gap: 6 }}>
-                {chatMsgs.map((m) => {
+              <div style={{ display: 'grid', gap: 6 }}>
+                {chatMsgs.slice(0, SIDEBAR_MSG_LIMIT).map((m) => {
                   const isBroadcast = m.type === 'broadcast';
                   const who = isBroadcast ? 'CENTRAL' : m.senderId;
                   const when = new Date(m.capturedAt).toLocaleString('pt-BR', {
@@ -959,9 +982,17 @@ export default function LiveOperationPage() {
                     minute: '2-digit',
                   });
                   return (
-                    <div
+                    <button
+                      type="button"
                       key={m.id}
+                      onClick={() => openInChat(m)}
+                      title="Abrir no Chat"
                       style={{
+                        display: 'block',
+                        width: '100%',
+                        textAlign: 'left',
+                        cursor: 'pointer',
+                        color: 'inherit',
                         background: 'var(--panel-2, #1c2733)',
                         border: `1px solid ${isBroadcast ? 'var(--accent, #c1121f)' : 'var(--border)'}`,
                         borderRadius: 8,
@@ -997,7 +1028,7 @@ export default function LiveOperationPage() {
                           </span>
                         )}
                       </div>
-                    </div>
+                    </button>
                   );
                 })}
               </div>
@@ -1871,7 +1902,12 @@ export default function LiveOperationPage() {
                     : { flex: 1, minWidth: 0, minHeight: 0 }
                 }
               >
-                <ChatPanel operationId={operationId} incoming={incomingChat} />
+                <ChatPanel
+                  operationId={operationId}
+                  incoming={incomingChat}
+                  focusKey={chatFocus.key || null}
+                  focusNonce={chatFocus.nonce}
+                />
               </div>
             )}
           </div>
