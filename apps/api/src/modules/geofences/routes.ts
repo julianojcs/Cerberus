@@ -1,8 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { Types } from 'mongoose';
-import { GeofenceShape, Role } from '@cerberus/shared';
-import { Alert, Geofence, GeofenceMembership, Position } from '../../models/index.js';
+import { GeofenceSeverity, GeofenceShape, GeofenceTrigger, Role } from '@cerberus/shared';
+import { Alert, Geofence, GeofenceMembership, Position, Team } from '../../models/index.js';
 import { detectGeofenceEvents, type GeofenceLike } from './detect.js';
 import { assertOperationScope } from '../scope.js';
 
@@ -13,9 +13,12 @@ const colorSchema = z
   .max(30);
 
 const shapes = Object.values(GeofenceShape) as [string, ...string[]];
+const triggers = Object.values(GeofenceTrigger) as [string, ...string[]];
+const severities = Object.values(GeofenceSeverity) as [string, ...string[]];
 const lngSchema = z.number().min(-180).max(180);
 const latSchema = z.number().min(-90).max(90);
 const vertexSchema = z.tuple([lngSchema, latSchema]);
+const minuteOfDaySchema = z.number().int().min(0).max(1439);
 
 /** Base (círculo/retângulo/polígono) — geometria por forma, validada no superRefine. */
 const geometryFields = {
@@ -29,11 +32,21 @@ const geometryFields = {
   color: colorSchema.optional(),
 };
 
+/** Fase 5b — regras avançadas (equipe / agendamento / gatilho / severidade). */
+const advancedFields = {
+  teamId: z.string().min(1).nullable().optional(),
+  windowStartMin: minuteOfDaySchema.nullable().optional(),
+  windowEndMin: minuteOfDaySchema.nullable().optional(),
+  triggerOn: z.enum(triggers).optional(),
+  severity: z.enum(severities).optional(),
+};
+
 const createSchema = z
   .object({
     name: z.string().min(1).max(120),
     shape: z.enum(shapes).default(GeofenceShape.CIRCLE),
     ...geometryFields,
+    ...advancedFields,
   })
   .superRefine((d, ctx) => {
     if (d.shape === GeofenceShape.CIRCLE && (d.lng == null || d.lat == null || d.radiusMeters == null))
@@ -54,6 +67,7 @@ const patchSchema = z.object({
   name: z.string().min(1).max(120).optional(),
   shape: z.enum(shapes).optional(),
   ...geometryFields,
+  ...advancedFields,
 });
 
 /** Centroide de um anel de vértices (âncora/center do polígono). */
@@ -107,6 +121,11 @@ export async function geofenceRoutes(app: FastifyInstance): Promise<void> {
         rotationDeg: body.data.rotationDeg,
         vertices: body.data.vertices,
         color: body.data.color ?? 'green',
+        teamId: body.data.teamId ?? null,
+        windowStartMin: body.data.windowStartMin ?? null,
+        windowEndMin: body.data.windowEndMin ?? null,
+        triggerOn: body.data.triggerOn ?? GeofenceTrigger.BOTH,
+        severity: body.data.severity ?? GeofenceSeverity.MEDIUM,
       });
       return reply.code(201).send(serializeGeofence(g.toObject()));
     },
@@ -144,6 +163,12 @@ export async function geofenceRoutes(app: FastifyInstance): Promise<void> {
       if (body.data.heightMeters !== undefined) update.heightMeters = body.data.heightMeters;
       if (body.data.rotationDeg !== undefined) update.rotationDeg = body.data.rotationDeg;
       if (body.data.color !== undefined) update.color = body.data.color;
+      // Fase 5b — regras avançadas (aceitam null para limpar equipe/janela).
+      if (body.data.teamId !== undefined) update.teamId = body.data.teamId;
+      if (body.data.windowStartMin !== undefined) update.windowStartMin = body.data.windowStartMin;
+      if (body.data.windowEndMin !== undefined) update.windowEndMin = body.data.windowEndMin;
+      if (body.data.triggerOn !== undefined) update.triggerOn = body.data.triggerOn;
+      if (body.data.severity !== undefined) update.severity = body.data.severity;
       // Polígono: vertices + center = centroide. (Tem precedência sobre lng/lat abaixo.)
       if (body.data.vertices !== undefined) {
         update.vertices = body.data.vertices;
@@ -197,6 +222,15 @@ export async function geofenceRoutes(app: FastifyInstance): Promise<void> {
         .lean()) as unknown as GeofenceLike[];
       if (geofences.length === 0) return { alertsCreated: 0 };
 
+      // Fase 5b — mapa agentId → equipes (só se alguma zona for por equipe).
+      const teamIdsByAgent: Record<string, string[]> = {};
+      if (geofences.some((g) => g.teamId)) {
+        const teams = await Team.find({ operationId: id }).select('_id agentIds').lean();
+        for (const t of teams)
+          for (const a of (t.agentIds as string[] | undefined) ?? [])
+            (teamIdsByAgent[a] ??= []).push(String(t._id));
+      }
+
       const positions = await Position.find({ operationId: id }).sort({ capturedAt: 1 }).lean();
       const stateByAgent: Record<string, Record<string, boolean>> = {};
       const alerts: Record<string, unknown>[] = [];
@@ -206,15 +240,22 @@ export async function geofenceRoutes(app: FastifyInstance): Promise<void> {
         const [lng, lat] = coords ?? [];
         if (lng == null || lat == null) continue;
         const insideBefore = (stateByAgent[p.agentId] ??= {});
-        const events = detectGeofenceEvents({ lng, lat }, insideBefore, geofences);
+        const capturedDate = new Date(p.capturedAt as Date);
+        const atUtcMin = capturedDate.getUTCHours() * 60 + capturedDate.getUTCMinutes();
+        const events = detectGeofenceEvents({ lng, lat }, insideBefore, geofences, {
+          atUtcMin,
+          agentTeamIds: teamIdsByAgent[p.agentId] ?? [],
+        });
         for (const ev of events) {
-          insideBefore[ev.geofenceId] = ev.inside;
+          insideBefore[ev.geofenceId] = ev.inside; // pertencimento sempre atualiza
+          if (!ev.notify) continue; // zona só-entrada/só-saída: transição oposta não alerta
           alerts.push({
             operationId: id,
             agentId: p.agentId,
             geofenceId: ev.geofenceId,
             geofenceName: ev.geofenceName,
             type: ev.type,
+            severity: ev.severity,
             location: { type: 'Point', coordinates: [lng, lat] },
             capturedAt: p.capturedAt,
             receivedAt: new Date(),
@@ -261,6 +302,12 @@ function serializeGeofence(g: Record<string, unknown>) {
     vertices: g.vertices,
     color: g.color ?? 'green',
     active: g.active,
+    // Fase 5b — regras avançadas.
+    teamId: (g.teamId as string | null | undefined) ?? null,
+    windowStartMin: (g.windowStartMin as number | null | undefined) ?? null,
+    windowEndMin: (g.windowEndMin as number | null | undefined) ?? null,
+    triggerOn: (g.triggerOn as string | undefined) ?? 'both',
+    severity: (g.severity as string | undefined) ?? 'medium',
   };
 }
 
@@ -273,6 +320,7 @@ function serializeAlert(a: Record<string, unknown>) {
     geofenceId: a.geofenceId,
     geofenceName: a.geofenceName,
     type: a.type,
+    severity: (a.severity as string | undefined) ?? 'medium',
     lng: loc?.coordinates?.[0],
     lat: loc?.coordinates?.[1],
     capturedAt: (a.capturedAt as Date | undefined)?.toISOString?.() ?? a.capturedAt,

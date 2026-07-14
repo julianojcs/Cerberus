@@ -18,13 +18,13 @@ describe('haversineMeters', () => {
 describe('detectGeofenceEvents (estado de pertencimento)', () => {
   it('enter: estava fora → agora dentro', () => {
     expect(detectGeofenceEvents(INSIDE, { g1: false }, ZONE)).toEqual([
-      { geofenceId: 'g1', geofenceName: 'Zona A', type: 'enter', inside: true },
+      { geofenceId: 'g1', geofenceName: 'Zona A', type: 'enter', inside: true, notify: true, severity: 'medium' },
     ]);
   });
 
   it('exit: estava dentro → agora fora', () => {
     expect(detectGeofenceEvents(OUTSIDE, { g1: true }, ZONE)).toEqual([
-      { geofenceId: 'g1', geofenceName: 'Zona A', type: 'exit', inside: false },
+      { geofenceId: 'g1', geofenceName: 'Zona A', type: 'exit', inside: false, notify: true, severity: 'medium' },
     ]);
   });
 
@@ -40,5 +40,44 @@ describe('detectGeofenceEvents (estado de pertencimento)', () => {
     const events = detectGeofenceEvents(INSIDE, {}, ZONE);
     expect(events).toHaveLength(1);
     expect(events[0]?.type).toBe('enter');
+  });
+});
+
+describe('detectGeofenceEvents — regras avançadas (Fase 5b)', () => {
+  it('zona por equipe: agente fora da equipe não gera evento', () => {
+    const zone = [{ ...ZONE[0], teamId: 't1' }];
+    // Sem equipes do agente → pula a zona (nenhum evento, nem tracking).
+    expect(detectGeofenceEvents(INSIDE, { g1: false }, zone, { agentTeamIds: [] })).toEqual([]);
+    // Agente da equipe → enter normal.
+    expect(detectGeofenceEvents(INSIDE, { g1: false }, zone, { agentTeamIds: ['t1'] })).toHaveLength(
+      1,
+    );
+  });
+
+  it('agendamento: fora da janela horária não gera evento', () => {
+    const zone = [{ ...ZONE[0], windowStartMin: 600, windowEndMin: 660 }]; // 10–11h UTC
+    expect(detectGeofenceEvents(INSIDE, { g1: false }, zone, { atUtcMin: 480 })).toEqual([]); // 08:00
+    expect(detectGeofenceEvents(INSIDE, { g1: false }, zone, { atUtcMin: 630 })).toHaveLength(1); // 10:30
+  });
+
+  it('agendamento: janela que cruza a meia-noite (22h–06h)', () => {
+    const zone = [{ ...ZONE[0], windowStartMin: 1320, windowEndMin: 360 }]; // 22:00–06:00
+    expect(detectGeofenceEvents(INSIDE, { g1: false }, zone, { atUtcMin: 1380 })).toHaveLength(1); // 23:00 ✓
+    expect(detectGeofenceEvents(INSIDE, { g1: false }, zone, { atUtcMin: 120 })).toHaveLength(1); // 02:00 ✓
+    expect(detectGeofenceEvents(INSIDE, { g1: false }, zone, { atUtcMin: 720 })).toEqual([]); // 12:00 ✗
+  });
+
+  it('gatilho "enter": a transição de saída atualiza estado mas não notifica', () => {
+    const zone = [{ ...ZONE[0], triggerOn: 'enter' }];
+    const [enter] = detectGeofenceEvents(INSIDE, { g1: false }, zone);
+    expect(enter?.notify).toBe(true);
+    const [exit] = detectGeofenceEvents(OUTSIDE, { g1: true }, zone);
+    expect(exit?.type).toBe('exit');
+    expect(exit?.notify).toBe(false); // pertencimento muda, mas não alerta
+  });
+
+  it('severidade da zona é propagada ao evento', () => {
+    const zone = [{ ...ZONE[0], severity: 'critical' }];
+    expect(detectGeofenceEvents(INSIDE, { g1: false }, zone)[0]?.severity).toBe('critical');
   });
 });

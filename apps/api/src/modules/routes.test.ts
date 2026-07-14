@@ -1187,6 +1187,183 @@ describe('geofencing + alertas', () => {
     expect(res.statusCode).toBe(201);
     expect(res.json().shape).toBe('circle');
   });
+
+  // --- Fase 5b — zonas avançadas ---
+  it('zona por equipe: só agentes da equipe geram alerta', async () => {
+    const { Team, Position } = await import('../models/index.js');
+    const team = await Team.create({ operationId, name: 'Equipe Zona', agentIds: ['AG-INTEAM'] });
+    const create = await app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/geofences`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        name: 'ZonaEquipe',
+        lng: -43.7,
+        lat: -19.7,
+        radiusMeters: 150,
+        teamId: String(team._id),
+        color: 'red',
+      },
+    });
+    expect(create.statusCode).toBe(201);
+    expect(create.json().teamId).toBe(String(team._id));
+    for (const agentId of ['AG-INTEAM', 'AG-OUTTEAM']) {
+      await Position.create({
+        operationId,
+        agentId,
+        location: { type: 'Point', coordinates: [-43.7, -19.7] },
+        capturedAt: new Date('2026-07-12T12:00:00Z'),
+        receivedAt: new Date(),
+      });
+    }
+    await app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/geofences/recompute`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const alerts = await app.inject({
+      method: 'GET',
+      url: `/operations/${operationId}/alerts`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const byAgent = (alerts.json() as Array<{ geofenceName: string; agentId: string }>)
+      .filter((a) => a.geofenceName === 'ZonaEquipe')
+      .map((a) => a.agentId);
+    expect(byAgent).toContain('AG-INTEAM');
+    expect(byAgent).not.toContain('AG-OUTTEAM');
+  });
+
+  it('agendamento: posição fora da janela horária não alerta', async () => {
+    const { Position } = await import('../models/index.js');
+    // Janela 10:00–11:00 UTC (600–660 min).
+    await app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/geofences`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        name: 'ZonaAgenda',
+        lng: -43.6,
+        lat: -19.6,
+        radiusMeters: 150,
+        windowStartMin: 600,
+        windowEndMin: 660,
+        color: 'orange',
+      },
+    });
+    await Position.create({
+      operationId,
+      agentId: 'AG-SCHED-OUT',
+      location: { type: 'Point', coordinates: [-43.6, -19.6] },
+      capturedAt: new Date('2026-07-12T08:00:00Z'), // fora da janela
+      receivedAt: new Date(),
+    });
+    await Position.create({
+      operationId,
+      agentId: 'AG-SCHED-IN',
+      location: { type: 'Point', coordinates: [-43.6, -19.6] },
+      capturedAt: new Date('2026-07-12T10:30:00Z'), // dentro da janela
+      receivedAt: new Date(),
+    });
+    await app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/geofences/recompute`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const alerts = await app.inject({
+      method: 'GET',
+      url: `/operations/${operationId}/alerts`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const byAgent = (alerts.json() as Array<{ geofenceName: string; agentId: string }>)
+      .filter((a) => a.geofenceName === 'ZonaAgenda')
+      .map((a) => a.agentId);
+    expect(byAgent).toContain('AG-SCHED-IN');
+    expect(byAgent).not.toContain('AG-SCHED-OUT');
+  });
+
+  it('regra de gatilho "enter": a saída não gera alerta', async () => {
+    const { Position } = await import('../models/index.js');
+    await app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/geofences`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        name: 'ZonaEnter',
+        lng: -43.5,
+        lat: -19.5,
+        radiusMeters: 150,
+        triggerOn: 'enter',
+        color: 'green',
+      },
+    });
+    await Position.create({
+      operationId,
+      agentId: 'AG-TRIG',
+      location: { type: 'Point', coordinates: [-43.5, -19.5] }, // dentro
+      capturedAt: new Date('2026-07-12T13:00:00Z'),
+      receivedAt: new Date(),
+    });
+    await Position.create({
+      operationId,
+      agentId: 'AG-TRIG',
+      location: { type: 'Point', coordinates: [-40, -18] }, // longe → sairia
+      capturedAt: new Date('2026-07-12T13:01:00Z'),
+      receivedAt: new Date(),
+    });
+    await app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/geofences/recompute`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const alerts = await app.inject({
+      method: 'GET',
+      url: `/operations/${operationId}/alerts`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const types = (alerts.json() as Array<{ geofenceName: string; agentId: string; type: string }>)
+      .filter((a) => a.geofenceName === 'ZonaEnter' && a.agentId === 'AG-TRIG')
+      .map((a) => a.type);
+    expect(types).toContain('enter');
+    expect(types).not.toContain('exit');
+  });
+
+  it('severidade: o alerta herda a severidade da zona', async () => {
+    const { Position } = await import('../models/index.js');
+    await app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/geofences`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        name: 'ZonaCritica',
+        lng: -43.4,
+        lat: -19.4,
+        radiusMeters: 150,
+        severity: 'critical',
+        color: 'red',
+      },
+    });
+    await Position.create({
+      operationId,
+      agentId: 'AG-SEV',
+      location: { type: 'Point', coordinates: [-43.4, -19.4] },
+      capturedAt: new Date('2026-07-12T14:00:00Z'),
+      receivedAt: new Date(),
+    });
+    await app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/geofences/recompute`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const alerts = await app.inject({
+      method: 'GET',
+      url: `/operations/${operationId}/alerts`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const crit = (alerts.json() as Array<{ geofenceName: string; severity: string }>).find(
+      (a) => a.geofenceName === 'ZonaCritica',
+    );
+    expect(crit?.severity).toBe('critical');
+  });
 });
 
 describe('configurações do sistema', () => {

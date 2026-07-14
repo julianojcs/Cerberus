@@ -1,7 +1,9 @@
 import { Schema, model, type InferSchemaType } from 'mongoose';
 import {
   ActivityType,
+  GeofenceSeverity,
   GeofenceShape,
+  GeofenceTrigger,
   MessageType,
   OperationStatus,
   OperationType,
@@ -154,6 +156,27 @@ const geofenceSchema = new Schema(
     /** Cor PRIMARIA da zona: token de familia da paleta Tailwind (ex.: 'green'). */
     color: { type: String, default: 'green' },
     active: { type: Boolean, default: true },
+    /** Fase 5b — zona por EQUIPE: se setado, só agentes da equipe geram alerta. */
+    teamId: { type: String, default: null, index: true },
+    /**
+     * Fase 5b — AGENDAMENTO: janela horária diária em minutos-do-dia UTC (0–1439).
+     * Ambos setados ⇒ zona só ativa dentro da janela (start>end = janela que cruza a
+     * meia-noite). Nulo ⇒ sempre ativa. UI converte de/para local (BRT).
+     */
+    windowStartMin: { type: Number, min: 0, max: 1439, default: null },
+    windowEndMin: { type: Number, min: 0, max: 1439, default: null },
+    /** Fase 5b — qual transição alerta: enter | exit | both (padrão). */
+    triggerOn: {
+      type: String,
+      enum: Object.values(GeofenceTrigger),
+      default: GeofenceTrigger.BOTH,
+    },
+    /** Fase 5b — severidade/prioridade → cor do alerta + ordenação. */
+    severity: {
+      type: String,
+      enum: Object.values(GeofenceSeverity),
+      default: GeofenceSeverity.MEDIUM,
+    },
   },
   { timestamps: true },
 );
@@ -168,6 +191,12 @@ const alertSchema = new Schema(
     geofenceId: { type: String, required: true },
     geofenceName: { type: String, required: true },
     type: { type: String, enum: ['enter', 'exit'], required: true },
+    /** Fase 5b — severidade herdada da zona (cor/ordenação do painel). */
+    severity: {
+      type: String,
+      enum: Object.values(GeofenceSeverity),
+      default: GeofenceSeverity.MEDIUM,
+    },
     /** Local onde a transição foi detectada: GeoJSON Point [lng, lat]. */
     location: {
       type: { type: String, enum: ['Point'], required: true },

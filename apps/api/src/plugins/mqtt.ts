@@ -9,7 +9,14 @@ import {
   parseAgentTopic,
   positionSampleSchema,
 } from '@cerberus/shared';
-import { Alert, Geofence, GeofenceMembership, MessageModel, Position } from '../models/index.js';
+import {
+  Alert,
+  Geofence,
+  GeofenceMembership,
+  MessageModel,
+  Position,
+  Team,
+} from '../models/index.js';
 import { detectGeofenceEvents, type GeofenceLike } from '../modules/geofences/detect.js';
 
 /**
@@ -134,24 +141,38 @@ async function checkGeofences(
   const insideBefore: Record<string, boolean> = {};
   for (const m of memberships) insideBefore[m.geofenceId] = m.inside;
 
+  // Fase 5b — contexto: equipes do agente (só se houver zona por equipe) + hora UTC.
+  const hasTeamZone = geofences.some((g) => g.teamId);
+  const agentTeamIds = hasTeamZone
+    ? (await Team.find({ operationId, agentIds: agentId }).select('_id').lean()).map((t) =>
+        String(t._id),
+      )
+    : [];
+  const capturedDate = new Date(sample.capturedAt);
+  const atUtcMin = capturedDate.getUTCHours() * 60 + capturedDate.getUTCMinutes();
+
   const events = detectGeofenceEvents(
     { lng: sample.lng, lat: sample.lat },
     insideBefore,
     geofences,
+    { atUtcMin, agentTeamIds },
   );
   for (const ev of events) {
-    // Atualiza o estado ANTES de anunciar (idempotência sob concorrência).
+    // Atualiza o estado ANTES de anunciar (idempotência sob concorrência) — sempre,
+    // mesmo quando a zona não alerta nesta transição (regra enter/exit).
     await GeofenceMembership.updateOne(
       { operationId, agentId, geofenceId: ev.geofenceId },
       { $set: { inside: ev.inside, updatedAt: new Date() } },
       { upsert: true },
     );
+    if (!ev.notify) continue; // zona só-entrada/só-saída: transição oposta não alerta
     await Alert.create({
       operationId,
       agentId,
       geofenceId: ev.geofenceId,
       geofenceName: ev.geofenceName,
       type: ev.type,
+      severity: ev.severity,
       location: { type: 'Point', coordinates: [sample.lng, sample.lat] },
       capturedAt: new Date(sample.capturedAt),
       receivedAt: new Date(),

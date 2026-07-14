@@ -14,6 +14,16 @@ export interface GeofenceLike {
   heightMeters?: number;
   rotationDeg?: number;
   vertices?: number[][]; // [[lng, lat], …]
+  // --- Fase 5b — zonas avançadas ---
+  /** Zona por equipe: só agentes desta equipe geram alerta (null = todas). */
+  teamId?: string | null;
+  /** Agendamento: janela horária diária em minutos-do-dia UTC (0–1439). */
+  windowStartMin?: number | null;
+  windowEndMin?: number | null;
+  /** Qual transição alerta: 'enter' | 'exit' | 'both' (padrão). */
+  triggerOn?: string;
+  /** Severidade herdada pelo alerta. */
+  severity?: string;
 }
 
 export interface GeofenceEvent {
@@ -22,6 +32,30 @@ export interface GeofenceEvent {
   type: 'enter' | 'exit';
   /** Novo estado de pertencimento após o evento (true = passou a estar dentro). */
   inside: boolean;
+  /**
+   * Fase 5b — se a transição deve ALERTAR (regra enter/exit da zona). O
+   * pertencimento é sempre atualizado; o alerta só é criado quando `notify`.
+   */
+  notify: boolean;
+  /** Severidade da zona (copiada para o alerta). */
+  severity: string;
+}
+
+/** Contexto opcional da detecção (Fase 5b): hora + equipes do agente. */
+export interface DetectOptions {
+  /** Minuto-do-dia UTC do `capturedAt` (0–1439) — para o agendamento. */
+  atUtcMin?: number;
+  /** Equipes a que o agente pertence — para as zonas por equipe. */
+  agentTeamIds?: string[];
+}
+
+/** Zona ativa no instante dado? (sem janela ⇒ sempre; janela pode cruzar a meia-noite). */
+function isScheduledActive(g: GeofenceLike, atUtcMin?: number): boolean {
+  const s = g.windowStartMin;
+  const e = g.windowEndMin;
+  if (s == null || e == null || s === e) return true;
+  if (atUtcMin == null) return true; // sem hora ⇒ não filtra (fail-open)
+  return s < e ? atUtcMin >= s && atUtcMin < e : atUtcMin >= s || atUtcMin < e;
 }
 
 const EARTH_RADIUS_M = 6371000;
@@ -106,18 +140,29 @@ export function detectGeofenceEvents(
   current: GeoPoint,
   insideBefore: Record<string, boolean>,
   geofences: GeofenceLike[],
+  opts: DetectOptions = {},
 ): GeofenceEvent[] {
   const events: GeofenceEvent[] = [];
   for (const g of geofences) {
+    // Fase 5b — zona por equipe: pula se a zona é de uma equipe e o agente não pertence.
+    if (g.teamId && !(opts.agentTeamIds ?? []).includes(g.teamId)) continue;
+    // Fase 5b — agendamento: pula (sem tracking) quando a zona está fora da janela.
+    if (!isScheduledActive(g, opts.atUtcMin)) continue;
+
     const id = String(g._id);
     const insideNow = isInside(current, g);
     const wasInside = insideBefore[id] ?? false;
     if (insideNow === wasInside) continue; // sem transição
+    const type = insideNow ? 'enter' : 'exit';
+    // Fase 5b — regra de gatilho: o pertencimento sempre atualiza; o alerta só quando permitido.
+    const trigger = g.triggerOn ?? 'both';
     events.push({
       geofenceId: id,
       geofenceName: g.name,
-      type: insideNow ? 'enter' : 'exit',
+      type,
       inside: insideNow,
+      notify: trigger === 'both' || trigger === type,
+      severity: g.severity ?? 'medium',
     });
   }
   return events;
