@@ -1456,3 +1456,183 @@ describe('exclusão de operação (superadmin)', () => {
     expect(res.statusCode).toBe(404);
   });
 });
+
+describe('sessões e dispositivos (1b)', () => {
+  const loginDevice = async (username: string, password: string, deviceId?: string) => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/auth/login',
+      payload: { username, password, ...(deviceId ? { deviceId, platform: 'android' } : {}) },
+    });
+    const token = res.json().token as string | undefined;
+    const sid = token ? (app.jwt.decode(token) as { sid?: string } | null)?.sid : undefined;
+    return { statusCode: res.statusCode, token: token ?? '', sid };
+  };
+  const me = (token: string) =>
+    app.inject({ method: 'GET', url: '/auth/me', headers: { authorization: `Bearer ${token}` } });
+  const findUserId = async (username: string): Promise<string> => {
+    const { User } = await import('../models/index.js');
+    const u = await User.findOne({ username }).lean();
+    if (!u) throw new Error(`usuário ${username} não encontrado`);
+    return String(u._id);
+  };
+  const mkAgent = async (username: string, agentId: string) => {
+    const { User } = await import('../models/index.js');
+    await User.create({
+      username,
+      name: username,
+      passwordHash: await bcrypt.hash('cerberus123', 10),
+      role: 'agente',
+      agentId,
+      operationIds: [],
+    });
+  };
+
+  it('login cria sessão com sid; /auth/session 200; token legado sem sid 200 (fail-open)', async () => {
+    const { token, sid } = await loginDevice('agente01', 'cerberus123', 'DEV-A');
+    expect(sid).toBeTruthy();
+    const sess = await app.inject({
+      method: 'GET',
+      url: '/auth/session',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(sess.statusCode).toBe(200);
+    const legacy = app.jwt.sign({ sub: '000000000000000000000001', role: 'agente', operationIds: [] });
+    expect((await me(legacy)).statusCode).toBe(200); // sem sid → fail-open
+  });
+
+  it('kick revoga a sessão (401); o usuário reloga e o novo token funciona (kick ≠ block)', async () => {
+    await mkAgent('sess_kick', 'AG-K');
+    const { token, sid } = await loginDevice('sess_kick', 'cerberus123', 'DEV-K');
+    expect((await me(token)).statusCode).toBe(200);
+    const kick = await app.inject({
+      method: 'POST',
+      url: `/sessions/${sid}/kick`,
+      headers: { authorization: `Bearer ${saToken}` },
+    });
+    expect(kick.statusCode).toBe(204);
+    expect((await me(token)).statusCode).toBe(401);
+    const relog = await loginDevice('sess_kick', 'cerberus123', 'DEV-K');
+    expect((await me(relog.token)).statusCode).toBe(200);
+  });
+
+  it('rotas de gestão exigem SUPERADMIN (admin/agente 403)', async () => {
+    for (const t of [token, agentToken]) {
+      const r = await app.inject({
+        method: 'GET',
+        url: '/audit',
+        headers: { authorization: `Bearer ${t}` },
+      });
+      expect(r.statusCode).toBe(403);
+    }
+  });
+
+  it('block de conta: token 401, login recusado; unblock reloga (token antigo segue morto)', async () => {
+    await mkAgent('sess_block', 'AG-B');
+    const uid = await findUserId('sess_block');
+    const { token: t1 } = await loginDevice('sess_block', 'cerberus123', 'DEV-B1');
+    const block = await app.inject({
+      method: 'POST',
+      url: `/users/${uid}/block`,
+      headers: { authorization: `Bearer ${saToken}` },
+    });
+    expect(block.statusCode).toBe(204);
+    expect((await me(t1)).statusCode).toBe(401);
+    const loginBlocked = await app.inject({
+      method: 'POST',
+      url: '/auth/login',
+      payload: { username: 'sess_block', password: 'cerberus123' },
+    });
+    expect(loginBlocked.statusCode).toBe(403);
+    const unblock = await app.inject({
+      method: 'POST',
+      url: `/users/${uid}/unblock`,
+      headers: { authorization: `Bearer ${saToken}` },
+    });
+    expect(unblock.statusCode).toBe(204);
+    const relog = await loginDevice('sess_block', 'cerberus123', 'DEV-B1');
+    expect((await me(relog.token)).statusCode).toBe(200);
+    expect((await me(t1)).statusCode).toBe(401); // token antigo segue revogado
+  });
+
+  it('block de dispositivo: sessões do device morrem, outro device sobrevive, login recusado', async () => {
+    await mkAgent('dev_user', 'AG-D');
+    const a = await loginDevice('dev_user', 'cerberus123', 'DEV-X');
+    const b = await loginDevice('dev_user', 'cerberus123', 'DEV-X');
+    const other = await loginDevice('dev_user', 'cerberus123', 'DEV-Y');
+    const blk = await app.inject({
+      method: 'POST',
+      url: '/devices/DEV-X/block',
+      headers: { authorization: `Bearer ${saToken}` },
+      payload: { reason: 'perdido' },
+    });
+    expect(blk.statusCode).toBe(204);
+    expect((await me(a.token)).statusCode).toBe(401);
+    expect((await me(b.token)).statusCode).toBe(401);
+    expect((await me(other.token)).statusCode).toBe(200);
+    const loginBlockedDev = await app.inject({
+      method: 'POST',
+      url: '/auth/login',
+      payload: { username: 'dev_user', password: 'cerberus123', deviceId: 'DEV-X' },
+    });
+    expect(loginBlockedDev.statusCode).toBe(403);
+    const blocked = await app.inject({
+      method: 'GET',
+      url: '/devices/blocked',
+      headers: { authorization: `Bearer ${saToken}` },
+    });
+    expect((blocked.json() as Array<{ deviceId: string }>).map((d) => d.deviceId)).toContain('DEV-X');
+  });
+
+  it('self-block do SA é bloqueado (403)', async () => {
+    const saId = await findUserId('superadmin');
+    const res = await app.inject({
+      method: 'POST',
+      url: `/users/${saId}/block`,
+      headers: { authorization: `Bearer ${saToken}` },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('refresh reusa o sid; token legado ganha um sid', async () => {
+    const { token, sid } = await loginDevice('agente01', 'cerberus123', 'DEV-R');
+    const refr = await app.inject({
+      method: 'POST',
+      url: '/auth/refresh',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(refr.statusCode).toBe(200);
+    expect((app.jwt.decode(refr.json().token) as { sid?: string } | null)?.sid).toBe(sid);
+
+    const agenteId = await findUserId('agente01');
+    const legacy = app.jwt.sign({ sub: agenteId, role: 'agente', operationIds: [] });
+    const refrLegacy = await app.inject({
+      method: 'POST',
+      url: '/auth/refresh',
+      headers: { authorization: `Bearer ${legacy}` },
+    });
+    expect(refrLegacy.statusCode).toBe(200);
+    expect((app.jwt.decode(refrLegacy.json().token) as { sid?: string } | null)?.sid).toBeTruthy();
+  });
+
+  it('auditoria (SA) lista kick/block; lista de dispositivos de um usuário', async () => {
+    const audit = await app.inject({
+      method: 'GET',
+      url: '/audit',
+      headers: { authorization: `Bearer ${saToken}` },
+    });
+    expect(audit.statusCode).toBe(200);
+    const actions = (audit.json() as Array<{ action: string }>).map((a) => a.action);
+    expect(actions).toContain('session.kick');
+    expect(actions).toContain('user.block');
+    expect(actions).toContain('device.block');
+
+    const devs = await app.inject({
+      method: 'GET',
+      url: `/users/${await findUserId('agente01')}/devices`,
+      headers: { authorization: `Bearer ${saToken}` },
+    });
+    expect(devs.statusCode).toBe(200);
+    expect(Array.isArray(devs.json())).toBe(true);
+  });
+});

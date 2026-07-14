@@ -15,6 +15,8 @@ const userSchema = new Schema(
     operationIds: { type: [Schema.Types.ObjectId], ref: 'Operation', default: [] },
     /** Chave pública X25519 (base64) para E2EE. A privada nunca chega ao servidor. */
     publicKey: { type: String },
+    /** Conta bloqueada pelo SA — barra o login e revoga as sessões existentes. */
+    blocked: { type: Boolean, default: false },
   },
   { timestamps: true },
 );
@@ -175,3 +177,56 @@ const settingsSchema = new Schema(
 );
 export type SettingsDoc = InferSchemaType<typeof settingsSchema>;
 export const Settings = model('Settings', settingsSchema);
+
+/* ---------------------------------------------------- Sessões / Dispositivos */
+
+/**
+ * Sessão = um login de dispositivo. Fonte única da revogação: um token é válido
+ * SSE a sessão existe e `revokedAt` é nulo. O `_id` viaja como `sid` no JWT.
+ */
+const sessionSchema = new Schema(
+  {
+    userId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+    /** Identidade do dispositivo (asserida pelo cliente — controle operacional, não fronteira). */
+    deviceId: { type: String, index: true },
+    deviceLabel: { type: String },
+    platform: { type: String },
+    ip: { type: String },
+    lastSeenAt: { type: Date },
+    revokedAt: { type: Date },
+    revokedReason: { type: String },
+  },
+  { timestamps: true },
+);
+sessionSchema.index({ userId: 1, createdAt: -1 });
+export type SessionDoc = InferSchemaType<typeof sessionSchema>;
+export const Session = model('Session', sessionSchema);
+
+/** Denylist de dispositivos bloqueados permanentemente (barra o login). */
+const deviceBlockSchema = new Schema(
+  {
+    deviceId: { type: String, required: true, unique: true },
+    blockedBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+    reason: { type: String },
+  },
+  { timestamps: true },
+);
+export type DeviceBlockDoc = InferSchemaType<typeof deviceBlockSchema>;
+export const DeviceBlock = model('DeviceBlock', deviceBlockSchema);
+
+/** Trilha de auditoria de ações sensíveis (kick/block/unblock). */
+const auditLogSchema = new Schema(
+  {
+    actorId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+    action: { type: String, required: true },
+    targetUserId: { type: Schema.Types.ObjectId, ref: 'User' },
+    targetDeviceId: { type: String },
+    targetSid: { type: String },
+    reason: { type: String },
+    ip: { type: String },
+  },
+  { timestamps: true },
+);
+auditLogSchema.index({ createdAt: -1 });
+export type AuditLogDoc = InferSchemaType<typeof auditLogSchema>;
+export const AuditLog = model('AuditLog', auditLogSchema);

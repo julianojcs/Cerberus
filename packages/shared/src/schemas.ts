@@ -1,5 +1,13 @@
 import { z } from 'zod';
-import { ActivityType, MessageType, OperationStatus, OperationType, Role } from './constants.js';
+import {
+  ActivityType,
+  DevicePlatform,
+  MessageType,
+  OperationStatus,
+  OperationType,
+  Role,
+  type SessionRevokeReason,
+} from './constants.js';
 
 const enumValues = <T extends Record<string, string>>(obj: T) =>
   Object.values(obj) as [string, ...string[]];
@@ -80,13 +88,18 @@ export const authClaimsSchema = z.object({
   agentId: z.string().optional(),
   /** Operações que o portador pode acessar (base do isolamento multitenant). */
   operationIds: z.array(z.string()).default([]),
+  /** Id da sessão (login de dispositivo). Ausente em tokens legados → fail-open. */
+  sid: z.string().optional(),
 });
 export type AuthClaims = z.infer<typeof authClaimsSchema>;
 
-/** Corpo de login. */
+/** Corpo de login. Os campos de dispositivo habilitam gestão/bloqueio por dispositivo. */
 export const loginRequestSchema = z.object({
   username: z.string().min(3),
   password: z.string().min(6),
+  deviceId: z.string().min(1).max(200).optional(),
+  deviceLabel: z.string().max(120).optional(),
+  platform: z.enum(enumValues(DevicePlatform)).optional(),
 });
 export type LoginRequest = z.infer<typeof loginRequestSchema>;
 
@@ -112,3 +125,38 @@ export const operationSchema = z.object({
   createdAt: z.string().datetime(),
 });
 export type Operation = z.infer<typeof operationSchema>;
+
+/** Sessão (login de um dispositivo) — linha da lista de dispositivos do SA. */
+export interface SessionInfo {
+  id: string;
+  userId: string;
+  deviceId?: string;
+  deviceLabel?: string;
+  platform?: DevicePlatform;
+  ip?: string;
+  createdAt: string;
+  lastSeenAt?: string;
+  revokedAt?: string;
+  revokedReason?: SessionRevokeReason;
+}
+
+/** Dispositivo bloqueado (denylist permanente). */
+export interface DeviceBlockInfo {
+  deviceId: string;
+  blockedBy: string;
+  reason?: string;
+  createdAt: string;
+}
+
+/** Entrada do log de auditoria de ações sensíveis. */
+export interface AuditLogEntry {
+  id: string;
+  actorId: string;
+  action: string;
+  targetUserId?: string;
+  targetDeviceId?: string;
+  targetSid?: string;
+  reason?: string;
+  ip?: string;
+  createdAt: string;
+}
