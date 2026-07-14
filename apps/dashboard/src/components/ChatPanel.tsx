@@ -107,10 +107,12 @@ export function ChatPanel({
         capturedAt: m.capturedAt,
         mine: m.senderId === myDirId,
       };
+      // Fase 5c — chave do remetente segundo o diretório (autentica o `senderId`).
+      const senderKey = directory.find((e) => e.id === m.senderId)?.publicKey;
       if (m.type === 'media' && m.mediaRef) {
         const meta =
           m.ciphertext && secretKey
-            ? parseMediaMeta(openMessage(m.ciphertext, myDirId, secretKey))
+            ? parseMediaMeta(openMessage(m.ciphertext, myDirId, secretKey, senderKey))
             : null;
         return {
           ...base,
@@ -125,11 +127,11 @@ export function ChatPanel({
         ...base,
         text:
           m.ciphertext && secretKey
-            ? openMessage(m.ciphertext, myDirId, secretKey)
+            ? openMessage(m.ciphertext, myDirId, secretKey, senderKey)
             : (m.text ?? null),
       };
     },
-    [secretKey, myDirId],
+    [secretKey, myDirId, directory],
   );
 
   const appendMsgs = useCallback((incomingMsgs: ChatMsg[]) => {

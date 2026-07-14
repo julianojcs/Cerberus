@@ -17,6 +17,7 @@ import {
   GEOFENCE_SEVERITY_RANK,
   openMessage,
   sealMessage,
+  type KeyDirectoryEntry,
   type TeamInfo,
 } from '@cerberus/shared';
 import {
@@ -169,6 +170,11 @@ export default function LiveOperationPage() {
 
   // Histórico de texto/broadcast (E2EE) decifrado localmente para exibição.
   const [chatMsgs, setChatMsgs] = useState<DecryptedMessage[]>([]);
+  // Fase 5c — diretório de chaves (autentica o remetente ao decifrar). Ref para o
+  // `refreshMessages` ler sem virar dependência (evita recriação/re-subscribe).
+  const [keyDirectory, setKeyDirectory] = useState<KeyDirectoryEntry[]>([]);
+  const keyDirectoryRef = useRef<KeyDirectoryEntry[]>([]);
+  keyDirectoryRef.current = keyDirectory;
 
   // Geofencing.
   const [geofences, setGeofences] = useState<Geofence[]>([]);
@@ -262,9 +268,10 @@ export default function LiveOperationPage() {
           msgs
             .filter((m) => m.type === 'media' && !!m.mediaRef)
             .map((m) => {
+              const senderKey = keyDirectoryRef.current.find((e) => e.id === m.senderId)?.publicKey;
               const meta =
                 m.ciphertext && secretKey
-                  ? parseMediaMeta(openMessage(m.ciphertext, myId, secretKey))
+                  ? parseMediaMeta(openMessage(m.ciphertext, myId, secretKey, senderKey))
                   : null;
               return {
                 id: m.id,
@@ -289,7 +296,12 @@ export default function LiveOperationPage() {
               // Envelope E2EE → decifra com a chave local; senão cai no texto legado.
               text:
                 m.ciphertext && secretKey
-                  ? openMessage(m.ciphertext, myId, secretKey)
+                  ? openMessage(
+                      m.ciphertext,
+                      myId,
+                      secretKey,
+                      keyDirectoryRef.current.find((e) => e.id === m.senderId)?.publicKey,
+                    )
                   : (m.text ?? null),
               capturedAt: m.capturedAt,
             })),
@@ -384,6 +396,14 @@ export default function LiveOperationPage() {
     api
       .operationTeams(operationId)
       .then(setTeams)
+      .catch(() => {});
+    // Fase 5c — diretório de chaves para autenticar remetentes ao decifrar.
+    api
+      .operationKeys(operationId)
+      .then((dir) => {
+        setKeyDirectory(dir);
+        refreshMessages(); // re-decifra já com verificação de remetente
+      })
       .catch(() => {});
     const overlayTimer = setInterval(loadOverlays, 15000);
 

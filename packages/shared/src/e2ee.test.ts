@@ -56,6 +56,33 @@ describe('e2ee', () => {
     expect(openMessage('Entrada na zona Alfa', 'AG-001', generateKeyPair().secretKey)).toBeNull();
   });
 
+  it('autenticação do remetente (5c): rejeita spk que não bate com o diretório', () => {
+    const central = generateKeyPair();
+    const ag1 = generateKeyPair();
+    const recipients = [{ id: 'AG-001', publicKey: ag1.publicKey }];
+    const envelope = sealMessage('ordem legítima', central.secretKey, recipients);
+
+    // spk esperado correto (do diretório) → decifra normalmente.
+    expect(openMessage(envelope, 'AG-001', ag1.secretKey, central.publicKey)).toBe('ordem legítima');
+    // spk esperado de OUTRO remetente → rejeita (possível spoofing).
+    const impostor = generateKeyPair();
+    expect(openMessage(envelope, 'AG-001', ag1.secretKey, impostor.publicKey)).toBeNull();
+    // sem expectedSenderKey → mantém o comportamento antigo (decifra).
+    expect(openMessage(envelope, 'AG-001', ag1.secretKey)).toBe('ordem legítima');
+  });
+
+  it('anti-spoofing: envelope forjado com identidade trocada é barrado pelo diretório', () => {
+    // O impostor cifra com a PRÓPRIA chave, mas afirma ser a central.
+    const impostor = generateKeyPair();
+    const central = generateKeyPair();
+    const ag1 = generateKeyPair();
+    const forged = sealMessage('ordem falsa', impostor.secretKey, [
+      { id: 'AG-001', publicKey: ag1.publicKey },
+    ]);
+    // Sem verificação, decifraria; COM a chave da central (do diretório) → null.
+    expect(openMessage(forged, 'AG-001', ag1.secretKey, central.publicKey)).toBeNull();
+  });
+
   it('cifra/decifra bytes (mídia) e não vaza o conteúdo no cipher', () => {
     const bytes = new Uint8Array([1, 2, 3, 250, 128, 0, 42]);
     const { cipher, key, nonce } = encryptBytes(bytes);
