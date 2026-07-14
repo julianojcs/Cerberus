@@ -691,9 +691,13 @@ export default function LiveOperationPage() {
   async function saveEdit() {
     if (!editGeo) return;
     try {
+      // `shape` SEMPRE explícito: converter círculo→polígono muda a forma, e sem
+      // mandar `shape` o PATCH grava os vértices mas mantém o shape antigo (a zona
+      // volta a renderizar como círculo).
       const data: GeofenceInput =
         editGeo.shape === 'rectangle'
           ? {
+              shape: 'rectangle',
               lng: editGeo.lng,
               lat: editGeo.lat,
               widthMeters: editGeo.widthMeters,
@@ -702,8 +706,14 @@ export default function LiveOperationPage() {
               color: editGeo.color,
             }
           : editGeo.shape === 'polygon'
-            ? { vertices: editGeo.vertices, color: editGeo.color }
-            : { lng: editGeo.lng, lat: editGeo.lat, radiusMeters: editGeo.radiusMeters, color: editGeo.color };
+            ? { shape: 'polygon', vertices: editGeo.vertices, color: editGeo.color }
+            : {
+                shape: 'circle',
+                lng: editGeo.lng,
+                lat: editGeo.lat,
+                radiusMeters: editGeo.radiusMeters,
+                color: editGeo.color,
+              };
       await api.patchGeofence(operationId, editGeo.id, data);
       setGeofences(await api.geofences(operationId));
     } catch {
