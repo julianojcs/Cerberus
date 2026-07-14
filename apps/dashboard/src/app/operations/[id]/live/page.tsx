@@ -9,6 +9,7 @@ import {
   type Geofence,
   type GeofenceAlert,
   type GeofenceInput,
+  type MediaStatInfo,
   type Settings,
 } from '@/lib/api';
 import { getToken, getUser } from '@/lib/auth';
@@ -205,6 +206,9 @@ export default function LiveOperationPage() {
   // Mídia (fotos) enviadas pelos agentes — com metadata E2EE já decifrada.
   const [mediaMsgs, setMediaMsgs] = useState<DecryptedMedia[]>([]);
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  // Fase 6b — estatísticas de mídia (views + favoritos) + dedupe de views na sessão.
+  const [mediaStats, setMediaStats] = useState<Record<string, MediaStatInfo>>({});
+  const viewedRef = useRef<Set<string>>(new Set());
 
   // Histórico de texto/broadcast (E2EE) decifrado localmente para exibição.
   const [chatMsgs, setChatMsgs] = useState<DecryptedMessage[]>([]);
@@ -457,6 +461,15 @@ export default function LiveOperationPage() {
           map[m.id] = m.name;
         }
         setMemberNames(map);
+      })
+      .catch(() => {});
+    // Fase 6b — estatísticas de mídia (views + favoritos).
+    api
+      .mediaStats(operationId)
+      .then((list) => {
+        const map: Record<string, MediaStatInfo> = {};
+        for (const s of list) map[s.mediaId] = s;
+        setMediaStats(map);
       })
       .catch(() => {});
     // Fase 5c — diretório de chaves para autenticar remetentes ao decifrar.
@@ -903,6 +916,39 @@ export default function LiveOperationPage() {
   // Nome de exibição do remetente (broadcast = Central; senão nome do membro / id).
   const nameFor = (senderId: string, type?: string): string =>
     type === 'broadcast' ? 'Central' : (memberNames[senderId] ?? senderId);
+
+  // Fase 6b — conta a visualização (uma vez por mídia na sessão) e atualiza o total.
+  async function handleViewMedia(item: { id: string }) {
+    if (viewedRef.current.has(item.id)) return;
+    viewedRef.current.add(item.id);
+    try {
+      const { views } = await api.viewMedia(operationId, item.id);
+      setMediaStats((s) => ({
+        ...s,
+        [item.id]: {
+          mediaId: item.id,
+          views,
+          favorites: s[item.id]?.favorites ?? 0,
+          favorited: s[item.id]?.favorited ?? false,
+        },
+      }));
+    } catch {
+      /* ignora */
+    }
+  }
+
+  // Fase 6b — alterna o favorito da mídia.
+  async function handleToggleFav(item: { id: string }) {
+    try {
+      const { favorited, favorites } = await api.toggleFavoriteMedia(operationId, item.id);
+      setMediaStats((s) => ({
+        ...s,
+        [item.id]: { mediaId: item.id, views: s[item.id]?.views ?? 0, favorites, favorited },
+      }));
+    } catch {
+      /* ignora */
+    }
+  }
 
   // Feed unificado do card: texto/broadcast + fotos, mais recentes primeiro.
   const cardMsgs = useMemo<CardMsg[]>(() => {
@@ -2088,6 +2134,36 @@ export default function LiveOperationPage() {
           onClose={() => setLightboxIndex(null)}
           operationId={operationId}
           nameOf={(id) => nameFor(id)}
+          onView={(it) => void handleViewMedia(it)}
+          actions={(it) => (
+            <button
+              type="button"
+              onClick={() => void handleToggleFav(it)}
+              title={mediaStats[it.id]?.favorited ? 'Desfavoritar' : 'Favoritar'}
+              style={{
+                width: 34,
+                height: 34,
+                borderRadius: 8,
+                border: '1px solid rgba(255,255,255,.25)',
+                background: 'rgba(0,0,0,.4)',
+                color: mediaStats[it.id]?.favorited ? '#e3b341' : '#fff',
+                cursor: 'pointer',
+                fontSize: 16,
+              }}
+            >
+              {mediaStats[it.id]?.favorited ? '★' : '☆'}
+            </button>
+          )}
+          extraInfo={(it) => (
+            <div
+              style={{ display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: 12 }}
+            >
+              <span className="muted">Visualizações · Favoritos</span>
+              <span style={{ color: 'var(--text)' }}>
+                👁 {mediaStats[it.id]?.views ?? 0} · ★ {mediaStats[it.id]?.favorites ?? 0}
+              </span>
+            </div>
+          )}
         />
       )}
     </div>

@@ -17,7 +17,20 @@ export interface MediaItem {
   lng?: number;
 }
 
-const SPEEDS = [3, 5, 8]; // segundos por slide
+// Velocidades do autoplay (multiplicador): 1/8x…8x. O intervalo = BASE_MS / v.
+const SPEEDS = [
+  { v: 1 / 8, l: '1/8x' },
+  { v: 1 / 4, l: '1/4x' },
+  { v: 1 / 3, l: '1/3x' },
+  { v: 1 / 2, l: '1/2x' },
+  { v: 1, l: '1x' },
+  { v: 2, l: '2x' },
+  { v: 3, l: '3x' },
+  { v: 4, l: '4x' },
+  { v: 8, l: '8x' },
+];
+const DEFAULT_SPEED_IDX = 4; // 1x
+const BASE_MS = 3000; // intervalo entre slides a 1x
 
 const fmtDateTime = (iso: string): string =>
   new Intl.DateTimeFormat('pt-BR', {
@@ -44,6 +57,7 @@ export function MediaViewer({
   nameOf,
   extraInfo,
   actions,
+  onView,
 }: {
   items: MediaItem[];
   index: number;
@@ -55,6 +69,8 @@ export function MediaViewer({
   extraInfo?: (item: MediaItem) => React.ReactNode;
   /** Ações no topo (ex.: ⭐ favoritar — Fase 6b). */
   actions?: (item: MediaItem) => React.ReactNode;
+  /** Chamado ao EXIBIR um item (conta visualização — Fase 6b). */
+  onView?: (item: MediaItem) => void;
 }) {
   const item = items[index];
   const [url, setUrl] = useState<string | null>(null);
@@ -63,8 +79,15 @@ export function MediaViewer({
   const [error, setError] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
   const [playing, setPlaying] = useState(false);
-  const [speedIdx, setSpeedIdx] = useState(0);
+  const [speedIdx, setSpeedIdx] = useState(DEFAULT_SPEED_IDX);
   const urlRef = useRef<string | null>(null);
+
+  // Conta a visualização ao exibir cada item (via ref p/ não re-disparar por render).
+  const onViewRef = useRef(onView);
+  onViewRef.current = onView;
+  useEffect(() => {
+    if (item) onViewRef.current?.(item);
+  }, [item?.id]);
 
   const next = useCallback(
     () => items.length > 0 && onIndex((index + 1) % items.length),
@@ -118,10 +141,10 @@ export function MediaViewer({
     return () => window.removeEventListener('keydown', onKey);
   }, [prev, next, onClose]);
 
-  // Slideshow.
+  // Slideshow: avança sozinho; o intervalo depende da velocidade escolhida.
   useEffect(() => {
     if (!playing || items.length < 2) return;
-    const t = setInterval(next, (SPEEDS[speedIdx] ?? 3) * 1000);
+    const t = setInterval(next, BASE_MS / (SPEEDS[speedIdx]?.v ?? 1));
     return () => clearInterval(t);
   }, [playing, speedIdx, next, items.length]);
 
@@ -239,8 +262,14 @@ export function MediaViewer({
         )}
         {items.length > 1 && (
           <div style={playerRow}>
-            <button type="button" onClick={prev} title="Anterior" style={iconBtn}>
-              ⏮
+            <button
+              type="button"
+              onClick={() => setSpeedIdx((i) => Math.max(0, i - 1))}
+              disabled={speedIdx === 0}
+              title="Diminuir a velocidade"
+              style={{ ...iconBtn, opacity: speedIdx === 0 ? 0.4 : 1 }}
+            >
+              ⏪
             </button>
             <button
               type="button"
@@ -250,17 +279,18 @@ export function MediaViewer({
             >
               {playing ? '⏸' : '▶'}
             </button>
-            <button type="button" onClick={next} title="Próxima" style={iconBtn}>
-              ⏭
-            </button>
             <button
               type="button"
-              onClick={() => setSpeedIdx((i) => (i + 1) % SPEEDS.length)}
-              title="Velocidade do slideshow"
-              style={{ ...iconBtn, width: 'auto', padding: '0 8px', fontSize: 12 }}
+              onClick={() => setSpeedIdx((i) => Math.min(SPEEDS.length - 1, i + 1))}
+              disabled={speedIdx === SPEEDS.length - 1}
+              title="Aumentar a velocidade"
+              style={{ ...iconBtn, opacity: speedIdx === SPEEDS.length - 1 ? 0.4 : 1 }}
             >
-              {SPEEDS[speedIdx]}s
+              ⏩
             </button>
+            <span style={{ color: '#fff', fontSize: 12, minWidth: 40, textAlign: 'center' }}>
+              {SPEEDS[speedIdx]?.l}
+            </span>
           </div>
         )}
       </div>

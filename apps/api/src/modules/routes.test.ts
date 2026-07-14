@@ -2357,3 +2357,49 @@ describe('mídia de equipe/DM (Fase 3b-2)', () => {
     expect(media?.mediaRef).toBeTruthy();
   });
 });
+
+describe('estatísticas de mídia — favoritos + views (Fase 6b)', () => {
+  const mediaId = 'media-6b-test';
+  const view = (t: string) =>
+    app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/media/${mediaId}/view`,
+      headers: { authorization: `Bearer ${t}` },
+    });
+  const fav = (t: string) =>
+    app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/media/${mediaId}/favorite`,
+      headers: { authorization: `Bearer ${t}` },
+    });
+
+  it('view registra visualização única por usuário (idempotente)', async () => {
+    expect((await view(token)).json().views).toBe(1);
+    expect((await view(token)).json().views).toBe(1); // mesma pessoa → não soma
+    expect((await view(agentToken)).json().views).toBe(2); // outro usuário → soma
+  });
+
+  it('favorite alterna o favorito do usuário', async () => {
+    expect((await fav(token)).json()).toMatchObject({ favorited: true, favorites: 1 });
+    expect((await fav(token)).json()).toMatchObject({ favorited: false, favorites: 0 });
+  });
+
+  it('media-stats devolve views + se EU favoritei', async () => {
+    await fav(token); // liga de novo
+    const res = await app.inject({
+      method: 'GET',
+      url: `/operations/${operationId}/media-stats`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const stat = (res.json() as Array<{ mediaId: string; views: number; favorited: boolean }>).find(
+      (s) => s.mediaId === mediaId,
+    );
+    expect(stat).toMatchObject({ views: 2, favorited: true });
+  });
+
+  it('media-stats sem token → 401', async () => {
+    const res = await app.inject({ method: 'GET', url: `/operations/${operationId}/media-stats` });
+    expect(res.statusCode).toBe(401);
+  });
+});
