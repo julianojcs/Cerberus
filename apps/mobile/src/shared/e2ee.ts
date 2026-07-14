@@ -91,10 +91,17 @@ export function decryptBytes(cipher: Uint8Array, key: string, nonce: string): Ui
  * ele, se a chave não bater, ou se não for um envelope E2EE válido (ex.: uma
  * mensagem de sistema em claro no mesmo canal).
  */
-export function openMessage(ciphertext: string, myId: string, mySecretKey: string): string | null {
+export function openMessage(
+  ciphertext: string,
+  myId: string,
+  mySecretKey: string,
+  expectedSenderKey?: string,
+): string | null {
   try {
     const env = JSON.parse(encodeUTF8(decodeBase64(ciphertext))) as Envelope;
     if (env.v !== 1 || !Array.isArray(env.envs)) return null;
+    // Fase 5c — anti-spoofing: spk do envelope deve bater com a chave do diretório.
+    if (expectedSenderKey && env.spk !== expectedSenderKey) return null;
     const mine = env.envs.find((e) => e.rid === myId);
     if (!mine) return null;
     const K = nacl.box.open(

@@ -95,11 +95,24 @@ export function decryptBytes(cipher: Uint8Array, key: string, nonce: string): Ui
  * Decifra o envelope para o destinatário `myId`. Devolve `null` se não for para ele,
  * se a chave/assinatura não bater, ou se não for um envelope E2EE válido (ex.: uma
  * mensagem de sistema em claro no mesmo canal).
+ *
+ * **Autenticação do remetente (Fase 5c):** quando `expectedSenderKey` é informado (a
+ * chave pública do remetente segundo o DIRETÓRIO), o `spk` auto-reportado no envelope
+ * precisa bater — senão a mensagem é rejeitada (`null`). Sem isso, um remetente
+ * malicioso poderia forjar a identidade (`senderId`) de outro. Omitir mantém o
+ * comportamento antigo (sem verificação) para chamadas legadas.
  */
-export function openMessage(ciphertext: string, myId: string, mySecretKey: string): string | null {
+export function openMessage(
+  ciphertext: string,
+  myId: string,
+  mySecretKey: string,
+  expectedSenderKey?: string,
+): string | null {
   try {
     const env = JSON.parse(encodeUTF8(decodeBase64(ciphertext))) as Envelope;
     if (env.v !== 1 || !Array.isArray(env.envs)) return null;
+    // Anti-spoofing: o spk do envelope deve ser o do remetente registrado no diretório.
+    if (expectedSenderKey && env.spk !== expectedSenderKey) return null;
     const mine = env.envs.find((e) => e.rid === myId);
     if (!mine) return null;
     const K = nacl.box.open(
