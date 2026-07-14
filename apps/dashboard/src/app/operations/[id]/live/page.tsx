@@ -41,6 +41,7 @@ import {
 } from '@/components/LiveMap';
 import { Toggle } from '@/components/Toggle';
 import { AuthImage } from '@/components/AuthImage';
+import { MediaViewer } from '@/components/MediaViewer';
 import { ResizableSidebar } from '@/components/ResizableSidebar';
 import { ColorPalettePicker } from '@/components/ColorPalettePicker';
 import { SettingsModal } from '@/components/SettingsModal';
@@ -203,7 +204,7 @@ export default function LiveOperationPage() {
 
   // Mídia (fotos) enviadas pelos agentes — com metadata E2EE já decifrada.
   const [mediaMsgs, setMediaMsgs] = useState<DecryptedMedia[]>([]);
-  const [lightbox, setLightbox] = useState<DecryptedMedia | null>(null);
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
 
   // Histórico de texto/broadcast (E2EE) decifrado localmente para exibição.
   const [chatMsgs, setChatMsgs] = useState<DecryptedMessage[]>([]);
@@ -1196,14 +1197,14 @@ export default function LiveOperationPage() {
                   deformam. `column-width: 32px` mantém as miniaturas bem pequenas
                   (o nº de colunas se adapta à largura do sidebar). */}
               <div style={{ columns: '32px', columnGap: 4, marginTop: 8 }}>
-                {mediaMsgs.map((m) => (
+                {mediaMsgs.map((m, i) => (
                   <div key={m.id} style={{ breakInside: 'avoid', marginBottom: 4 }}>
                     <AuthImage
                       path={api.mediaPath(operationId, m.mediaRef)}
                       mediaKey={m.crypto}
                       mime={m.mime}
-                      alt={`Mídia de ${m.senderId}`}
-                      onClick={() => setLightbox(m)}
+                      alt={`Mídia de ${nameFor(m.senderId)}`}
+                      onClick={() => setLightboxIndex(i)}
                       style={{
                         width: '100%',
                         height: 'auto',
@@ -2019,7 +2020,10 @@ export default function LiveOperationPage() {
             agentColors={agentColors}
             fitNonce={fitNonce}
             mediaMarkers={mediaMarkers}
-            onMediaClick={(id) => setLightbox(mediaMsgs.find((m) => m.id === id) ?? null)}
+            onMediaClick={(id) => {
+              const i = mediaMsgs.findIndex((m) => m.id === id);
+              if (i >= 0) setLightboxIndex(i);
+            }}
             geofences={displayGeofences}
             showGeofences={showZones}
             onMapClick={(lng, lat) => {
@@ -2076,71 +2080,15 @@ export default function LiveOperationPage() {
         />
       )}
 
-      {lightbox && (
-        <div
-          onClick={() => setLightbox(null)}
-          className="animate__animated animate__fadeIn animate__faster"
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0,0,0,0.85)',
-            display: 'grid',
-            placeItems: 'center',
-            zIndex: 1000,
-            padding: 24,
-          }}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: '92vw' }}
-          >
-            <AuthImage
-              path={api.mediaPath(operationId, lightbox.mediaRef)}
-              mediaKey={lightbox.crypto}
-              mime={lightbox.mime}
-              alt={lightbox.caption ?? 'mídia'}
-              style={{
-                maxWidth: '92vw',
-                maxHeight: '80vh',
-                objectFit: 'contain',
-                borderRadius: 8,
-                background: '#141b24',
-              }}
-            />
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                gap: 16,
-                color: '#fff',
-              }}
-            >
-              <div style={{ fontSize: 14 }}>
-                {lightbox.caption && <div>{lightbox.caption}</div>}
-                <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
-                  {nameFor(lightbox.senderId)}
-                  {lightbox.lat != null &&
-                    ` · 📍 ${lightbox.lat.toFixed(5)}, ${lightbox.lng?.toFixed(5)}`}
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setLightbox(null)}
-                className="badge"
-                style={{
-                  cursor: 'pointer',
-                  border: '1px solid var(--border)',
-                  background: 'transparent',
-                  color: '#fff',
-                  flexShrink: 0,
-                }}
-              >
-                Fechar ✕
-              </button>
-            </div>
-          </div>
-        </div>
+      {lightboxIndex != null && mediaMsgs[lightboxIndex] && (
+        <MediaViewer
+          items={mediaMsgs}
+          index={lightboxIndex}
+          onIndex={(i) => setLightboxIndex(i)}
+          onClose={() => setLightboxIndex(null)}
+          operationId={operationId}
+          nameOf={(id) => nameFor(id)}
+        />
       )}
     </div>
   );
