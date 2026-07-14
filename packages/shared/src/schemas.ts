@@ -171,3 +171,14 @@ export interface UserInfo {
   operationIds: string[];
   blocked: boolean;
 }
+
+/** Equipe (sub-grupo de uma operação) serializada — lista/CRUD + filtro no mapa. */
+export interface TeamInfo {
+  id: string;
+  operationId: string;
+  name: string;
+  color: string; // token de família Tailwind (ex.: 'blue')
+  leadId?: string; // agentId do líder
+  agentIds: string[]; // canais de agente (⊆ agentes da operação)
+  createdAt: string;
+}

@@ -4,12 +4,20 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { clearSession } from '@/lib/auth';
 
-export type AdminTab = 'users' | 'operations' | 'map' | 'broadcast' | 'devices' | 'audit';
+export type AdminTab =
+  | 'users'
+  | 'operations'
+  | 'teams'
+  | 'map'
+  | 'broadcast'
+  | 'devices'
+  | 'audit';
 
 /** Uma aba do painel: rótulo, rota e se exige SuperAdmin. */
 const TABS: { key: AdminTab; href: string; label: string; saOnly: boolean }[] = [
   { key: 'users', href: '/admin/users', label: 'Usuários', saOnly: false },
   { key: 'operations', href: '/admin/operations', label: 'Operações', saOnly: false },
+  { key: 'teams', href: '/admin/teams', label: 'Equipes', saOnly: false },
   { key: 'map', href: '/admin/map', label: 'Mapa global', saOnly: true },
   { key: 'broadcast', href: '/admin/broadcast', label: 'Broadcast', saOnly: true },
   { key: 'devices', href: '/admin/devices', label: 'Dispositivos', saOnly: true },

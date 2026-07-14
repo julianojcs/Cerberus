@@ -5,6 +5,7 @@ import type {
   LoginResponse,
   Operation,
   SessionInfo,
+  TeamInfo,
   UserInfo,
 } from '@cerberus/shared';
 import { clearSession, getToken } from './auth';
@@ -35,6 +36,15 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
   if (res.status === 204) return undefined as T; // sem corpo (ex.: DELETE)
   return res.json() as Promise<T>;
+}
+
+/** Membro (usuário) de uma operação — resposta de GET /operations/:id/members. */
+export interface OperationMember {
+  id: string;
+  username: string;
+  name: string;
+  role: string; // 'admin' | 'agente' | 'superadmin'
+  agentId?: string;
 }
 
 export interface LatestPosition {
@@ -103,6 +113,28 @@ export const api = {
   updateOperation: (id: string, data: Partial<{ name: string; type: string; status: string }>) =>
     request<Operation>(`/operations/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteOperation: (id: string) => request<void>(`/operations/${id}`, { method: 'DELETE' }),
+  // Membros (usuários) no escopo da operação — popula o multiselect de agentes.
+  operationMembers: (opId: string) =>
+    request<OperationMember[]>(`/operations/${opId}/members`),
+
+  // --- Equipes (Fase 2a) ---
+  teams: () => request<TeamInfo[]>('/teams'),
+  operationTeams: (opId: string) => request<TeamInfo[]>(`/operations/${opId}/teams`),
+  createTeam: (
+    opId: string,
+    data: { name: string; color?: string; agentIds?: string[]; leadId?: string },
+  ) => request<TeamInfo>(`/operations/${opId}/teams`, { method: 'POST', body: JSON.stringify(data) }),
+  updateTeam: (
+    opId: string,
+    tid: string,
+    data: Partial<{ name: string; color: string; agentIds: string[]; leadId: string }>,
+  ) =>
+    request<TeamInfo>(`/operations/${opId}/teams/${tid}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+  deleteTeam: (opId: string, tid: string) =>
+    request<void>(`/operations/${opId}/teams/${tid}`, { method: 'DELETE' }),
   // E2EE: registra a própria chave pública e lê o diretório de chaves da operação.
   registerPublicKey: (publicKey: string) =>
     request<{ publicKey: string }>('/auth/public-key', {
