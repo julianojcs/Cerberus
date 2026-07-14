@@ -289,7 +289,12 @@ export async function messageRoutes(app: FastifyInstance): Promise<void> {
       }
       const q = historyQuerySchema.safeParse(request.query);
       if (!q.success) return reply.code(400).send({ error: 'Parâmetros inválidos' });
-      const filter: Record<string, unknown> = { operationId: id, recipientId: agentId };
+      // DM nos DOIS sentidos: central→agente (recipientId) E agente→central
+      // (senderId do agente sem teamId — mensagem direta, não de equipe/broadcast).
+      const filter: Record<string, unknown> = {
+        operationId: id,
+        $or: [{ recipientId: agentId }, { senderId: agentId, teamId: null }],
+      };
       if (q.data.since) filter.capturedAt = { $gte: new Date(q.data.since) };
       const docs = await MessageModel.find(filter)
         .sort({ capturedAt: -1 })

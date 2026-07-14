@@ -246,6 +246,8 @@ const settingsSchema = new Schema(
     connectRoutes: { type: Boolean, default: false },
     /** Intervalo (min) sem transmissão que QUEBRA a rota em segmentos (evita o "pulo"). */
     maxGapMinutes: { type: Number, default: 5, min: 1 },
+    /** Nº de mensagens exibidas no card "Mensagens" da barra lateral (viewport rola). */
+    sidebarMessageCount: { type: Number, default: 5, min: 1, max: 50 },
   },
   { timestamps: true },
 );

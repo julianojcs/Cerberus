@@ -1,7 +1,53 @@
 import { authedFetch } from './http';
-import { sealMessage } from '../shared/e2ee';
+import { openMessage, sealMessage } from '../shared/e2ee';
 import { fetchRecipients, getSecretKey } from './keys';
 import type { Session } from './auth';
+import type { BroadcastMessage } from './mqtt';
+
+/**
+ * Busca o HISTÓRICO de mensagens da operação (REST) e decifra o que for para este
+ * agente — broadcasts, DMs e mensagens de equipe. Sem isso, o card do app só mostrava
+ * o que chegasse AO VIVO na sessão (vazio ao abrir). Mais recentes primeiro.
+ */
+export async function fetchMessageHistory(
+  session: Session,
+  operationId: string,
+  myId: string,
+  secretKey: string | null,
+): Promise<BroadcastMessage[]> {
+  const res = await authedFetch(session.token, `/operations/${operationId}/messages`, {
+    method: 'GET',
+  });
+  if (!res.ok) return [];
+  const raw = (await res.json()) as Array<{
+    senderId: string;
+    type: string;
+    text?: string | null;
+    ciphertext?: string | null;
+    teamId?: string;
+    recipientId?: string;
+    capturedAt: string;
+  }>;
+  const out: BroadcastMessage[] = [];
+  for (const m of raw) {
+    const text =
+      m.ciphertext && m.ciphertext.length > 0
+        ? secretKey
+          ? openMessage(m.ciphertext, myId, secretKey)
+          : null
+        : (m.text ?? null);
+    if (text === null) continue; // não decifrável por este agente / vazio
+    out.push({
+      senderId: m.senderId,
+      type: m.type,
+      text,
+      scope: m.teamId ? 'equipe' : m.recipientId ? 'dm' : 'central',
+      teamId: m.teamId,
+      capturedAt: m.capturedAt,
+    });
+  }
+  return out.sort((a, b) => +new Date(b.capturedAt) - +new Date(a.capturedAt));
+}
 
 /**
  * Cifra e envia uma mensagem de texto à operação (E2EE). Monta o envelope por

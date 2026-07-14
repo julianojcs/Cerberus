@@ -54,6 +54,19 @@ const HISTORY_LIMIT = 5000;
 /** Máximo de pontos por trilha ao vivo (limita memória/render num turno longo). */
 const MAX_LIVE_TRAIL = 2000;
 const HOUR_MS = 60 * 60 * 1000;
+/** Botão do stepper (± quantidade) no cabeçalho do card de mensagens. */
+const stepBtnStyle: React.CSSProperties = {
+  width: 22,
+  height: 22,
+  borderRadius: 6,
+  border: '1px solid var(--border)',
+  background: 'transparent',
+  color: 'var(--text)',
+  cursor: 'pointer',
+  fontSize: 14,
+  lineHeight: 1,
+  padding: 0,
+};
 
 /** Mensagem de texto/broadcast já decifrada para exibição (`text: null` = falha). */
 interface DecryptedMessage {
@@ -62,6 +75,8 @@ interface DecryptedMessage {
   type: string;
   text: string | null;
   capturedAt: string;
+  teamId?: string; // roteia o clique p/ a conversa da equipe
+  recipientId?: string; // roteia o clique p/ o DM
 }
 
 /** Mídia com a metadata (legenda/geotag/chave da imagem) decifrada. */
@@ -76,6 +91,23 @@ interface DecryptedMedia {
   /** Chave/nonce da imagem cifrada; `null` = envelope não decifrável por este operador. */
   crypto: { k: string; n: string } | null;
   capturedAt: string;
+  teamId?: string; // roteia o clique p/ a conversa
+  recipientId?: string;
+}
+
+/** Item unificado do card "Mensagens" (texto/broadcast + foto), ordenado por data. */
+interface CardMsg {
+  id: string;
+  senderId: string;
+  type: string;
+  text: string | null;
+  capturedAt: string;
+  teamId?: string;
+  recipientId?: string;
+  mediaRef?: string;
+  mime?: string;
+  crypto?: { k: string; n: string } | null;
+  caption?: string | null;
 }
 
 /** Faz o parse da metadata E2EE da mídia (JSON no envelope). `null` se inválida. */
@@ -117,6 +149,8 @@ export default function LiveOperationPage() {
   // Chat (Fase 3a): aba Mapa|Chat + buffer de mensagens ao vivo (equipe/DM) do MQTT.
   const [mainTab, setMainTab] = useState<'map' | 'chat'>('map');
   const [incomingChat, setIncomingChat] = useState<IncomingMessage[]>([]);
+  // Clique no card "Mensagens" → abre a conversa no Chat (key + nonce p/ re-disparar).
+  const [chatFocus, setChatFocus] = useState<{ key: string; nonce: number }>({ key: '', nonce: 0 });
   // Fase 3b-1: layout abas OU split (Chat|Mapa lado a lado, divisor arrastável).
   const [layout, setLayout] = useState<'tabs' | 'split'>('tabs');
   const [chatWidth, setChatWidth] = useState(400);
@@ -152,8 +186,11 @@ export default function LiveOperationPage() {
     minRoutePoints: 5,
     connectRoutes: false,
     maxGapMinutes: 5,
+    sidebarMessageCount: 5,
   });
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Nome de exibição por id (agente/usuário) para o card de mensagens.
+  const [memberNames, setMemberNames] = useState<Record<string, string>>({});
 
   // Barra de período: aparece ao passar o cursor no topo do mapa; "pin" fixa.
   const [barHover, setBarHover] = useState(false);
@@ -283,6 +320,8 @@ export default function LiveOperationPage() {
                 mime: meta?.mime ?? 'image/jpeg',
                 crypto: meta?.k && meta?.n ? { k: meta.k, n: meta.n } : null,
                 capturedAt: m.capturedAt,
+                teamId: m.teamId,
+                recipientId: m.recipientId,
               };
             }),
         );
@@ -304,6 +343,8 @@ export default function LiveOperationPage() {
                     )
                   : (m.text ?? null),
               capturedAt: m.capturedAt,
+              teamId: m.teamId,
+              recipientId: m.recipientId,
             })),
         );
       })
@@ -404,6 +445,18 @@ export default function LiveOperationPage() {
     api
       .operationTeams(operationId)
       .then(setTeams)
+      .catch(() => {});
+    // Nomes de exibição (agente/usuário) para o card de mensagens.
+    api
+      .operationMembers(operationId)
+      .then((ms) => {
+        const map: Record<string, string> = {};
+        for (const m of ms) {
+          if (m.agentId) map[m.agentId] = m.name;
+          map[m.id] = m.name;
+        }
+        setMemberNames(map);
+      })
       .catch(() => {});
     // Fase 5c — diretório de chaves para autenticar remetentes ao decifrar.
     api
@@ -831,6 +884,62 @@ export default function LiveOperationPage() {
     });
   }
 
+  // Clique numa mensagem do card → abre a conversa correspondente no Chat.
+  function openInChat(m: { senderId: string; teamId?: string; recipientId?: string }) {
+    const me = getUser()?.id;
+    const key = m.teamId
+      ? `team:${m.teamId}`
+      : m.recipientId
+        ? `dm:${m.recipientId}`
+        : m.senderId && m.senderId !== me
+          ? `dm:${m.senderId}`
+          : null;
+    if (!key) return;
+    setMainTab('chat');
+    setChatFocus((prev) => ({ key, nonce: prev.nonce + 1 }));
+  }
+
+  // Nome de exibição do remetente (broadcast = Central; senão nome do membro / id).
+  const nameFor = (senderId: string, type?: string): string =>
+    type === 'broadcast' ? 'Central' : (memberNames[senderId] ?? senderId);
+
+  // Feed unificado do card: texto/broadcast + fotos, mais recentes primeiro.
+  const cardMsgs = useMemo<CardMsg[]>(() => {
+    const texts: CardMsg[] = chatMsgs.map((m) => ({ ...m }));
+    const media: CardMsg[] = mediaMsgs.map((m) => ({
+      id: m.id,
+      senderId: m.senderId,
+      type: 'media',
+      text: m.caption ?? null,
+      capturedAt: m.capturedAt,
+      teamId: m.teamId,
+      recipientId: m.recipientId,
+      mediaRef: m.mediaRef,
+      mime: m.mime,
+      crypto: m.crypto,
+      caption: m.caption,
+    }));
+    return [...texts, ...media].sort(
+      (a, b) => +new Date(b.capturedAt) - +new Date(a.capturedAt),
+    );
+  }, [chatMsgs, mediaMsgs]);
+
+  // Atalho no card p/ mudar a quantidade — persiste nas Configurações do sistema.
+  async function changeSidebarCount(delta: number) {
+    // Fallback 5: a API deployada pode ainda não devolver o campo (pré-deploy).
+    const cur = settings.sidebarMessageCount ?? 5;
+    const next = Math.min(50, Math.max(1, cur + delta));
+    if (next === cur) return;
+    setSettings((s) => ({ ...s, sidebarMessageCount: next }));
+    try {
+      const saved = await api.patchSettings({ sidebarMessageCount: next });
+      // Mantém o valor pedido se a API (pré-deploy) ainda não ecoar o campo.
+      setSettings({ ...saved, sidebarMessageCount: saved.sidebarMessageCount ?? next });
+    } catch {
+      /* mantém o valor otimista */
+    }
+  }
+
   async function handleRecompute() {
     setRecomputing(true);
     try {
@@ -942,16 +1051,54 @@ export default function LiveOperationPage() {
             )}
           </div>
 
-          {chatMsgs.length > 0 && (
+          {cardMsgs.length > 0 && (
             <div className="card" style={{ padding: 12, marginBottom: 16 }}>
-              <strong style={{ fontSize: 14 }}>Mensagens (E2EE) ({chatMsgs.length})</strong>
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  gap: 8,
+                }}
+              >
+                <strong style={{ fontSize: 14 }}>Mensagens (E2EE) ({cardMsgs.length})</strong>
+                {/* Atalho: quantidade exibida (persiste nas Configurações). */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <button
+                    type="button"
+                    onClick={() => void changeSidebarCount(-1)}
+                    title="Menos mensagens"
+                    style={stepBtnStyle}
+                  >
+                    −
+                  </button>
+                  <span
+                    className="muted"
+                    style={{ fontSize: 12, minWidth: 16, textAlign: 'center' }}
+                    title="Mensagens exibidas no card"
+                  >
+                    {settings.sidebarMessageCount ?? 5}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => void changeSidebarCount(1)}
+                    title="Mais mensagens"
+                    style={stepBtnStyle}
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
               <p className="muted" style={{ fontSize: 12, margin: '4px 0 8px' }}>
-                Decifradas neste dispositivo — o servidor só vê texto cifrado.
+                Clique para abrir no Chat. Decifradas neste dispositivo.
               </p>
-              <div style={{ maxHeight: 260, overflowY: 'auto', display: 'grid', gap: 6 }}>
-                {chatMsgs.map((m) => {
+              <div
+                className="thinscroll"
+                style={{ display: 'grid', gap: 6, maxHeight: 320, overflowY: 'auto' }}
+              >
+                {cardMsgs.slice(0, settings.sidebarMessageCount ?? 5).map((m) => {
                   const isBroadcast = m.type === 'broadcast';
-                  const who = isBroadcast ? 'CENTRAL' : m.senderId;
+                  const who = nameFor(m.senderId, m.type);
                   const when = new Date(m.capturedAt).toLocaleString('pt-BR', {
                     day: '2-digit',
                     month: '2-digit',
@@ -959,9 +1106,17 @@ export default function LiveOperationPage() {
                     minute: '2-digit',
                   });
                   return (
-                    <div
+                    <button
+                      type="button"
                       key={m.id}
+                      onClick={() => openInChat(m)}
+                      title="Abrir no Chat"
                       style={{
+                        display: 'block',
+                        width: '100%',
+                        textAlign: 'left',
+                        cursor: 'pointer',
+                        color: 'inherit',
                         background: 'var(--panel-2, #1c2733)',
                         border: `1px solid ${isBroadcast ? 'var(--accent, #c1121f)' : 'var(--border)'}`,
                         borderRadius: 8,
@@ -988,16 +1143,46 @@ export default function LiveOperationPage() {
                         </span>
                         <span>{when}</span>
                       </div>
-                      <div
-                        style={{ fontSize: 13, color: 'var(--text, #e6edf3)', lineHeight: 1.35 }}
-                      >
-                        {m.text ?? (
-                          <span className="muted" style={{ fontStyle: 'italic' }}>
-                            🔒 não foi possível decifrar
+                      {m.mediaRef ? (
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                          {m.crypto ? (
+                            <AuthImage
+                              path={api.mediaPath(operationId, m.mediaRef)}
+                              mediaKey={m.crypto}
+                              mime={m.mime}
+                              alt={m.caption ?? 'foto'}
+                              style={{
+                                width: 40,
+                                height: 40,
+                                borderRadius: 6,
+                                objectFit: 'cover',
+                                flexShrink: 0,
+                                background: 'var(--border)',
+                              }}
+                            />
+                          ) : (
+                            <span style={{ fontSize: 13 }}>🔒</span>
+                          )}
+                          <span style={{ fontSize: 13, color: 'var(--text, #e6edf3)' }}>
+                            {m.caption || (
+                              <span className="muted" style={{ fontStyle: 'italic' }}>
+                                📷 Foto
+                              </span>
+                            )}
                           </span>
-                        )}
-                      </div>
-                    </div>
+                        </div>
+                      ) : (
+                        <div
+                          style={{ fontSize: 13, color: 'var(--text, #e6edf3)', lineHeight: 1.35 }}
+                        >
+                          {m.text ?? (
+                            <span className="muted" style={{ fontStyle: 'italic' }}>
+                              🔒 não foi possível decifrar
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </button>
                   );
                 })}
               </div>
@@ -1871,7 +2056,12 @@ export default function LiveOperationPage() {
                     : { flex: 1, minWidth: 0, minHeight: 0 }
                 }
               >
-                <ChatPanel operationId={operationId} incoming={incomingChat} />
+                <ChatPanel
+                  operationId={operationId}
+                  incoming={incomingChat}
+                  focusKey={chatFocus.key || null}
+                  focusNonce={chatFocus.nonce}
+                />
               </div>
             )}
           </div>

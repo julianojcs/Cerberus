@@ -23,6 +23,9 @@ export function SettingsModal({
   const [minRoutePoints, setMinRoutePoints] = useState(String(initial.minRoutePoints));
   const [connectRoutes, setConnectRoutes] = useState(initial.connectRoutes);
   const [maxGapMinutes, setMaxGapMinutes] = useState(String(initial.maxGapMinutes));
+  const [sidebarMessageCount, setSidebarMessageCount] = useState(
+    String(initial.sidebarMessageCount ?? 5),
+  );
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
@@ -30,7 +33,9 @@ export function SettingsModal({
   const validMin = Number.isInteger(min) && min >= 1 && min <= 1000;
   const gap = Number(maxGapMinutes);
   const validGap = Number.isInteger(gap) && gap >= 1 && gap <= 1440;
-  const valid = validMin && validGap;
+  const cnt = Number(sidebarMessageCount);
+  const validCnt = Number.isInteger(cnt) && cnt >= 1 && cnt <= 50;
+  const valid = validMin && validGap && validCnt;
 
   async function save() {
     if (!valid) return;
@@ -41,6 +46,7 @@ export function SettingsModal({
         minRoutePoints: min,
         connectRoutes,
         maxGapMinutes: gap,
+        sidebarMessageCount: cnt,
       });
       onSaved(saved);
       onClose();
@@ -159,6 +165,32 @@ export function SettingsModal({
             onChange={(e) => setMaxGapMinutes(e.target.value)}
             disabled={!isAdmin}
             style={numStyle(validGap)}
+          />
+        </div>
+
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            gap: 12,
+            marginBottom: 14,
+          }}
+        >
+          <div>
+            <div style={{ fontSize: 14 }}>Mensagens no card lateral</div>
+            <div className="muted" style={{ fontSize: 12 }}>
+              Quantas mensagens o card “Mensagens” exibe (a área rola após 5). 1–50.
+            </div>
+          </div>
+          <input
+            type="number"
+            min={1}
+            max={50}
+            value={sidebarMessageCount}
+            onChange={(e) => setSidebarMessageCount(e.target.value)}
+            disabled={!isAdmin}
+            style={numStyle(validCnt)}
           />
         </div>
 

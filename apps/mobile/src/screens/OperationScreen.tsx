@@ -14,7 +14,7 @@ import {
 } from 'react-native';
 import type { Session } from '../services/auth';
 import { getSecretKey } from '../services/keys';
-import { sendTeamMessage, sendText } from '../services/messages';
+import { fetchMessageHistory, sendTeamMessage, sendText } from '../services/messages';
 import { fetchMyTeams, type MyTeam } from '../services/teams';
 import {
   connectMqtt,
@@ -150,12 +150,19 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
     if (!operationId) return;
     let cancelled = false;
     const unsubs: Array<() => void> = [];
+    const dkey = (m: BroadcastMessage) => `${m.capturedAt}:${m.senderId}:${m.text}`;
     void (async () => {
       const secretKey = await getSecretKey(session.userId);
       if (cancelled) return;
       setBroadcastIdentity({ myId: agentId, secretKey });
+      // Semeia o card com o HISTÓRICO (REST) antes de assinar o ao vivo.
+      const history = await fetchMessageHistory(session, operationId, agentId, secretKey);
+      if (cancelled) return;
+      setBroadcasts(history.slice(0, 30));
       const onMessage = (message: BroadcastMessage) =>
-        setBroadcasts((prev) => [message, ...prev].slice(0, 30));
+        setBroadcasts((prev) =>
+          prev.some((p) => dkey(p) === dkey(message)) ? prev : [message, ...prev].slice(0, 30),
+        );
       unsubs.push(subscribeBroadcast(operationId, onMessage));
       unsubs.push(subscribeInbox(operationId, agentId, onMessage));
       for (const team of myTeams) unsubs.push(subscribeTeam(operationId, team.id, onMessage));

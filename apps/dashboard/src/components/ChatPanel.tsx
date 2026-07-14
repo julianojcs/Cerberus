@@ -9,15 +9,13 @@ import {
   type KeyDirectoryEntry,
   type TeamInfo,
 } from '@cerberus/shared';
-import { api } from '@/lib/api';
+import { api, type OperationMember, type TacticalMessage } from '@/lib/api';
 import { getUser } from '@/lib/auth';
 import { getSecretKey, E2EE_UNLOCK_EVENT } from '@/lib/e2ee';
 import { resolveColor } from '@/lib/tailwind-colors';
 import { AuthImage } from '@/components/AuthImage';
+import { Avatar } from '@/components/Avatar';
 import type { IncomingMessage } from '@/lib/mqtt';
-
-/** Thread ativo: chat de equipe (grupo) ou DM com um agente. */
-type Thread = { kind: 'team'; team: TeamInfo } | { kind: 'dm'; agentId: string };
 
 /** Mensagem já decifrada para exibição. `text: null` = não decifrável por este operador. */
 interface ChatMsg {
@@ -26,14 +24,24 @@ interface ChatMsg {
   text: string | null;
   capturedAt: string;
   mine: boolean;
-  // Mídia (type === 'media'): ref do blob + chave/nonce da imagem (do envelope).
   mediaRef?: string;
   mime?: string;
   crypto?: { k: string; n: string } | null;
   caption?: string | null;
 }
 
-/** Faz o parse da metadata E2EE da mídia (JSON no envelope). `null` se inválida. */
+/** Conversa da lista (WhatsApp-like): equipe ou DM com um agente. */
+interface Conversation {
+  key: string; // 'team:<id>' | 'dm:<agentId>'
+  kind: 'team' | 'dm';
+  id: string;
+  name: string;
+  color?: string | null;
+  lastAt: number;
+  lastPreview: string;
+  unread: number;
+}
+
 function parseMediaMeta(
   raw: string | null,
 ): { caption?: string; mime?: string; k?: string; n?: string } | null {
@@ -58,23 +66,31 @@ const fmtTime = (iso: string): string =>
 const msgKey = (m: { capturedAt: string; ciphertext?: string; text?: string }): string =>
   `${m.capturedAt}::${(m.ciphertext ?? m.text ?? '').slice(0, 48)}`;
 
+const POLL_MS = 15_000;
+const READ_KEY = (op: string) => `cerberus_chat_read:${op}`;
+
 /**
- * Painel de chat E2EE de equipe/DM (Fase 3a). Árvore equipe→agente à esquerda,
- * thread selecionado à direita (histórico REST + ao vivo via MQTT). O envelope é
- * selado no cliente só para o subconjunto (membros da equipe / o agente do DM).
+ * Painel de chat E2EE estilo WhatsApp (Fase 5 · redesign). Lista PLANA de conversas
+ * (equipes + agentes) ordenada pela última mensagem, com busca, avatar e pill de
+ * não-lidas; à direita, o header (avatar+nome) + busca de mensagens + histórico +
+ * composer. O envelope é selado no cliente só para o subconjunto de destinatários.
  */
 export function ChatPanel({
   operationId,
   incoming,
+  focusKey,
+  focusNonce,
 }: {
   operationId: string;
   incoming: IncomingMessage[];
+  focusKey?: string | null;
+  focusNonce?: number;
 }) {
   const user = useMemo(() => getUser(), []);
   const myDirId = user?.agentId ?? user?.id ?? '';
   const isAdmin = user?.role === Role.ADMIN || user?.role === Role.SUPERADMIN;
-  // Fase 5e-1 — a chave passa a existir só após o desbloqueio; segue o evento de
-  // unlock (senão o painel decifraria com a chave ainda travada e mostraria erro).
+
+  // Fase 5e-1 — a chave existe só após o desbloqueio; segue o evento de unlock.
   const [secretKey, setSecretKey] = useState<string | null>(() =>
     user ? getSecretKey(user.id) : null,
   );
@@ -86,38 +102,105 @@ export function ChatPanel({
   }, [user]);
 
   const [teams, setTeams] = useState<TeamInfo[]>([]);
+  const [members, setMembers] = useState<OperationMember[]>([]);
   const [directory, setDirectory] = useState<KeyDirectoryEntry[]>([]);
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [thread, setThread] = useState<Thread | null>(null);
-  const [messages, setMessages] = useState<ChatMsg[]>([]);
+  const [rawMsgs, setRawMsgs] = useState<TacticalMessage[]>([]);
+  const [activeKey, setActiveKey] = useState<string | null>(null);
+  const [convSearch, setConvSearch] = useState('');
+  const [msgSearch, setMsgSearch] = useState('');
+  const [lastRead, setLastRead] = useState<Record<string, number>>({});
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  // Diretório de chaves + equipes da operação (para a árvore e o sela por subconjunto).
+  // Diretório + equipes + membros da operação.
   useEffect(() => {
     api.operationTeams(operationId).then(setTeams).catch(() => {});
+    api.operationMembers(operationId).then(setMembers).catch(() => {});
     api.operationKeys(operationId).then(setDirectory).catch(() => {});
   }, [operationId]);
 
+  // Preferência de leitura (localStorage) por operação.
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(READ_KEY(operationId));
+      if (raw) setLastRead(JSON.parse(raw) as Record<string, number>);
+    } catch {
+      /* ignora */
+    }
+  }, [operationId]);
+
+  // Histórico (todas as mensagens da operação) — busca inicial + poll leve.
+  useEffect(() => {
+    let alive = true;
+    const load = () =>
+      api
+        .messages(operationId)
+        .then((m) => alive && setRawMsgs(m))
+        .catch(() => {});
+    void load();
+    const t = setInterval(load, POLL_MS);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, [operationId]);
+
+  // Converte uma IncomingMessage (MQTT) para o formato de mensagem.
+  const incomingAsRaw = useMemo<TacticalMessage[]>(
+    () =>
+      incoming.map((m) => ({
+        id: msgKey(m),
+        operationId,
+        senderId: m.senderId,
+        type: m.type,
+        teamId: m.teamId,
+        recipientId: m.recipientId,
+        text: m.text,
+        ciphertext: m.ciphertext,
+        mediaRef: m.mediaRef,
+        capturedAt: m.capturedAt,
+      })),
+    [incoming, operationId],
+  );
+
+  // Todas as mensagens (REST + ao vivo), deduplicadas por chave.
+  const allMsgs = useMemo<TacticalMessage[]>(() => {
+    const map = new Map<string, TacticalMessage>();
+    for (const m of rawMsgs) map.set(msgKey(m), m);
+    for (const m of incomingAsRaw) if (!map.has(msgKey(m))) map.set(msgKey(m), m);
+    return [...map.values()];
+  }, [rawMsgs, incomingAsRaw]);
+
+  // Conjunto de agentIds conhecidos (para classificar mensagens diretas do agente).
+  const agentIds = useMemo(() => {
+    const s = new Set<string>();
+    for (const m of members) if (m.agentId) s.add(m.agentId);
+    for (const t of teams) for (const a of t.agentIds) s.add(a);
+    return s;
+  }, [members, teams]);
+
+  // Conversa de uma mensagem: equipe (teamId) ou DM (recipientId / senderId do agente).
+  const convKeyForMsg = useCallback(
+    (m: TacticalMessage): string | null => {
+      if (m.teamId) return `team:${m.teamId}`;
+      if (m.recipientId) return `dm:${m.recipientId}`;
+      if (agentIds.has(m.senderId)) return `dm:${m.senderId}`;
+      return null; // broadcast op-wide / não classificável
+    },
+    [agentIds],
+  );
+
   const toChatMsg = useCallback(
-    (m: {
-      senderId: string;
-      type?: string;
-      ciphertext?: string;
-      text?: string;
-      mediaRef?: string;
-      capturedAt: string;
-    }): ChatMsg => {
+    (m: TacticalMessage): ChatMsg => {
       const base = {
         key: msgKey(m),
         senderId: m.senderId,
         capturedAt: m.capturedAt,
         mine: m.senderId === myDirId,
       };
-      // Fase 5c — chave do remetente segundo o diretório (autentica o `senderId`).
       const senderKey = directory.find((e) => e.id === m.senderId)?.publicKey;
       if (m.type === 'media' && m.mediaRef) {
         const meta =
@@ -144,90 +227,139 @@ export function ChatPanel({
     [secretKey, myDirId, directory],
   );
 
-  const appendMsgs = useCallback((incomingMsgs: ChatMsg[]) => {
-    setMessages((prev) => {
-      const seen = new Set(prev.map((m) => m.key));
-      const add = incomingMsgs.filter((m) => !seen.has(m.key));
-      if (add.length === 0) return prev;
-      return [...prev, ...add].sort(
-        (a, b) => +new Date(a.capturedAt) - +new Date(b.capturedAt),
-      );
-    });
-  }, []);
+  // Decifra todas as mensagens uma vez (preview da lista + thread).
+  const decrypted = useMemo(() => {
+    const map = new Map<string, ChatMsg>();
+    for (const m of allMsgs) map.set(msgKey(m), toChatMsg(m));
+    return map;
+  }, [allMsgs, toChatMsg]);
 
-  // Histórico do thread selecionado (REST) → decifra e ordena (mais antigo em cima).
-  useEffect(() => {
-    if (!thread) {
-      setMessages([]);
-      return;
-    }
-    let cancelled = false;
-    const load =
-      thread.kind === 'team'
-        ? api.teamMessages(operationId, thread.team.id)
-        : api.agentMessages(operationId, thread.agentId);
-    load
-      .then((msgs) => {
-        if (cancelled) return;
-        setMessages(
-          msgs
-            .map(toChatMsg)
-            .sort((a, b) => +new Date(a.capturedAt) - +new Date(b.capturedAt)),
-        );
-      })
-      .catch((e) => {
-        if (!cancelled) setError((e as Error).message);
+  const previewOf = (dec?: ChatMsg): string =>
+    dec ? (dec.mediaRef ? '📷 Foto' : (dec.text ?? '🔒 cifrada')) : '';
+
+  // Lista de conversas (equipes + agentes), com última msg / preview / não-lidas.
+  const conversations = useMemo<Conversation[]>(() => {
+    const map = new Map<string, Conversation>();
+    for (const t of teams)
+      map.set(`team:${t.id}`, {
+        key: `team:${t.id}`,
+        kind: 'team',
+        id: t.id,
+        name: t.name,
+        color: resolveColor(t.color),
+        lastAt: 0,
+        lastPreview: '',
+        unread: 0,
       });
-    return () => {
-      cancelled = true;
-    };
-  }, [thread, operationId, toChatMsg]);
+    for (const mb of members)
+      if (mb.agentId)
+        map.set(`dm:${mb.agentId}`, {
+          key: `dm:${mb.agentId}`,
+          kind: 'dm',
+          id: mb.agentId,
+          name: mb.name || mb.agentId,
+          color: null,
+          lastAt: 0,
+          lastPreview: '',
+          unread: 0,
+        });
+    for (const m of allMsgs) {
+      const key = convKeyForMsg(m);
+      if (!key) continue;
+      let c = map.get(key);
+      if (!c) {
+        if (!key.startsWith('dm:')) continue;
+        const id = key.slice(3);
+        c = { key, kind: 'dm', id, name: id, color: null, lastAt: 0, lastPreview: '', unread: 0 };
+        map.set(key, c);
+      }
+      const at = +new Date(m.capturedAt);
+      if (at >= c.lastAt) {
+        c.lastAt = at;
+        c.lastPreview = previewOf(decrypted.get(msgKey(m)));
+      }
+      if (at > (lastRead[key] ?? 0) && m.senderId !== myDirId) c.unread++;
+    }
+    return [...map.values()].sort((a, b) => b.lastAt - a.lastAt || a.name.localeCompare(b.name));
+  }, [teams, members, allMsgs, convKeyForMsg, decrypted, lastRead, myDirId]);
 
-  // Mensagens ao vivo (MQTT) do thread atual — anexa e deduplica.
+  const filteredConvs = useMemo(() => {
+    const q = convSearch.trim().toLowerCase();
+    return q ? conversations.filter((c) => c.name.toLowerCase().includes(q)) : conversations;
+  }, [conversations, convSearch]);
+
+  const active = useMemo(
+    () => conversations.find((c) => c.key === activeKey) ?? null,
+    [conversations, activeKey],
+  );
+
+  // Mensagens do thread ativo (decifradas, ordem crescente) + filtro de busca.
+  const threadMsgs = useMemo<ChatMsg[]>(() => {
+    if (!activeKey) return [];
+    const list = allMsgs
+      .filter((m) => convKeyForMsg(m) === activeKey)
+      .map((m) => decrypted.get(msgKey(m)))
+      .filter((m): m is ChatMsg => !!m)
+      .sort((a, b) => +new Date(a.capturedAt) - +new Date(b.capturedAt));
+    const q = msgSearch.trim().toLowerCase();
+    return q
+      ? list.filter((m) => (m.text ?? m.caption ?? '').toLowerCase().includes(q))
+      : list;
+  }, [activeKey, allMsgs, convKeyForMsg, decrypted, msgSearch]);
+
+  // Abertura externa (clique no card "Mensagens" da barra lateral).
   useEffect(() => {
-    if (!thread) return;
-    const relevant = incoming.filter((m) =>
-      thread.kind === 'team'
-        ? m.scope === 'equipe' && m.teamId === thread.team.id
-        : m.scope === 'dm' && m.recipientId === thread.agentId,
-    );
-    if (relevant.length) appendMsgs(relevant.map(toChatMsg));
-  }, [incoming, thread, appendMsgs, toChatMsg]);
+    if (focusKey) setActiveKey(focusKey);
+  }, [focusNonce, focusKey]);
 
-  // Rola para o fim quando chegam mensagens.
+  // Reset a busca só ao TROCAR de conversa (não a cada tecla — senão o filtro muda
+  // o tamanho do thread e o efeito de "marcar lida" limpava o input a cada caractere).
+  useEffect(() => {
+    setMsgSearch('');
+  }, [activeKey]);
+
+  // Marca a conversa ativa como lida — ao abrir e quando chega mensagem nova.
+  useEffect(() => {
+    if (!activeKey) return;
+    setLastRead((prev) => {
+      const next = { ...prev, [activeKey]: Date.now() };
+      try {
+        localStorage.setItem(READ_KEY(operationId), JSON.stringify(next));
+      } catch {
+        /* ignora */
+      }
+      return next;
+    });
+  }, [activeKey, operationId, active?.lastAt]);
+
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
-  }, [messages]);
+  }, [threadMsgs]);
 
-  function recipientsFor(t: Thread): { id: string; publicKey: string }[] {
+  function recipientsForActive(): { id: string; publicKey: string }[] {
+    if (!active) return [];
     const ids =
-      t.kind === 'team'
-        ? new Set([...t.team.agentIds, myDirId])
-        : new Set([t.agentId, myDirId]);
+      active.kind === 'team'
+        ? new Set([...(teams.find((t) => t.id === active.id)?.agentIds ?? []), myDirId])
+        : new Set([active.id, myDirId]);
     return directory.filter((e) => ids.has(e.id)).map((e) => ({ id: e.id, publicKey: e.publicKey }));
   }
 
   async function handleSend() {
     const text = draft.trim();
-    if (!text || !thread || sending) return;
-    if (!user || !secretKey) {
-      setError('Chave E2EE ausente — refaça o login para provisioná-la.');
-      return;
-    }
+    if (!text || !active || sending) return;
+    if (!user || !secretKey) return setError('Chave E2EE bloqueada — desbloqueie para enviar.');
     setSending(true);
     setError(null);
     try {
-      const recipients = recipientsFor(thread);
-      if (recipients.length === 0) {
-        setError('Nenhum destinatário com chave E2EE registrada.');
-        return;
-      }
+      const recipients = recipientsForActive();
+      if (recipients.length === 0) return setError('Nenhum destinatário com chave E2EE registrada.');
       const ciphertext = sealMessage(text, secretKey, recipients);
       const resp =
-        thread.kind === 'team'
-          ? await api.sendTeamMessage(operationId, thread.team.id, ciphertext)
-          : await api.sendAgentMessage(operationId, thread.agentId, ciphertext);
-      appendMsgs([toChatMsg(resp)]); // eco otimista (o MQTT depois deduplica)
+        active.kind === 'team'
+          ? await api.sendTeamMessage(operationId, active.id, ciphertext)
+          : await api.sendAgentMessage(operationId, active.id, ciphertext);
+      setRawMsgs((prev) => [resp, ...prev]);
       setDraft('');
     } catch (e) {
       setError((e as Error).message);
@@ -236,22 +368,14 @@ export function ChatPanel({
     }
   }
 
-  // Envia uma FOTO E2EE ao thread: cifra a imagem (secretbox), embrulha
-  // legenda/mime/chave num envelope selado só para o subconjunto, e faz upload.
   async function handlePickMedia(file: File) {
-    if (!thread || sending) return;
-    if (!user || !secretKey) {
-      setError('Chave E2EE ausente — refaça o login para provisioná-la.');
-      return;
-    }
+    if (!active || sending) return;
+    if (!user || !secretKey) return setError('Chave E2EE bloqueada — desbloqueie para enviar.');
     setSending(true);
     setError(null);
     try {
-      const recipients = recipientsFor(thread);
-      if (recipients.length === 0) {
-        setError('Nenhum destinatário com chave E2EE registrada.');
-        return;
-      }
+      const recipients = recipientsForActive();
+      if (recipients.length === 0) return setError('Nenhum destinatário com chave E2EE registrada.');
       const bytes = new Uint8Array(await file.arrayBuffer());
       const { cipher, key, nonce } = encryptBytes(bytes);
       const envelope = sealMessage(
@@ -259,19 +383,18 @@ export function ChatPanel({
         secretKey,
         recipients,
       );
-      // Fatia num ArrayBuffer concreto (Blob não aceita Uint8Array<ArrayBufferLike>).
       const blobBuf = cipher.buffer.slice(
         cipher.byteOffset,
         cipher.byteOffset + cipher.byteLength,
       ) as ArrayBuffer;
       const form = new FormData();
-      form.append('ciphertext', envelope); // ANTES do arquivo (para file.fields)
+      form.append('ciphertext', envelope);
       form.append('file', new Blob([blobBuf], { type: 'application/octet-stream' }), 'media.bin');
       const resp =
-        thread.kind === 'team'
-          ? await api.uploadTeamMedia(operationId, thread.team.id, form)
-          : await api.uploadAgentMedia(operationId, thread.agentId, form);
-      appendMsgs([toChatMsg(resp)]);
+        active.kind === 'team'
+          ? await api.uploadTeamMedia(operationId, active.id, form)
+          : await api.uploadAgentMedia(operationId, active.id, form);
+      setRawMsgs((prev) => [resp, ...prev]);
       setDraft('');
     } catch (e) {
       setError((e as Error).message);
@@ -280,103 +403,89 @@ export function ChatPanel({
     }
   }
 
-  const threadTitle = thread
-    ? thread.kind === 'team'
-      ? `Equipe ${thread.team.name}`
-      : `DM · ${thread.agentId}`
-    : null;
-  const canSend = !!thread && isAdmin;
+  const canSend = !!active && isAdmin;
 
   return (
     <div style={{ display: 'flex', height: '100%', minHeight: 0 }}>
-      {/* Árvore: equipes → agentes */}
-      <div className="thinscroll" style={treeCol}>
-        <div className="muted" style={{ fontSize: 12, padding: '4px 8px' }}>
-          Equipes ({teams.length})
+      {/* Coluna esquerda: busca + lista de conversas */}
+      <div style={listCol}>
+        <div style={{ padding: 8, borderBottom: '1px solid var(--border)' }}>
+          <input
+            value={convSearch}
+            onChange={(e) => setConvSearch(e.target.value)}
+            placeholder="Buscar equipe ou usuário…"
+            style={searchInput}
+          />
         </div>
-        {teams.length === 0 && (
-          <div className="muted" style={{ fontSize: 12, padding: 8 }}>
-            Nenhuma equipe nesta operação.
-          </div>
-        )}
-        {teams.map((t) => {
-          const open = expanded.has(t.id);
-          const teamSel = thread?.kind === 'team' && thread.team.id === t.id;
-          return (
-            <div key={t.id}>
-              <div style={{ display: 'flex', alignItems: 'center' }}>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setExpanded((prev) => {
-                      const n = new Set(prev);
-                      if (n.has(t.id)) n.delete(t.id);
-                      else n.add(t.id);
-                      return n;
-                    })
-                  }
-                  style={{ ...caretBtn }}
-                  title={open ? 'Recolher' : 'Expandir'}
-                >
-                  {open ? '▾' : '▸'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setThread({ kind: 'team', team: t })}
-                  style={{ ...nodeBtn, ...(teamSel ? nodeSel : null) }}
-                >
-                  <span
-                    style={{
-                      width: 8,
-                      height: 8,
-                      borderRadius: '50%',
-                      background: resolveColor(t.color),
-                      flexShrink: 0,
-                    }}
-                  />
-                  <span style={{ flex: 1, minWidth: 0 }}>{t.name}</span>
-                  <span className="muted" style={{ fontSize: 11 }}>
-                    {t.agentIds.length}
-                  </span>
-                </button>
-              </div>
-              {open &&
-                t.agentIds.map((a) => {
-                  const dmSel = thread?.kind === 'dm' && thread.agentId === a;
-                  return (
-                    <button
-                      key={a}
-                      type="button"
-                      onClick={() => setThread({ kind: 'dm', agentId: a })}
-                      style={{ ...nodeBtn, paddingLeft: 34, ...(dmSel ? nodeSel : null) }}
-                      title={`DM com ${a}`}
-                    >
-                      <span className="muted">💬</span>
-                      <span style={{ flex: 1, minWidth: 0 }}>{a}</span>
-                    </button>
-                  );
-                })}
+        <div className="thinscroll" style={{ flex: 1, overflowY: 'auto' }}>
+          {filteredConvs.length === 0 && (
+            <div className="muted" style={{ fontSize: 12, padding: 12 }}>
+              Nenhuma conversa.
             </div>
-          );
-        })}
+          )}
+          {filteredConvs.map((c) => {
+            const sel = c.key === activeKey;
+            return (
+              <button
+                key={c.key}
+                type="button"
+                onClick={() => setActiveKey(c.key)}
+                style={{ ...convRow, ...(sel ? convSel : null) }}
+              >
+                <Avatar name={c.name} color={c.color} size={38} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={rowLine}>
+                    <span style={convName}>
+                      {c.kind === 'team' ? '👥 ' : ''}
+                      {c.name}
+                    </span>
+                    {c.lastAt > 0 && (
+                      <span className="muted" style={{ fontSize: 10, flexShrink: 0 }}>
+                        {fmtTime(new Date(c.lastAt).toISOString())}
+                      </span>
+                    )}
+                  </div>
+                  <div style={rowLine}>
+                    <span style={convPreview}>{c.lastPreview || '—'}</span>
+                    {c.unread > 0 && <span style={unreadPill}>{c.unread}</span>}
+                  </div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
       </div>
 
-      {/* Thread */}
+      {/* Coluna direita: conversa ativa */}
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-        {!thread ? (
-          <div style={emptyThread}>Selecione uma equipe ou agente para conversar.</div>
+        {!active ? (
+          <div style={emptyThread}>Selecione uma equipe ou usuário para conversar.</div>
         ) : (
           <>
             <div style={threadHeader}>
-              <strong style={{ fontSize: 14 }}>{threadTitle}</strong>
+              <Avatar name={active.name} color={active.color} size={38} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <strong style={{ fontSize: 14, display: 'block' }}>{active.name}</strong>
+                <span className="muted" style={{ fontSize: 11 }}>
+                  {active.kind === 'team'
+                    ? `Equipe · ${teams.find((t) => t.id === active.id)?.agentIds.length ?? 0} membros`
+                    : 'Agente de campo'}
+                </span>
+              </div>
+              <input
+                value={msgSearch}
+                onChange={(e) => setMsgSearch(e.target.value)}
+                placeholder="Buscar mensagens…"
+                style={{ ...searchInput, maxWidth: 200 }}
+              />
             </div>
-            <div ref={listRef} className="thinscroll" style={msgList}>
-              {messages.length === 0 ? (
+            <div ref={listRef} className="thinscroll" style={msgListStyle}>
+              {threadMsgs.length === 0 ? (
                 <div className="muted" style={{ fontSize: 13, textAlign: 'center', marginTop: 20 }}>
-                  Sem mensagens ainda.
+                  {msgSearch ? 'Nenhuma mensagem encontrada.' : 'Sem mensagens ainda.'}
                 </div>
               ) : (
-                messages.map((m) => (
+                threadMsgs.map((m) => (
                   <div
                     key={m.key}
                     style={{
@@ -460,11 +569,7 @@ export function ChatPanel({
                   onClick={() => fileRef.current?.click()}
                   disabled={sending}
                   title="Enviar foto (E2EE)"
-                  style={{
-                    ...attachBtn,
-                    cursor: sending ? 'not-allowed' : 'pointer',
-                    opacity: sending ? 0.5 : 1,
-                  }}
+                  style={{ ...attachBtn, cursor: sending ? 'not-allowed' : 'pointer', opacity: sending ? 0.5 : 1 }}
                 >
                   📷
                 </button>
@@ -474,11 +579,7 @@ export function ChatPanel({
                   onKeyDown={(e) => {
                     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') void handleSend();
                   }}
-                  placeholder={
-                    thread.kind === 'team'
-                      ? `Mensagem à equipe ${thread.team.name}…`
-                      : `Mensagem para ${thread.agentId}…`
-                  }
+                  placeholder={`Mensagem para ${active.name}…`}
                   rows={2}
                   style={composerInput}
                 />
@@ -507,38 +608,74 @@ export function ChatPanel({
   );
 }
 
-const treeCol: CSSProperties = {
-  width: 220,
+const listCol: CSSProperties = {
+  width: 280,
   flexShrink: 0,
   borderRight: '1px solid var(--border)',
-  overflowY: 'auto',
-  padding: 8,
+  display: 'flex',
+  flexDirection: 'column',
+  minHeight: 0,
 };
-const caretBtn: CSSProperties = {
-  width: 22,
-  background: 'transparent',
-  border: 'none',
-  color: 'var(--muted)',
-  cursor: 'pointer',
-  fontSize: 12,
-  padding: 0,
+const searchInput: CSSProperties = {
+  width: '100%',
+  padding: '6px 10px',
+  borderRadius: 8,
+  border: '1px solid var(--border)',
+  background: 'var(--panel-2)',
+  color: 'var(--text)',
+  colorScheme: 'dark',
+  fontSize: 13,
+  boxSizing: 'border-box',
 };
-const nodeBtn: CSSProperties = {
-  flex: 1,
+const convRow: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
-  gap: 8,
+  gap: 10,
+  width: '100%',
   background: 'transparent',
   border: 'none',
+  borderBottom: '1px solid var(--border)',
   color: 'var(--text)',
   cursor: 'pointer',
   textAlign: 'left',
-  padding: '6px 8px',
-  borderRadius: 6,
+  padding: '8px 10px',
+};
+const convSel: CSSProperties = { background: 'var(--panel-2)' };
+const rowLine: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 8,
+};
+const convName: CSSProperties = {
   fontSize: 13,
+  fontWeight: 600,
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+};
+const convPreview: CSSProperties = {
+  fontSize: 12,
+  color: 'var(--muted)',
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  flex: 1,
   minWidth: 0,
 };
-const nodeSel: CSSProperties = { background: 'var(--panel-2)' };
+const unreadPill: CSSProperties = {
+  flexShrink: 0,
+  minWidth: 18,
+  height: 18,
+  padding: '0 5px',
+  borderRadius: 9,
+  background: 'var(--accent)',
+  color: '#fff',
+  fontSize: 11,
+  fontWeight: 700,
+  display: 'grid',
+  placeItems: 'center',
+};
 const emptyThread: CSSProperties = {
   flex: 1,
   display: 'grid',
@@ -549,11 +686,14 @@ const emptyThread: CSSProperties = {
   textAlign: 'center',
 };
 const threadHeader: CSSProperties = {
-  padding: '10px 12px',
+  display: 'flex',
+  alignItems: 'center',
+  gap: 10,
+  padding: '8px 12px',
   borderBottom: '1px solid var(--border)',
   flexShrink: 0,
 };
-const msgList: CSSProperties = {
+const msgListStyle: CSSProperties = {
   flex: 1,
   minHeight: 0,
   overflowY: 'auto',
