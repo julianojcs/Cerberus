@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { OperationStatus, Role, type Operation } from '@cerberus/shared';
+import { OperationStatus, Role, type Operation, type TeamInfo } from '@cerberus/shared';
 import { api, type LatestPosition, type Settings } from '@/lib/api';
 import { getToken, getUser } from '@/lib/auth';
 import { assignAgentColors, buildRoutes, type Route } from '@/lib/routes';
@@ -18,6 +18,8 @@ const HISTORY_LIMIT = 5000;
 const HOUR_MS = 60 * 60 * 1000;
 const POLL_MS = 12_000;
 const COLORS_KEY = 'cerberus_admin_agent_colors'; // ≠ chave por-operação da live page
+const TEAM_COLORS_KEY = 'cerberus_admin_team_colors';
+const COLOR_MODE_KEY = 'cerberus_admin_color_mode';
 const PIN_KEY = 'cerberus_admin_period_pinned';
 
 /** Data/hora local (America/Sao_Paulo) — exibição. O dado permanece UTC. */
@@ -36,7 +38,8 @@ function fmtDateTime(ms: number): string {
  * mapa, com seletor de operações + agentes, cor por agente, barra temporal e
  * plotagem de rotas — reusa o mesmo maquinário da live page por-operação
  * (`LiveMap`/`PeriodRange`/`buildRoutes`/`assignAgentColors`), agregando por operação.
- * Equipes (Fase 2) entram no ponto de inserção marcado em `visibleAgentIds`.
+ * Fase 2a: dimensão de EQUIPES — filtro por equipe (`teamVisible`) + cor por equipe
+ * (`colorMode`/`teamColors`).
  */
 export default function AdminMapPage() {
   const router = useRouter();
@@ -50,6 +53,12 @@ export default function AdminMapPage() {
     connectRoutes: false,
     maxGapMinutes: 5,
   });
+
+  // Equipes (Fase 2a): filtro + cor por equipe.
+  const [teams, setTeams] = useState<TeamInfo[]>([]);
+  const [selectedTeamIds, setSelectedTeamIds] = useState<Set<string>>(new Set());
+  const [teamColorOverrides, setTeamColorOverrides] = useState<Record<string, string>>({});
+  const [colorMode, setColorMode] = useState<'agent' | 'team'>('agent');
 
   const [agentColorOverrides, setAgentColorOverrides] = useState<Record<string, string>>({});
   const [selectedRouteIds, setSelectedRouteIds] = useState<Set<string>>(new Set());
@@ -73,9 +82,12 @@ export default function AdminMapPage() {
   // Preferências locais (só no cliente — evita mismatch de SSR).
   useEffect(() => {
     setBarPinned(localStorage.getItem(PIN_KEY) === '1');
+    if (localStorage.getItem(COLOR_MODE_KEY) === 'team') setColorMode('team');
     try {
       const raw = localStorage.getItem(COLORS_KEY);
       if (raw) setAgentColorOverrides(JSON.parse(raw) as Record<string, string>);
+      const rawT = localStorage.getItem(TEAM_COLORS_KEY);
+      if (rawT) setTeamColorOverrides(JSON.parse(rawT) as Record<string, string>);
     } catch {
       /* preferência corrompida — ignora */
     }
@@ -104,6 +116,7 @@ export default function AdminMapPage() {
     }
     let timer: ReturnType<typeof setInterval> | null = null;
     api.settings().then(setSettings).catch(() => {});
+    api.teams().then(setTeams).catch(() => {});
     api
       .operations()
       .then((list) => {
@@ -143,15 +156,59 @@ export default function AdminMapPage() {
     return out;
   }, [ops]);
 
-  // Posições cruas (merge do histórico das operações selecionadas).
+  // --- Equipes ---
+  // agentId → equipes a que pertence (base do filtro) e a "primária" (base da cor).
+  const agentTeamSet = useMemo(() => {
+    const m = new Map<string, Set<string>>();
+    for (const t of teams)
+      for (const a of t.agentIds) {
+        let set = m.get(a);
+        if (!set) {
+          set = new Set();
+          m.set(a, set);
+        }
+        set.add(t.id);
+      }
+    return m;
+  }, [teams]);
+  const teamOfAgent = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const [agentId, set] of agentTeamSet) m.set(agentId, [...set][0]);
+    return m;
+  }, [agentTeamSet]);
+  // Cor por equipe: cor salva da equipe (token) + override do SA, resolvida para hex.
+  const teamColors = useMemo(() => {
+    const out: Record<string, string> = {};
+    for (const t of teams) out[t.id] = resolveColor(teamColorOverrides[t.id] ?? t.color);
+    return out;
+  }, [teams, teamColorOverrides]);
+  // Predicado do filtro: sem equipe selecionada = sem filtro; senão, agente precisa
+  // pertencer a alguma equipe selecionada (agente sem equipe some com filtro ativo).
+  const teamVisible = useCallback(
+    (agentId: string) => {
+      if (selectedTeamIds.size === 0) return true;
+      const set = agentTeamSet.get(agentId);
+      if (!set) return false;
+      for (const id of set) if (selectedTeamIds.has(id)) return true;
+      return false;
+    },
+    [selectedTeamIds, agentTeamSet],
+  );
+  // Equipes das operações selecionadas (mostradas no card de filtro).
+  const relevantTeams = useMemo(
+    () => teams.filter((t) => selectedOpIds.has(t.operationId)),
+    [teams, selectedOpIds],
+  );
+
+  // Posições cruas (merge do histórico das operações selecionadas, filtrado por equipe).
   const rawPositions = useMemo(() => {
     const out: LatestPosition[] = [];
     for (const opId of selectedOpIds) {
       const h = historyByOp[opId];
-      if (h) out.push(...h);
+      if (h) for (const p of h) if (teamVisible(p.agentId)) out.push(p);
     }
     return out;
-  }, [selectedOpIds, historyByOp]);
+  }, [selectedOpIds, historyByOp, teamVisible]);
 
   // Marcadores: última posição de cada agente nas operações selecionadas (dedup por
   // agente, a mais recente vence). Guarda também a operação de origem (popup/chips).
@@ -162,6 +219,7 @@ export default function AdminMapPage() {
       if (!list) continue;
       for (const p of list) {
         if (p.lat == null || p.lng == null) continue;
+        if (!teamVisible(p.agentId)) continue;
         const t = +new Date(p.capturedAt);
         const prev = byAgent.get(p.agentId);
         if (prev && prev.t >= t) continue;
@@ -169,7 +227,7 @@ export default function AdminMapPage() {
       }
     }
     return byAgent;
-  }, [selectedOpIds, latestByOp]);
+  }, [selectedOpIds, latestByOp, teamVisible]);
 
   // Rotas por agente a partir do merge (segmentadas no gap configurável).
   const routes = useMemo(
@@ -177,14 +235,21 @@ export default function AdminMapPage() {
     [rawPositions, settings.maxGapMinutes],
   );
 
-  // Cor por agente: token auto-atribuído + override do SA, resolvido para hex.
+  // Cor por agente: token auto-atribuído + override do SA, resolvido para hex. No modo
+  // "equipe", o agente assume a cor da sua equipe (fallback: a própria cor do agente).
   const agentColors = useMemo(() => {
     const ids = new Set<string>([...Object.keys(routes), ...markerAgents.keys()]);
     const tokens = assignAgentColors([...ids]);
     const out: Record<string, string> = {};
-    for (const id of ids) out[id] = resolveColor(agentColorOverrides[id] ?? tokens[id]);
+    for (const id of ids) {
+      const own = resolveColor(agentColorOverrides[id] ?? tokens[id]);
+      if (colorMode === 'team') {
+        const tid = teamOfAgent.get(id);
+        out[id] = (tid && teamColors[tid]) || own;
+      } else out[id] = own;
+    }
     return out;
-  }, [routes, markerAgents, agentColorOverrides]);
+  }, [routes, markerAgents, agentColorOverrides, colorMode, teamOfAgent, teamColors]);
 
   // Agentes → LiveMap (marcadores na cor do agente + operação no popup).
   const agents = useMemo<Record<string, AgentPoint>>(() => {
@@ -247,7 +312,8 @@ export default function AdminMapPage() {
   );
 
   // Agrupamento: agentId → { operações em que aparece, operação mais recente }.
-  // PONTO DE INSERÇÃO (Fase 2): filtrar `visibleAgentIds` por equipe entra aqui.
+  // O filtro por equipe já foi aplicado em `rawPositions`/`markerAgents` (via `teamVisible`),
+  // então este agrupamento herda os agentes visíveis.
   const agentOps = useMemo(() => {
     const map = new Map<string, { opIds: Set<string>; primaryOp: string; primaryT: number }>();
     for (const opId of selectedOpIds) {
@@ -358,6 +424,29 @@ export default function AdminMapPage() {
       }
       return n;
     });
+  }
+  function toggleTeam(teamId: string) {
+    setSelectedTeamIds((prev) => {
+      const n = new Set(prev);
+      if (n.has(teamId)) n.delete(teamId);
+      else n.add(teamId);
+      return n;
+    });
+  }
+  function setTeamColor(teamId: string, token: string) {
+    setTeamColorOverrides((prev) => {
+      const n = { ...prev, [teamId]: token };
+      try {
+        localStorage.setItem(TEAM_COLORS_KEY, JSON.stringify(n));
+      } catch {
+        /* storage cheio/indisponível */
+      }
+      return n;
+    });
+  }
+  function pickColorMode(mode: 'agent' | 'team') {
+    setColorMode(mode);
+    localStorage.setItem(COLOR_MODE_KEY, mode);
   }
   function fit(points: [number, number][]) {
     if (points.length === 0) return;
@@ -479,12 +568,80 @@ export default function AdminMapPage() {
             )}
           </div>
 
-          {/* Equipes — em breve (Fase 2). Placeholder sem fetch/estado. */}
-          <div className="card" style={{ padding: 12, marginBottom: 16, opacity: 0.7 }}>
-            <strong style={{ fontSize: 14 }}>Equipes</strong>
-            <p className="muted" style={{ fontSize: 12, margin: '4px 0 0' }}>
-              Em breve — filtro e cor por equipe chegam na Fase 2.
-            </p>
+          {/* Equipes: filtro + cor por equipe (Fase 2a). */}
+          <div className="card" style={{ padding: 12, marginBottom: 16 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+              <strong style={{ fontSize: 14 }}>Equipes ({relevantTeams.length})</strong>
+              {relevantTeams.length > 0 && (
+                <button
+                  type="button"
+                  className="badge"
+                  style={ghostBtn}
+                  onClick={() =>
+                    setSelectedTeamIds(
+                      selectedTeamIds.size === relevantTeams.length
+                        ? new Set()
+                        : new Set(relevantTeams.map((t) => t.id)),
+                    )
+                  }
+                >
+                  {selectedTeamIds.size === relevantTeams.length ? 'Limpar' : 'Todas'}
+                </button>
+              )}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8, fontSize: 12 }}>
+              <span className="muted">Colorir por:</span>
+              {(['agent', 'team'] as const).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => pickColorMode(m)}
+                  style={{
+                    ...ghostBtn,
+                    borderRadius: 6,
+                    padding: '3px 8px',
+                    background: colorMode === m ? 'var(--panel-2)' : 'transparent',
+                    borderColor: colorMode === m ? 'var(--accent)' : 'var(--border)',
+                  }}
+                >
+                  {m === 'agent' ? 'Agente' : 'Equipe'}
+                </button>
+              ))}
+            </div>
+            {relevantTeams.length === 0 ? (
+              <p className="muted" style={{ fontSize: 12, margin: '8px 0 0' }}>
+                Nenhuma equipe nas operações selecionadas. Crie em <strong>Equipes</strong>.
+              </p>
+            ) : (
+              <div style={{ display: 'grid', gap: 6, marginTop: 8 }}>
+                {relevantTeams.map((t) => (
+                  <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <input
+                      type="checkbox"
+                      checked={selectedTeamIds.has(t.id)}
+                      onChange={() => toggleTeam(t.id)}
+                      style={{ accentColor: teamColors[t.id], flexShrink: 0, cursor: 'pointer' }}
+                      title={selectedTeamIds.has(t.id) ? 'Remover do filtro' : 'Filtrar por esta equipe'}
+                    />
+                    <span style={{ flex: 1, minWidth: 0, fontSize: 13 }}>
+                      {t.name}{' '}
+                      <span className="muted" style={{ fontSize: 11 }}>
+                        · {t.agentIds.length}
+                      </span>
+                    </span>
+                    <ColorPalettePicker
+                      value={teamColorOverrides[t.id] ?? t.color}
+                      onChange={(token) => setTeamColor(t.id, token)}
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
+            {selectedTeamIds.size > 0 && (
+              <p className="muted" style={{ fontSize: 11, margin: '8px 0 0' }}>
+                Filtro ativo: só agentes das equipes marcadas.
+              </p>
+            )}
           </div>
 
           {/* Agentes agrupados por operação */}
