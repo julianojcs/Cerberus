@@ -292,7 +292,16 @@ export interface Geofence {
   vertices?: [number, number][]; // polígono
   color: string; // token de familia Tailwind (ex.: 'green')
   active: boolean;
+  // Fase 5b — regras avançadas.
+  teamId?: string | null; // zona por equipe (null = todas)
+  windowStartMin?: number | null; // agendamento: minutos-do-dia UTC
+  windowEndMin?: number | null;
+  triggerOn?: GeofenceTriggerName; // enter | exit | both
+  severity?: GeofenceSeverityName; // low | medium | high | critical
 }
+
+export type GeofenceTriggerName = 'enter' | 'exit' | 'both';
+export type GeofenceSeverityName = 'low' | 'medium' | 'high' | 'critical';
 
 /** Corpo de criação/edição de zona (geometria por forma). */
 export interface GeofenceInput {
@@ -306,6 +315,12 @@ export interface GeofenceInput {
   rotationDeg?: number;
   vertices?: [number, number][];
   color?: string;
+  // Fase 5b — regras avançadas.
+  teamId?: string | null;
+  windowStartMin?: number | null;
+  windowEndMin?: number | null;
+  triggerOn?: GeofenceTriggerName;
+  severity?: GeofenceSeverityName;
 }
 
 export interface GeofenceAlert {
@@ -315,6 +330,7 @@ export interface GeofenceAlert {
   geofenceId: string;
   geofenceName: string;
   type: 'enter' | 'exit';
+  severity?: GeofenceSeverityName; // Fase 5b
   lng?: number;
   lat?: number;
   capturedAt: string;
