@@ -66,6 +66,8 @@ export interface TacticalMessage {
   operationId: string;
   senderId: string;
   type: string; // 'text' | 'media' | 'broadcast'
+  teamId?: string; // presente ⇒ mensagem de equipe (Fase 2b)
+  recipientId?: string; // presente ⇒ DM (agente destino)
   text?: string;
   ciphertext?: string; // envelope E2EE (text/broadcast); decifrado no cliente
   mediaRef?: string;
@@ -157,6 +159,24 @@ export const api = {
   // Histórico de mensagens (texto/mídia/broadcast) da operação.
   messages: (operationId: string) =>
     request<TacticalMessage[]>(`/operations/${operationId}/messages`),
+  // Chat de equipe (Fase 2b) — histórico + envio (corpo cifrado, selado p/ os membros).
+  teamMessages: (operationId: string, teamId: string) =>
+    request<TacticalMessage[]>(`/operations/${operationId}/teams/${teamId}/messages`),
+  sendTeamMessage: (operationId: string, teamId: string, ciphertext: string) =>
+    request<TacticalMessage>(`/operations/${operationId}/teams/${teamId}/messages`, {
+      method: 'POST',
+      body: JSON.stringify({ ciphertext }),
+    }),
+  // DM central→agente (Fase 2b) — histórico + envio (corpo selado p/ o agente).
+  agentMessages: (operationId: string, agentId: string) =>
+    request<TacticalMessage[]>(
+      `/operations/${operationId}/agents/${encodeURIComponent(agentId)}/messages`,
+    ),
+  sendAgentMessage: (operationId: string, agentId: string, ciphertext: string) =>
+    request<TacticalMessage>(
+      `/operations/${operationId}/agents/${encodeURIComponent(agentId)}/messages`,
+      { method: 'POST', body: JSON.stringify({ ciphertext }) },
+    ),
   // Caminho da mídia no GridFS (use com fetchBlobUrl por causa do Authorization).
   mediaPath: (operationId: string, fileId: string) => `/operations/${operationId}/media/${fileId}`,
   // --- Geofencing (Fase 4) ---
