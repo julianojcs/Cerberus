@@ -5,6 +5,14 @@ import { decryptBytes } from '@cerberus/shared';
 import { fetchAuthedBytes, fetchBlobUrl } from '@/lib/api';
 
 /**
+ * Cache de object URLs por (path+chave+mime) na sessão. Ao trocar de chat o
+ * componente desmonta/remonta; sem cache, re-baixaria/re-decifraria a mídia a cada
+ * volta. Com o cache, cada imagem é resolvida UMA vez e reusada. Não revogamos os
+ * URLs (o cache os detém enquanto a aba viver — o volume de mídia da operação é baixo).
+ */
+const blobUrlCache = new Map<string, string>();
+
+/**
  * <img> de recurso protegido: baixa `path` com o Bearer token, converte em object
  * URL e renderiza. Necessário porque a tag <img> não envia header Authorization.
  * Libera o object URL ao desmontar.
@@ -35,8 +43,15 @@ export function AuthImage({
   const n = mediaKey?.n;
 
   useEffect(() => {
+    const cacheKey = `${path}|${k ?? ''}|${n ?? ''}|${mime ?? ''}`;
+    const cached = blobUrlCache.get(cacheKey);
+    if (cached) {
+      // Já resolvida nesta sessão (ex.: ao voltar para este chat) — reusa, sem re-baixar.
+      setUrl(cached);
+      setError(false);
+      return;
+    }
     let active = true;
-    let objectUrl: string | null = null;
     setUrl(null);
     setError(false);
 
@@ -56,17 +71,12 @@ export function AuthImage({
 
     load
       .then((u) => {
-        if (active) {
-          objectUrl = u;
-          setUrl(u);
-        } else {
-          URL.revokeObjectURL(u);
-        }
+        blobUrlCache.set(cacheKey, u); // retém p/ reuso ao remontar (troca de chat)
+        if (active) setUrl(u);
       })
       .catch(() => active && setError(true));
     return () => {
-      active = false;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      active = false; // não revoga: o cache detém o URL para a próxima montagem
     };
   }, [path, k, n, mime]);
 
