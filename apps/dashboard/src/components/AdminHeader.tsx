@@ -4,22 +4,20 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { clearSession } from '@/lib/auth';
 
-/** Cabeçalho do painel Admin: marca + abas + sair. `isSA` mostra a aba Auditoria. */
-export function AdminHeader({ active, isSA }: { active: 'users' | 'audit'; isSA: boolean }) {
+export type AdminTab = 'users' | 'operations' | 'broadcast' | 'devices' | 'audit';
+
+/** Uma aba do painel: rótulo, rota e se exige SuperAdmin. */
+const TABS: { key: AdminTab; href: string; label: string; saOnly: boolean }[] = [
+  { key: 'users', href: '/admin/users', label: 'Usuários', saOnly: false },
+  { key: 'operations', href: '/admin/operations', label: 'Operações', saOnly: false },
+  { key: 'broadcast', href: '/admin/broadcast', label: 'Broadcast', saOnly: true },
+  { key: 'devices', href: '/admin/devices', label: 'Dispositivos', saOnly: true },
+  { key: 'audit', href: '/admin/audit', label: 'Auditoria', saOnly: true },
+];
+
+/** Cabeçalho do painel Admin: marca + abas + sair. `isSA` revela as abas globais. */
+export function AdminHeader({ active, isSA }: { active: AdminTab; isSA: boolean }) {
   const router = useRouter();
-  const tab = (href: string, label: string, key: 'users' | 'audit') => (
-    <Link
-      href={href}
-      className="badge"
-      style={{
-        color: 'var(--text)',
-        background: active === key ? 'var(--panel-2)' : 'transparent',
-        borderColor: active === key ? 'var(--accent)' : 'var(--border)',
-      }}
-    >
-      {label}
-    </Link>
-  );
   return (
     <div className="topbar">
       <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
@@ -30,9 +28,21 @@ export function AdminHeader({ active, isSA }: { active: 'users' | 'audit'; isSA:
           <span className="brand-dot" />
           Painel Admin
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          {tab('/admin/users', 'Usuários', 'users')}
-          {isSA && tab('/admin/audit', 'Auditoria', 'audit')}
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {TABS.filter((t) => isSA || !t.saOnly).map((t) => (
+            <Link
+              key={t.key}
+              href={t.href}
+              className="badge"
+              style={{
+                color: 'var(--text)',
+                background: active === t.key ? 'var(--panel-2)' : 'transparent',
+                borderColor: active === t.key ? 'var(--accent)' : 'var(--border)',
+              }}
+            >
+              {t.label}
+            </Link>
+          ))}
         </div>
       </div>
       <button
