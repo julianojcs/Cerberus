@@ -209,10 +209,7 @@ export const api = {
   mediaPath: (operationId: string, fileId: string) => `/operations/${operationId}/media/${fileId}`,
   // --- Geofencing (Fase 4) ---
   geofences: (operationId: string) => request<Geofence[]>(`/operations/${operationId}/geofences`),
-  createGeofence: (
-    operationId: string,
-    data: { name: string; lng: number; lat: number; radiusMeters: number; color?: string },
-  ) =>
+  createGeofence: (operationId: string, data: GeofenceInput & { name: string }) =>
     request<Geofence>(`/operations/${operationId}/geofences`, {
       method: 'POST',
       body: JSON.stringify(data),
@@ -220,7 +217,7 @@ export const api = {
   patchGeofence: (
     operationId: string,
     gid: string,
-    data: Partial<{ name: string; lng: number; lat: number; radiusMeters: number; color: string }>,
+    data: GeofenceInput,
   ) =>
     request<Geofence>(`/operations/${operationId}/geofences/${gid}`, {
       method: 'PATCH',
@@ -278,15 +275,37 @@ export interface Settings {
   maxGapMinutes: number;
 }
 
+/** Forma de uma zona. Sem `shape` ⇒ círculo (retrocompat). */
+export type GeofenceShapeName = 'circle' | 'rectangle' | 'polygon';
+
 export interface Geofence {
   id: string;
   operationId: string;
   name: string;
-  lng: number;
-  lat: number;
-  radiusMeters: number;
+  shape: GeofenceShapeName;
+  lng?: number; // círculo/retângulo: centro; polígono: centroide
+  lat?: number;
+  radiusMeters?: number; // círculo
+  widthMeters?: number; // retângulo
+  heightMeters?: number;
+  rotationDeg?: number;
+  vertices?: [number, number][]; // polígono
   color: string; // token de familia Tailwind (ex.: 'green')
   active: boolean;
+}
+
+/** Corpo de criação/edição de zona (geometria por forma). */
+export interface GeofenceInput {
+  name?: string;
+  shape?: GeofenceShapeName;
+  lng?: number;
+  lat?: number;
+  radiusMeters?: number;
+  widthMeters?: number;
+  heightMeters?: number;
+  rotationDeg?: number;
+  vertices?: [number, number][];
+  color?: string;
 }
 
 export interface GeofenceAlert {

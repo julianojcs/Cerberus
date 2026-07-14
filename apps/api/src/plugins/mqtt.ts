@@ -10,7 +10,7 @@ import {
   positionSampleSchema,
 } from '@cerberus/shared';
 import { Alert, Geofence, GeofenceMembership, MessageModel, Position } from '../models/index.js';
-import { detectGeofenceEvents } from '../modules/geofences/detect.js';
+import { detectGeofenceEvents, type GeofenceLike } from '../modules/geofences/detect.js';
 
 /**
  * Fila de serialização POR AGENTE. Os handlers de mensagem do MQTT são assíncronos
@@ -124,7 +124,9 @@ async function checkGeofences(
   agentId: string,
   sample: { lng: number; lat: number; capturedAt: string },
 ): Promise<void> {
-  const geofences = await Geofence.find({ operationId, active: true }).lean();
+  // Cast: typing lean do Mongoose p/ vertices não casa com GeofenceLike (dados OK em runtime).
+  const geofences = (await Geofence.find({ operationId, active: true })
+    .lean()) as unknown as GeofenceLike[];
   if (geofences.length === 0) return;
 
   // Estado anterior de pertencimento por zona (fonte de verdade, não a posição anterior).

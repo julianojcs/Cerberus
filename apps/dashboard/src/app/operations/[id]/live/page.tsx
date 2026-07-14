@@ -8,6 +8,7 @@ import {
   type LatestPosition,
   type Geofence,
   type GeofenceAlert,
+  type GeofenceInput,
   type Settings,
 } from '@/lib/api';
 import { getToken, getUser } from '@/lib/auth';
@@ -15,7 +16,7 @@ import { getSecretKey } from '@/lib/e2ee';
 import { openMessage, sealMessage } from '@cerberus/shared';
 import { subscribeToOperation, type IncomingMessage, type LivePosition } from '@/lib/mqtt';
 import { ChatPanel } from '@/components/ChatPanel';
-import { LiveMap, type AgentPoint, type PlottedRoute } from '@/components/LiveMap';
+import { LiveMap, type AgentPoint, type GeofenceCircle, type PlottedRoute } from '@/components/LiveMap';
 import { Toggle } from '@/components/Toggle';
 import { AuthImage } from '@/components/AuthImage';
 import { ResizableSidebar } from '@/components/ResizableSidebar';
@@ -149,12 +150,22 @@ export default function LiveOperationPage() {
   const [gfName, setGfName] = useState('');
   const [gfRadius, setGfRadius] = useState('200');
   const [gfColor, setGfColor] = useState('green');
+  // Fase 4: forma da nova zona + dimensões do retângulo.
+  const [gfShape, setGfShape] = useState<'circle' | 'rectangle'>('circle');
+  const [gfWidth, setGfWidth] = useState('300');
+  const [gfHeight, setGfHeight] = useState('200');
+  const [gfRotation, setGfRotation] = useState('0');
   const [editGeo, setEditGeo] = useState<{
     id: string;
     lng: number;
     lat: number;
     radiusMeters: number;
     color: string;
+    shape?: string;
+    widthMeters?: number;
+    heightMeters?: number;
+    rotationDeg?: number;
+    vertices?: [number, number][];
   } | null>(null);
   const [alertFocus, setAlertFocus] = useState<AlertFocus | null>(null);
   const [showZones, setShowZones] = useState(true);
@@ -492,32 +503,53 @@ export default function LiveOperationPage() {
 
   // Zonas exibidas no mapa: cor resolvida (familia->hex), valores ao vivo da zona
   // em edicao e preview da nova zona (com a cor escolhida).
-  const displayGeofences = useMemo(() => {
-    const base = geofences.map((g) => {
+  const displayGeofences = useMemo<GeofenceCircle[]>(() => {
+    const base: GeofenceCircle[] = geofences.map((g) => {
       const e = editGeo?.id === g.id ? editGeo : null;
       return {
         id: g.id,
         name: g.name,
+        shape: g.shape,
         lng: e ? e.lng : g.lng,
         lat: e ? e.lat : g.lat,
         radiusMeters: e ? e.radiusMeters : g.radiusMeters,
+        widthMeters: e ? e.widthMeters : g.widthMeters,
+        heightMeters: e ? e.heightMeters : g.heightMeters,
+        rotationDeg: e ? e.rotationDeg : g.rotationDeg,
+        vertices: e ? e.vertices : g.vertices,
         color: resolveColor(e ? e.color : g.color),
       };
     });
     if (!pendingCenter) return base;
-    const r = Number(gfRadius);
-    return [
-      ...base,
-      {
-        id: '__preview__',
-        name: '(nova zona)',
-        lng: pendingCenter.lng,
-        lat: pendingCenter.lat,
-        radiusMeters: Number.isFinite(r) && r > 0 ? r : 100,
-        color: resolveColor(gfColor),
-      },
-    ];
-  }, [geofences, pendingCenter, gfRadius, gfColor, editGeo]);
+    // Preview da nova zona (com a forma/cor escolhidas).
+    const num = (s: string, fallback: number) => {
+      const v = Number(s);
+      return Number.isFinite(v) && v > 0 ? v : fallback;
+    };
+    const preview: GeofenceCircle =
+      gfShape === 'rectangle'
+        ? {
+            id: '__preview__',
+            name: '(nova zona)',
+            shape: 'rectangle',
+            lng: pendingCenter.lng,
+            lat: pendingCenter.lat,
+            widthMeters: num(gfWidth, 300),
+            heightMeters: num(gfHeight, 200),
+            rotationDeg: Number(gfRotation) || 0,
+            color: resolveColor(gfColor),
+          }
+        : {
+            id: '__preview__',
+            name: '(nova zona)',
+            shape: 'circle',
+            lng: pendingCenter.lng,
+            lat: pendingCenter.lat,
+            radiusMeters: num(gfRadius, 100),
+            color: resolveColor(gfColor),
+          };
+    return [...base, preview];
+  }, [geofences, pendingCenter, gfShape, gfRadius, gfWidth, gfHeight, gfRotation, gfColor, editGeo]);
 
   async function sendBroadcast() {
     const text = broadcastText.trim();
@@ -552,16 +584,21 @@ export default function LiveOperationPage() {
   }
 
   async function handleCreateGeofence() {
-    const radius = Number(gfRadius);
-    if (!pendingCenter || !gfName.trim() || !Number.isFinite(radius) || radius < 1) return;
+    if (!pendingCenter || !gfName.trim()) return;
+    const commonBase = { name: gfName.trim(), lng: pendingCenter.lng, lat: pendingCenter.lat, color: gfColor };
+    let data;
+    if (gfShape === 'rectangle') {
+      const w = Number(gfWidth);
+      const h = Number(gfHeight);
+      if (!Number.isFinite(w) || w < 1 || !Number.isFinite(h) || h < 1) return;
+      data = { ...commonBase, shape: 'rectangle' as const, widthMeters: w, heightMeters: h, rotationDeg: Number(gfRotation) || 0 };
+    } else {
+      const radius = Number(gfRadius);
+      if (!Number.isFinite(radius) || radius < 1) return;
+      data = { ...commonBase, shape: 'circle' as const, radiusMeters: radius };
+    }
     try {
-      await api.createGeofence(operationId, {
-        name: gfName.trim(),
-        lng: pendingCenter.lng,
-        lat: pendingCenter.lat,
-        radiusMeters: radius,
-        color: gfColor,
-      });
+      await api.createGeofence(operationId, data);
       setPendingCenter(null);
       setPlacing(false);
       setGfName('');
@@ -584,18 +621,37 @@ export default function LiveOperationPage() {
   function startEdit(g: Geofence) {
     setPlacing(false);
     setPendingCenter(null);
-    setEditGeo({ id: g.id, lng: g.lng, lat: g.lat, radiusMeters: g.radiusMeters, color: g.color });
+    setEditGeo({
+      id: g.id,
+      lng: g.lng ?? 0,
+      lat: g.lat ?? 0,
+      radiusMeters: g.radiusMeters ?? 0,
+      color: g.color,
+      shape: g.shape,
+      widthMeters: g.widthMeters,
+      heightMeters: g.heightMeters,
+      rotationDeg: g.rotationDeg,
+      vertices: g.vertices,
+    });
   }
 
   async function saveEdit() {
     if (!editGeo) return;
     try {
-      await api.patchGeofence(operationId, editGeo.id, {
-        lng: editGeo.lng,
-        lat: editGeo.lat,
-        radiusMeters: editGeo.radiusMeters,
-        color: editGeo.color,
-      });
+      const data: GeofenceInput =
+        editGeo.shape === 'rectangle'
+          ? {
+              lng: editGeo.lng,
+              lat: editGeo.lat,
+              widthMeters: editGeo.widthMeters,
+              heightMeters: editGeo.heightMeters,
+              rotationDeg: editGeo.rotationDeg,
+              color: editGeo.color,
+            }
+          : editGeo.shape === 'polygon'
+            ? { vertices: editGeo.vertices, color: editGeo.color }
+            : { lng: editGeo.lng, lat: editGeo.lat, radiusMeters: editGeo.radiusMeters, color: editGeo.color };
+      await api.patchGeofence(operationId, editGeo.id, data);
       setGeofences(await api.geofences(operationId));
     } catch {
       /* edição falhou */
@@ -849,13 +905,60 @@ export default function LiveOperationPage() {
                   placeholder="Nome da zona"
                   style={gfInputStyle}
                 />
-                <input
-                  type="number"
-                  value={gfRadius}
-                  onChange={(e) => setGfRadius(e.target.value)}
-                  placeholder="Raio (m)"
-                  style={gfInputStyle}
-                />
+                {/* Seletor de forma (Fase 4). */}
+                <div style={{ display: 'flex', gap: 6 }}>
+                  {(['circle', 'rectangle'] as const).map((s) => (
+                    <button
+                      key={s}
+                      type="button"
+                      onClick={() => setGfShape(s)}
+                      className="badge"
+                      style={{
+                        flex: 1,
+                        cursor: 'pointer',
+                        border: '1px solid var(--border)',
+                        color: 'var(--text)',
+                        background: gfShape === s ? 'var(--panel-2)' : 'transparent',
+                        borderColor: gfShape === s ? 'var(--accent)' : 'var(--border)',
+                      }}
+                    >
+                      {s === 'circle' ? '● Círculo' : '▭ Retângulo'}
+                    </button>
+                  ))}
+                </div>
+                {gfShape === 'circle' ? (
+                  <input
+                    type="number"
+                    value={gfRadius}
+                    onChange={(e) => setGfRadius(e.target.value)}
+                    placeholder="Raio (m)"
+                    style={gfInputStyle}
+                  />
+                ) : (
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <input
+                      type="number"
+                      value={gfWidth}
+                      onChange={(e) => setGfWidth(e.target.value)}
+                      placeholder="Largura (m)"
+                      style={gfInputStyle}
+                    />
+                    <input
+                      type="number"
+                      value={gfHeight}
+                      onChange={(e) => setGfHeight(e.target.value)}
+                      placeholder="Altura (m)"
+                      style={gfInputStyle}
+                    />
+                    <input
+                      type="number"
+                      value={gfRotation}
+                      onChange={(e) => setGfRotation(e.target.value)}
+                      placeholder="Rot (°)"
+                      style={{ ...gfInputStyle, maxWidth: 72 }}
+                    />
+                  </div>
+                )}
                 <ColorPalettePicker value={gfColor} onChange={setGfColor} />
                 <div style={{ display: 'flex', gap: 6 }}>
                   <button
@@ -918,7 +1021,12 @@ export default function LiveOperationPage() {
                       verticalAlign: 'middle',
                     }}
                   />
-                  {g.name} · {editGeo?.id === g.id ? editGeo.radiusMeters : g.radiusMeters} m
+                  {g.name} ·{' '}
+                  {g.shape === 'rectangle'
+                    ? `▭ ${g.widthMeters ?? '—'}×${g.heightMeters ?? '—'} m`
+                    : g.shape === 'polygon'
+                      ? `⬡ ${g.vertices?.length ?? 0} vértices`
+                      : `● ${editGeo?.id === g.id ? editGeo.radiusMeters : g.radiusMeters} m`}
                 </span>
                 <span style={{ display: 'flex', gap: 10 }}>
                   <button
@@ -952,10 +1060,52 @@ export default function LiveOperationPage() {
             ))}
             {editGeo && (
               <div style={{ marginTop: 12, borderTop: '1px solid var(--border)', paddingTop: 10 }}>
-                <div className="muted" style={{ fontSize: 12 }}>
-                  Arraste o <strong>centro</strong> (mover) ou a <strong>borda</strong>{' '}
-                  (redimensionar). Raio: {editGeo.radiusMeters} m
-                </div>
+                {editGeo.shape === 'rectangle' ? (
+                  <>
+                    <div className="muted" style={{ fontSize: 12 }}>
+                      Arraste o <strong>centro</strong> para mover. Ajuste largura/altura/rotação:
+                    </div>
+                    <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+                      <input
+                        type="number"
+                        value={editGeo.widthMeters ?? ''}
+                        onChange={(e) =>
+                          setEditGeo((g) => (g ? { ...g, widthMeters: Number(e.target.value) } : g))
+                        }
+                        placeholder="Largura (m)"
+                        style={gfInputStyle}
+                      />
+                      <input
+                        type="number"
+                        value={editGeo.heightMeters ?? ''}
+                        onChange={(e) =>
+                          setEditGeo((g) => (g ? { ...g, heightMeters: Number(e.target.value) } : g))
+                        }
+                        placeholder="Altura (m)"
+                        style={gfInputStyle}
+                      />
+                      <input
+                        type="number"
+                        value={editGeo.rotationDeg ?? 0}
+                        onChange={(e) =>
+                          setEditGeo((g) => (g ? { ...g, rotationDeg: Number(e.target.value) } : g))
+                        }
+                        placeholder="Rot (°)"
+                        style={{ ...gfInputStyle, maxWidth: 72 }}
+                      />
+                    </div>
+                  </>
+                ) : editGeo.shape === 'polygon' ? (
+                  <div className="muted" style={{ fontSize: 12 }}>
+                    Arraste o <strong>centro</strong> para mover o polígono. (Edição de vértices em
+                    breve.)
+                  </div>
+                ) : (
+                  <div className="muted" style={{ fontSize: 12 }}>
+                    Arraste o <strong>centro</strong> (mover) ou a <strong>borda</strong>{' '}
+                    (redimensionar). Raio: {editGeo.radiusMeters} m
+                  </div>
+                )}
                 <div style={{ marginTop: 8 }}>
                   <ColorPalettePicker
                     value={editGeo.color}
@@ -1034,7 +1184,13 @@ export default function LiveOperationPage() {
                           (routes[a.agentId] ?? []).map((r) => r.points),
                           [a.lng, a.lat],
                         );
-                        if (zone) {
+                        if (
+                          zone &&
+                          zone.lng != null &&
+                          zone.lat != null &&
+                          zone.radiusMeters != null
+                        ) {
+                          // Foco na borda: só círculo (usa raio). Outras formas caem no ponto.
                           const f = alertBorderFocus(
                             [a.lng, a.lat],
                             [zone.lng, zone.lat],
