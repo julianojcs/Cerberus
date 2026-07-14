@@ -71,6 +71,25 @@ describe('e2ee', () => {
     expect(openMessage(envelope, 'AG-001', ag1.secretKey)).toBe('ordem legítima');
   });
 
+  it('autenticação aceita um CONJUNTO de chaves do remetente (rotação — Fase 5e-2)', () => {
+    const central = generateKeyPair();
+    const ag1 = generateKeyPair();
+    const envelope = sealMessage('ordem', central.secretKey, [
+      { id: 'AG-001', publicKey: ag1.publicKey },
+    ]);
+    const chaveAntiga = generateKeyPair().publicKey;
+    // spk (central) ∈ {antiga, central} → decifra.
+    expect(openMessage(envelope, 'AG-001', ag1.secretKey, [chaveAntiga, central.publicKey])).toBe(
+      'ordem',
+    );
+    // spk fora do conjunto → null.
+    expect(
+      openMessage(envelope, 'AG-001', ag1.secretKey, [chaveAntiga, generateKeyPair().publicKey]),
+    ).toBeNull();
+    // conjunto vazio → sem verificação.
+    expect(openMessage(envelope, 'AG-001', ag1.secretKey, [])).toBe('ordem');
+  });
+
   it('anti-spoofing: envelope forjado com identidade trocada é barrado pelo diretório', () => {
     // O impostor cifra com a PRÓPRIA chave, mas afirma ser a central.
     const impostor = generateKeyPair();

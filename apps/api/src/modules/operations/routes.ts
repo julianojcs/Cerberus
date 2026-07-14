@@ -245,6 +245,8 @@ function serializeKey(u: {
   role: string;
   agentId?: string | null;
   publicKey?: string | null;
+  publicKeyHistory?: string[] | null;
+  keyRevoked?: boolean | null;
 }): KeyDirectoryEntry {
   const userId = String(u._id);
   return {
@@ -253,5 +255,8 @@ function serializeKey(u: {
     role: u.role as Role,
     agentId: u.agentId ?? undefined,
     publicKey: u.publicKey as string,
+    // Fase 5e-2 — histórico p/ verificar o spk de mensagens anteriores à rotação.
+    keyHistory: u.publicKeyHistory ?? [],
+    revoked: !!u.keyRevoked,
   };
 }

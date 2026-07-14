@@ -210,11 +210,13 @@ export function ChatPanel({
         capturedAt: m.capturedAt,
         mine: m.senderId === myDirId,
       };
-      const senderKey = directory.find((e) => e.id === m.senderId)?.publicKey;
+      // Fase 5e-2 — verifica o spk contra a chave ATUAL ∪ HISTÓRICO do remetente.
+      const dir = directory.find((e) => e.id === m.senderId);
+      const senderKeys = dir ? [dir.publicKey, ...(dir.keyHistory ?? [])] : undefined;
       if (m.type === 'media' && m.mediaRef) {
         const meta =
           m.ciphertext && secretKey
-            ? parseMediaMeta(openMessage(m.ciphertext, myDirId, secretKey, senderKey))
+            ? parseMediaMeta(openMessage(m.ciphertext, myDirId, secretKey, senderKeys))
             : null;
         return {
           ...base,
@@ -229,7 +231,7 @@ export function ChatPanel({
         ...base,
         text:
           m.ciphertext && secretKey
-            ? openMessage(m.ciphertext, myDirId, secretKey, senderKey)
+            ? openMessage(m.ciphertext, myDirId, secretKey, senderKeys)
             : (m.text ?? null),
       };
     },

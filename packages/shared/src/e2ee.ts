@@ -106,13 +106,17 @@ export function openMessage(
   ciphertext: string,
   myId: string,
   mySecretKey: string,
-  expectedSenderKey?: string,
+  expectedSenderKey?: string | string[],
 ): string | null {
   try {
     const env = JSON.parse(encodeUTF8(decodeBase64(ciphertext))) as Envelope;
     if (env.v !== 1 || !Array.isArray(env.envs)) return null;
-    // Anti-spoofing: o spk do envelope deve ser o do remetente registrado no diretório.
-    if (expectedSenderKey && env.spk !== expectedSenderKey) return null;
+    // Anti-spoofing: o spk do envelope deve ser uma das chaves conhecidas do remetente
+    // (atual ∪ histórico de rotação — Fase 5e-2). Conjunto vazio ⇒ sem verificação.
+    if (expectedSenderKey != null) {
+      const allowed = Array.isArray(expectedSenderKey) ? expectedSenderKey : [expectedSenderKey];
+      if (allowed.length > 0 && !allowed.includes(env.spk)) return null;
+    }
     const mine = env.envs.find((e) => e.rid === myId);
     if (!mine) return null;
     const K = nacl.box.open(

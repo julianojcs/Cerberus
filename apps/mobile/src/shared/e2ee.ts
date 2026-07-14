@@ -95,13 +95,16 @@ export function openMessage(
   ciphertext: string,
   myId: string,
   mySecretKey: string,
-  expectedSenderKey?: string,
+  expectedSenderKey?: string | string[],
 ): string | null {
   try {
     const env = JSON.parse(encodeUTF8(decodeBase64(ciphertext))) as Envelope;
     if (env.v !== 1 || !Array.isArray(env.envs)) return null;
-    // Fase 5c — anti-spoofing: spk do envelope deve bater com a chave do diretório.
-    if (expectedSenderKey && env.spk !== expectedSenderKey) return null;
+    // Fase 5c/5e-2 — anti-spoofing: spk deve ser uma das chaves do remetente (atual ∪ histórico).
+    if (expectedSenderKey != null) {
+      const allowed = Array.isArray(expectedSenderKey) ? expectedSenderKey : [expectedSenderKey];
+      if (allowed.length > 0 && !allowed.includes(env.spk)) return null;
+    }
     const mine = env.envs.find((e) => e.rid === myId);
     if (!mine) return null;
     const K = nacl.box.open(
