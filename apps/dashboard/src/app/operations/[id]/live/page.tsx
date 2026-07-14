@@ -13,7 +13,20 @@ import {
 } from '@/lib/api';
 import { getToken, getUser } from '@/lib/auth';
 import { getSecretKey } from '@/lib/e2ee';
-import { openMessage, sealMessage } from '@cerberus/shared';
+import {
+  GEOFENCE_SEVERITY_RANK,
+  openMessage,
+  sealMessage,
+  type TeamInfo,
+} from '@cerberus/shared';
+import {
+  AdvancedZoneFields,
+  localTimeToUtcMin,
+  utcMinToLocalTime,
+  SEVERITY_COLOR,
+  SEVERITY_LABEL,
+  type AdvancedZoneValue,
+} from '@/components/AdvancedZoneFields';
 import { subscribeToOperation, type IncomingMessage, type LivePosition } from '@/lib/mqtt';
 import { ChatPanel } from '@/components/ChatPanel';
 import {
@@ -170,6 +183,16 @@ export default function LiveOperationPage() {
   const [gfWidth, setGfWidth] = useState('300');
   const [gfHeight, setGfHeight] = useState('200');
   const [gfRotation, setGfRotation] = useState('0');
+  // Fase 5b — equipes da operação (seletor de zona por equipe) + regras avançadas da nova zona.
+  const [teams, setTeams] = useState<TeamInfo[]>([]);
+  const ADV_DEFAULT: AdvancedZoneValue = {
+    teamId: '',
+    windowStart: '',
+    windowEnd: '',
+    trigger: 'both',
+    severity: 'medium',
+  };
+  const [gfAdv, setGfAdv] = useState<AdvancedZoneValue>(ADV_DEFAULT);
   const [editGeo, setEditGeo] = useState<{
     id: string;
     lng: number;
@@ -181,6 +204,7 @@ export default function LiveOperationPage() {
     heightMeters?: number;
     rotationDeg?: number;
     vertices?: [number, number][];
+    adv: AdvancedZoneValue;
   } | null>(null);
   const [alertFocus, setAlertFocus] = useState<AlertFocus | null>(null);
   const [showZones, setShowZones] = useState(true);
@@ -356,6 +380,11 @@ export default function LiveOperationPage() {
         .catch(() => {});
     };
     void loadOverlays();
+    // Equipes da operação (seletor de "zona por equipe") — mudam pouco, busca uma vez.
+    api
+      .operationTeams(operationId)
+      .then(setTeams)
+      .catch(() => {});
     const overlayTimer = setInterval(loadOverlays, 15000);
 
     const unsubscribe = subscribeToOperation(
@@ -456,10 +485,18 @@ export default function LiveOperationPage() {
   // de cruzamentos fora do período exibido — sem rota correspondente no mapa.
   const periodAlerts = useMemo(
     () =>
-      alerts.filter((a) => {
-        const t = +new Date(a.capturedAt);
-        return t >= windowStartMs && t <= windowEndMs;
-      }),
+      alerts
+        .filter((a) => {
+          const t = +new Date(a.capturedAt);
+          return t >= windowStartMs && t <= windowEndMs;
+        })
+        // Fase 5b — mais severos primeiro; empate = mais recente primeiro.
+        .sort((x, y) => {
+          const r =
+            (GEOFENCE_SEVERITY_RANK[x.severity ?? 'medium'] ?? 2) -
+            (GEOFENCE_SEVERITY_RANK[y.severity ?? 'medium'] ?? 2);
+          return r !== 0 ? r : +new Date(y.capturedAt) - +new Date(x.capturedAt);
+        }),
     [alerts, windowStartMs, windowEndMs],
   );
 
@@ -636,9 +673,26 @@ export default function LiveOperationPage() {
     }
   }
 
+  // Fase 5b — converte os controles avançados (hora local → minuto UTC) p/ o corpo da API.
+  function advToInput(adv: AdvancedZoneValue): Partial<GeofenceInput> {
+    return {
+      teamId: adv.teamId || null,
+      windowStartMin: localTimeToUtcMin(adv.windowStart),
+      windowEndMin: localTimeToUtcMin(adv.windowEnd),
+      triggerOn: adv.trigger,
+      severity: adv.severity,
+    };
+  }
+
   async function handleCreateGeofence() {
     if (!pendingCenter || !gfName.trim()) return;
-    const commonBase = { name: gfName.trim(), lng: pendingCenter.lng, lat: pendingCenter.lat, color: gfColor };
+    const commonBase = {
+      name: gfName.trim(),
+      lng: pendingCenter.lng,
+      lat: pendingCenter.lat,
+      color: gfColor,
+      ...advToInput(gfAdv),
+    };
     let data;
     if (gfShape === 'rectangle') {
       const w = Number(gfWidth);
@@ -655,6 +709,7 @@ export default function LiveOperationPage() {
       setPendingCenter(null);
       setPlacing(false);
       setGfName('');
+      setGfAdv(ADV_DEFAULT);
       setGeofences(await api.geofences(operationId));
     } catch {
       /* criação falhou (ex.: sem permissão) */
@@ -685,6 +740,13 @@ export default function LiveOperationPage() {
       heightMeters: g.heightMeters,
       rotationDeg: g.rotationDeg,
       vertices: g.vertices,
+      adv: {
+        teamId: g.teamId ?? '',
+        windowStart: utcMinToLocalTime(g.windowStartMin),
+        windowEnd: utcMinToLocalTime(g.windowEndMin),
+        trigger: g.triggerOn ?? 'both',
+        severity: g.severity ?? 'medium',
+      },
     });
   }
 
@@ -694,7 +756,7 @@ export default function LiveOperationPage() {
       // `shape` SEMPRE explícito: converter círculo→polígono muda a forma, e sem
       // mandar `shape` o PATCH grava os vértices mas mantém o shape antigo (a zona
       // volta a renderizar como círculo).
-      const data: GeofenceInput =
+      const geoData: GeofenceInput =
         editGeo.shape === 'rectangle'
           ? {
               shape: 'rectangle',
@@ -714,7 +776,8 @@ export default function LiveOperationPage() {
                 radiusMeters: editGeo.radiusMeters,
                 color: editGeo.color,
               };
-      await api.patchGeofence(operationId, editGeo.id, data);
+      // Fase 5b — regras avançadas junto (equipe/agendamento/gatilho/severidade).
+      await api.patchGeofence(operationId, editGeo.id, { ...geoData, ...advToInput(editGeo.adv) });
       setGeofences(await api.geofences(operationId));
     } catch {
       /* edição falhou */
@@ -1041,7 +1104,8 @@ export default function LiveOperationPage() {
                   </div>
                 )}
                 <ColorPalettePicker value={gfColor} onChange={setGfColor} />
-                <div style={{ display: 'flex', gap: 6 }}>
+                <AdvancedZoneFields teams={teams} value={gfAdv} onChange={setGfAdv} />
+                <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
                   <button
                     type="button"
                     onClick={handleCreateGeofence}
@@ -1212,6 +1276,11 @@ export default function LiveOperationPage() {
                     onChange={(c) => setEditGeo((e) => (e ? { ...e, color: c } : e))}
                   />
                 </div>
+                <AdvancedZoneFields
+                  teams={teams}
+                  value={editGeo.adv}
+                  onChange={(adv) => setEditGeo((e) => (e ? { ...e, adv } : e))}
+                />
                 <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
                   <button
                     type="button"
@@ -1319,6 +1388,19 @@ export default function LiveOperationPage() {
                       </span>{' '}
                       {a.agentId} {a.type === 'enter' ? 'entrou em' : 'saiu de'}{' '}
                       <strong>{a.geofenceName}</strong>
+                      <span
+                        title={`Severidade: ${SEVERITY_LABEL[a.severity ?? 'medium'] ?? a.severity}`}
+                        style={{
+                          display: 'inline-block',
+                          marginLeft: 6,
+                          width: 8,
+                          height: 8,
+                          borderRadius: '50%',
+                          verticalAlign: 'middle',
+                          background: SEVERITY_COLOR[a.severity ?? 'medium'] ?? '#8b9aa8',
+                          boxShadow: a.severity === 'critical' ? '0 0 6px #c1121f' : 'none',
+                        }}
+                      />
                     </div>
                   );
                 })}
