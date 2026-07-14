@@ -11,6 +11,16 @@ export interface AgentPoint {
   heading?: number | null;
   battery?: number;
   activity?: string;
+  /** Operação de origem (usado só no mapa global do SA — aparece no popup). */
+  operationName?: string;
+}
+
+/** Escapa texto interpolado no HTML do popup (nomes de operação/agente). */
+function esc(s: string): string {
+  return s.replace(
+    /[&<>"]/g,
+    (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] as string,
+  );
 }
 
 /**
@@ -165,6 +175,7 @@ export function LiveMap({
   onGeofenceResize,
   focus = null,
   fitNonce = 0,
+  fitPoints,
 }: {
   agents: Record<string, AgentPoint>;
   trails?: AgentTrails;
@@ -182,6 +193,12 @@ export function LiveMap({
   focus?: { lng: number; lat: number; bearing: number; type: 'enter' | 'exit' } | null;
   /** Muda de valor → o mapa enquadra (fitBounds) todas as rotas plotadas. */
   fitNonce?: number;
+  /**
+   * Pontos [lng,lat] a enquadrar quando `fitNonce` muda. Se omitido/vazio, cai no
+   * padrão (enquadra as rotas plotadas) — a live page não passa isto. O mapa global
+   * do SA passa marcadores/rotas de uma operação (ou de tudo) para enquadrar.
+   */
+  fitPoints?: [number, number][];
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MlMap | null>(null);
@@ -216,6 +233,8 @@ export function LiveMap({
   routesRef.current = routes;
   const agentColorsRef = useRef<Record<string, string>>(agentColors);
   agentColorsRef.current = agentColors;
+  const fitPointsRef = useRef<[number, number][] | undefined>(fitPoints);
+  fitPointsRef.current = fitPoints;
 
   // Inicializa o mapa uma única vez.
   useEffect(() => {
@@ -340,9 +359,12 @@ export function LiveMap({
       marker
         .getPopup()
         ?.setHTML(
-          `<strong>${agentId}</strong><br/>bat: ${
-            point.battery != null ? Math.round(point.battery * 100) + '%' : '—'
-          }<br/>${point.activity ?? ''}`,
+          `<strong>${esc(agentId)}</strong>` +
+            (point.operationName
+              ? `<br/><span style="opacity:.75">${esc(point.operationName)}</span>`
+              : '') +
+            `<br/>bat: ${point.battery != null ? Math.round(point.battery * 100) + '%' : '—'}` +
+            (point.activity ? `<br/>${esc(point.activity)}` : ''),
         );
     }
 
@@ -368,12 +390,18 @@ export function LiveMap({
     syncRoutes(map, routes);
   }, [routes]);
 
-  // Enquadra (fitBounds) todas as rotas plotadas quando `fitNonce` muda.
+  // Enquadra (fitBounds) quando `fitNonce` muda: usa `fitPoints` se fornecido
+  // (mapa global), senão as rotas plotadas (comportamento padrão da live page).
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !fitNonce) return;
-    const pts = routesRef.current.flatMap((r) => r.points);
+    const explicit = fitPointsRef.current;
+    const pts = explicit && explicit.length ? explicit : routesRef.current.flatMap((r) => r.points);
     if (pts.length === 0) return;
+    if (pts.length === 1) {
+      map.easeTo({ center: pts[0], zoom: 15, duration: 600 });
+      return;
+    }
     const bounds = pts.reduce((b, p) => b.extend(p), new maplibregl.LngLatBounds(pts[0], pts[0]));
     map.fitBounds(bounds, { padding: 60, maxZoom: 16, duration: 600 });
   }, [fitNonce]);
