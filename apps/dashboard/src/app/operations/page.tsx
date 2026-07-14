@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import type { Operation } from '@cerberus/shared';
 import { api, type Settings } from '@/lib/api';
 import { clearSession, getToken, getUser } from '@/lib/auth';
+import { lockAll } from '@/lib/e2ee';
 import { SettingsModal } from '@/components/SettingsModal';
 
 export default function OperationsPage() {
@@ -42,6 +43,7 @@ export default function OperationsPage() {
   }, [router]);
 
   function logout() {
+    lockAll(); // trava a chave E2EE em memória (Fase 5e-1)
     clearSession();
     router.replace('/login');
   }
