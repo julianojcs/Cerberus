@@ -2260,9 +2260,9 @@ export default function LiveOperationPage() {
                       minWidth: 78,
                       textAlign: 'right',
                     }}
-                    title="Início do período"
+                    title="Início da faixa disponível"
                   >
-                    {fmtDateTime(windowStartMs)}
+                    {fmtDateTime(rangeMin)}
                   </span>
                   <PeriodRange
                     min={rangeMin}
@@ -2284,9 +2284,9 @@ export default function LiveOperationPage() {
                       fontVariantNumeric: 'tabular-nums',
                       minWidth: 78,
                     }}
-                    title="Fim do período"
+                    title="Fim da faixa (agora)"
                   >
-                    {fmtDateTime(windowEndMs)}
+                    {fmtDateTime(rangeMax)}
                   </span>
                   <button
                     type="button"

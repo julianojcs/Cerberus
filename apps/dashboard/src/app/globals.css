@@ -80,6 +80,13 @@
   border: 2px solid #c1121f;
   cursor: pointer;
 }
+/* Ponta "ao vivo": grudada no fim da barra (agora) — thumb todo vermelho. */
+.rangepair input.live::-webkit-slider-thumb {
+  background: #c1121f;
+}
+.rangepair input.live::-moz-range-thumb {
+  background: #c1121f;
+}
 
 html,
 body {
