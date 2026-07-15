@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import {
+  ArrowRightFromLine,
+  ArrowRightToLine,
   Bell,
   CheckCheck,
   ChevronDown,
@@ -28,6 +30,12 @@ export interface NotifItem {
   preview: string;
   capturedAt: string; // ISO
   group: string; // "Equipe Alfa" | "Direto"
+  /** Alertas de zona: direção da transição → escolhe a seta (entrada/saída). */
+  direction?: 'enter' | 'exit';
+  /** Alertas de zona: cor da severidade → mostra um ponto ao lado do nome. */
+  severityColor?: string;
+  /** Alertas de zona: tooltip do ponto de severidade (ex.: "Severidade: Alta"). */
+  severityTitle?: string;
 }
 
 /** Tempo relativo curto em pt-BR (sem lib): "agora", "há 5 min", "há 2 h", "há 3 d". */
@@ -53,10 +61,11 @@ export function NotificationCenter({
   icon: Icon = Bell,
   title = 'Notificações',
   emptyLabel = 'Nenhuma mensagem.',
+  itemHint = 'Abrir',
 }: {
   items: NotifItem[];
   onOpen: (id: string) => void;
-  /** Chave de "visto até" por operação (localStorage). */
+  /** Chave dos ids lidos por operação (localStorage). */
   storageKey: string;
   /** Ícone do gatilho (sino) e do estado vazio. Default: Bell. */
   icon?: LucideIcon;
@@ -64,34 +73,45 @@ export function NotificationCenter({
   title?: string;
   /** Texto do estado vazio. */
   emptyLabel?: string;
+  /** Tooltip de cada item (ex.: "Abrir no Chat" | "Ver no mapa"). */
+  itemHint?: string;
 }) {
   const [open, setOpen] = useState(false);
-  const [seenTs, setSeenTs] = useState(0);
+  // Ids já lidos (persistidos). Modelo POR-ITEM (não "visto até"): clicar numa
+  // notificação marca AQUELA como lida e o contador cai; itens novos entram como não-lidos.
+  const [seenIds, setSeenIds] = useState<Set<string>>(new Set());
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [nowMs, setNowMs] = useState(0);
 
-  // "Visto até" e "agora" só no cliente (evita mismatch de hidratação).
+  // Lê os ids lidos e o "agora" só no cliente (evita mismatch de hidratação).
   useEffect(() => {
-    setSeenTs(Number(localStorage.getItem(storageKey)) || 0);
+    try {
+      const raw = localStorage.getItem(storageKey);
+      const parsed = raw ? JSON.parse(raw) : [];
+      setSeenIds(new Set(Array.isArray(parsed) ? (parsed as string[]) : []));
+    } catch {
+      setSeenIds(new Set());
+    }
     setNowMs(Date.now());
     const id = setInterval(() => setNowMs(Date.now()), 30_000);
     return () => clearInterval(id);
   }, [storageKey]);
 
-  const unread = useMemo(
-    () => items.filter((m) => +new Date(m.capturedAt) > seenTs).length,
-    [items, seenTs],
-  );
+  const unread = useMemo(() => items.filter((m) => !seenIds.has(m.id)).length, [items, seenIds]);
 
-  function markAllRead() {
-    const latest = items.reduce((mx, m) => Math.max(mx, +new Date(m.capturedAt)), Date.now());
-    setSeenTs(latest);
+  // Persiste, podando para os ids ainda presentes no feed (mantém o storage limitado).
+  function persistSeen(next: Set<string>) {
+    const present = new Set(items.map((m) => m.id));
+    const pruned = new Set([...next].filter((id) => present.has(id)));
+    setSeenIds(pruned);
     try {
-      localStorage.setItem(storageKey, String(latest));
+      localStorage.setItem(storageKey, JSON.stringify([...pruned]));
     } catch {
       /* ignora */
     }
   }
+  const markRead = (id: string) => persistSeen(new Set(seenIds).add(id));
+  const markAllRead = () => persistSeen(new Set(items.map((m) => m.id)));
 
   // Agrupa por "group" preservando a ordem (itens já vêm mais recentes primeiro).
   const groups = useMemo(() => {
@@ -154,7 +174,7 @@ export function NotificationCenter({
           ) : (
             groups.map(([label, msgs]) => {
               const isCollapsed = collapsed[label] ?? false;
-              const groupUnread = msgs.filter((m) => +new Date(m.capturedAt) > seenTs).length;
+              const groupUnread = msgs.filter((m) => !seenIds.has(m.id)).length;
               return (
                 <div key={label}>
                   <button
@@ -179,16 +199,17 @@ export function NotificationCenter({
                   </button>
                   {!isCollapsed &&
                     msgs.map((m) => {
-                      const isUnread = +new Date(m.capturedAt) > seenTs;
+                      const isUnread = !seenIds.has(m.id);
                       return (
                         <button
                           type="button"
                           key={m.id}
                           onClick={() => {
+                            markRead(m.id);
                             onOpen(m.id);
                             setOpen(false);
                           }}
-                          title="Abrir no Chat"
+                          title={itemHint}
                           className={cn(
                             'flex w-full cursor-pointer items-start gap-2.5 px-3.5 py-2.5 text-left text-text hover:bg-panel-2',
                             isUnread && 'bg-[rgba(193,18,31,0.08)]',
@@ -206,6 +227,14 @@ export function NotificationCenter({
                               >
                                 {m.senderName}
                               </span>
+                              {m.severityColor && (
+                                <span
+                                  title={m.severityTitle}
+                                  aria-label={m.severityTitle}
+                                  className="h-2 w-2 shrink-0 rounded-full"
+                                  style={{ background: m.severityColor }}
+                                />
+                              )}
                               {isUnread && (
                                 <span className="h-[7px] w-[7px] shrink-0 rounded-full bg-accent" />
                               )}
@@ -214,9 +243,23 @@ export function NotificationCenter({
                               </span>
                             </div>
                             <div className="mt-0.5 flex items-center gap-1 truncate text-xs text-muted">
-                              {m.isMedia && (
+                              {m.direction === 'exit' ? (
+                                <ArrowRightFromLine
+                                  size={12}
+                                  aria-hidden
+                                  className="shrink-0"
+                                  style={{ color: '#e3b341' }}
+                                />
+                              ) : m.direction === 'enter' ? (
+                                <ArrowRightToLine
+                                  size={12}
+                                  aria-hidden
+                                  className="shrink-0"
+                                  style={{ color: 'var(--ok)' }}
+                                />
+                              ) : m.isMedia ? (
                                 <ImageIcon size={12} aria-hidden className="shrink-0" />
-                              )}
+                              ) : null}
                               {m.preview}
                             </div>
                           </div>

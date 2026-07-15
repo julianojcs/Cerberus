@@ -46,6 +46,8 @@ import {
   AdvancedZoneFields,
   localTimeToUtcMin,
   utcMinToLocalTime,
+  SEVERITY_COLOR,
+  SEVERITY_LABEL,
   type AdvancedZoneValue,
 } from '@/components/AdvancedZoneFields';
 import { subscribeToOperation, type IncomingMessage, type LivePosition } from '@/lib/mqtt';
@@ -1254,6 +1256,9 @@ export default function LiveOperationPage() {
         preview: `${a.type === 'enter' ? 'entrou em' : 'saiu de'} ${a.geofenceName}`,
         capturedAt: a.capturedAt,
         group: a.geofenceName,
+        direction: a.type, // 'enter' | 'exit' → seta de direção
+        severityColor: SEVERITY_COLOR[a.severity ?? 'medium'] ?? '#8b9aa8',
+        severityTitle: `Severidade: ${SEVERITY_LABEL[a.severity ?? 'medium'] ?? a.severity}`,
       })),
     [periodAlerts, agentColors, memberNames],
   );
@@ -1342,6 +1347,7 @@ export default function LiveOperationPage() {
             icon={Bell}
             title="Alertas de zona"
             emptyLabel="Nenhum alerta."
+            itemHint="Ver no mapa"
             storageKey={`cerberus_alert_seen:${operationId}`}
             onOpen={focusAlert}
           />
@@ -1349,6 +1355,7 @@ export default function LiveOperationPage() {
             items={notifItems}
             icon={MessageSquareCheck}
             title="Mensagens"
+            itemHint="Abrir no Chat"
             storageKey={`cerberus_notif_seen:${operationId}`}
             onOpen={(id) => {
               const m = cardMsgs.find((x) => x.id === id);
