@@ -289,7 +289,6 @@ export default function LiveOperationPage() {
     minRoutePoints: 5,
     connectRoutes: false,
     maxGapMinutes: 5,
-    sidebarMessageCount: 5,
   });
   const [settingsOpen, setSettingsOpen] = useState(false);
   // Persiste alterações de Configurações feitas pelo menu de efeitos. Aplica local

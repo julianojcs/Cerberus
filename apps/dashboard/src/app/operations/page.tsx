@@ -19,7 +19,6 @@ export default function OperationsPage() {
     minRoutePoints: 5,
     connectRoutes: false,
     maxGapMinutes: 5,
-    sidebarMessageCount: 5,
   });
   const [settingsOpen, setSettingsOpen] = useState(false);
   // Usuário lido do localStorage só no cliente (evita mismatch de hidratação SSR).
