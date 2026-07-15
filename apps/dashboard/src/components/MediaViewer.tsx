@@ -1,6 +1,18 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
+import {
+  Download,
+  Info,
+  X,
+  ChevronLeft,
+  ChevronRight,
+  Lock,
+  Rewind,
+  FastForward,
+  Pause,
+  Play,
+} from 'lucide-react';
 import { api } from '@/lib/api';
 import { bytesToObjectUrl, formatBytes, loadDecryptedBytes } from '@/lib/media';
 
@@ -176,7 +188,7 @@ export function MediaViewer({
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           {actions?.(item)}
           <button type="button" onClick={download} title="Baixar (imagem decifrada)" style={iconBtn}>
-            ⤓
+            <Download size={18} aria-hidden />
           </button>
           <button
             type="button"
@@ -184,10 +196,10 @@ export function MediaViewer({
             title="Informações (i)"
             style={{ ...iconBtn, color: showInfo ? 'var(--accent)' : '#fff' }}
           >
-            ⓘ
+            <Info size={18} aria-hidden />
           </button>
           <button type="button" onClick={onClose} title="Fechar (Esc)" style={iconBtn}>
-            ✕
+            <X size={18} aria-hidden />
           </button>
         </div>
       </div>
@@ -204,7 +216,7 @@ export function MediaViewer({
             title="Anterior (←)"
             style={{ ...navBtn, left: 12 }}
           >
-            ‹
+            <ChevronLeft size={30} aria-hidden />
           </button>
           <button
             type="button"
@@ -215,7 +227,7 @@ export function MediaViewer({
             title="Próxima (→)"
             style={{ ...navBtn, right: 12 }}
           >
-            ›
+            <ChevronRight size={30} aria-hidden />
           </button>
         </>
       )}
@@ -223,7 +235,11 @@ export function MediaViewer({
       {/* Imagem */}
       <div onClick={(e) => e.stopPropagation()} style={stage}>
         {error ? (
-          <div style={{ color: 'var(--muted)' }}>🔒 mídia indecifrável</div>
+          <div
+            style={{ color: 'var(--muted)', display: 'inline-flex', alignItems: 'center', gap: 6 }}
+          >
+            <Lock size={16} aria-hidden /> mídia indecifrável
+          </div>
         ) : url ? (
           <img
             src={url}
@@ -241,7 +257,9 @@ export function MediaViewer({
       {/* Painel de informações */}
       {showInfo && (
         <div onClick={(e) => e.stopPropagation()} style={infoPanel}>
-          <strong style={{ fontSize: 14 }}>ⓘ Informações</strong>
+          <strong style={{ fontSize: 14, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <Info size={15} aria-hidden /> Informações
+          </strong>
           <Row label="Enviada por" value={nameOf(item.senderId)} />
           <Row label="Data/hora" value={fmtDateTime(item.capturedAt)} />
           <Row label="Formato" value={(item.mime.split('/')[1] ?? '—').toUpperCase()} />
@@ -269,7 +287,7 @@ export function MediaViewer({
               title="Diminuir a velocidade"
               style={{ ...iconBtn, opacity: speedIdx === 0 ? 0.4 : 1 }}
             >
-              ⏪
+              <Rewind size={18} aria-hidden />
             </button>
             <button
               type="button"
@@ -277,7 +295,7 @@ export function MediaViewer({
               title={playing ? 'Pausar (espaço)' : 'Reproduzir (espaço)'}
               style={iconBtn}
             >
-              {playing ? '⏸' : '▶'}
+              {playing ? <Pause size={18} aria-hidden /> : <Play size={18} aria-hidden />}
             </button>
             <button
               type="button"
@@ -286,7 +304,7 @@ export function MediaViewer({
               title="Aumentar a velocidade"
               style={{ ...iconBtn, opacity: speedIdx === SPEEDS.length - 1 ? 0.4 : 1 }}
             >
-              ⏩
+              <FastForward size={18} aria-hidden />
             </button>
             <span style={{ color: '#fff', fontSize: 12, minWidth: 40, textAlign: 'center' }}>
               {SPEEDS[speedIdx]?.l}

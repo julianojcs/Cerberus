@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { Users, Camera, Lock, X, Image as ImageIcon } from 'lucide-react';
 import {
   Role,
   encryptBytes,
@@ -39,6 +40,7 @@ interface Conversation {
   color?: string | null;
   lastAt: number;
   lastPreview: string;
+  lastIcon: 'media' | 'enc' | null; // ícone da prévia (foto / cifrada) em vez de emoji
   unread: number;
 }
 
@@ -114,6 +116,47 @@ export function ChatPanel({
   const [error, setError] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  // Largura da coluna de conversas — ajustável pela borda DnD e persistida por operação.
+  const rootRef = useRef<HTMLDivElement>(null);
+  const LISTW_KEY = `cerberus_chat_listw:${operationId}`;
+  const [listWidth, setListWidth] = useState<number>(() => {
+    if (typeof window === 'undefined') return 280;
+    const v = Number(localStorage.getItem(LISTW_KEY));
+    return Number.isFinite(v) && v >= 180 && v <= 560 ? v : 280;
+  });
+  const draggingCol = useRef(false);
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      if (!draggingCol.current || !rootRef.current) return;
+      const rect = rootRef.current.getBoundingClientRect();
+      // deixa ao menos 240px para a coluna da conversa; limita a 180–560 na lista.
+      const w = Math.min(Math.max(e.clientX - rect.left, 180), Math.min(560, rect.width - 240));
+      setListWidth(w);
+    };
+    const onUp = () => {
+      if (!draggingCol.current) return;
+      draggingCol.current = false;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, []);
+  useEffect(() => {
+    try {
+      localStorage.setItem(LISTW_KEY, String(listWidth));
+    } catch {
+      /* ignora */
+    }
+  }, [listWidth, LISTW_KEY]);
+  // Sem espaço horizontal na lista, a data/hora some (o nome + prévia têm prioridade).
+  const showConvTime = listWidth >= 220;
+
   // Foto escolhida aguardando legenda + envio (não posta direto — dá pra legendar).
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [pendingPreview, setPendingPreview] = useState<string | null>(null);
@@ -244,8 +287,12 @@ export function ChatPanel({
     return map;
   }, [allMsgs, toChatMsg]);
 
-  const previewOf = (dec?: ChatMsg): string =>
-    dec ? (dec.mediaRef ? '📷 Foto' : (dec.text ?? '🔒 cifrada')) : '';
+  const previewOf = (dec?: ChatMsg): { text: string; icon: 'media' | 'enc' | null } => {
+    if (!dec) return { text: '', icon: null };
+    if (dec.mediaRef) return { text: 'Foto', icon: 'media' };
+    if (dec.text == null) return { text: 'cifrada', icon: 'enc' };
+    return { text: dec.text, icon: null };
+  };
 
   // Lista de conversas (equipes + agentes), com última msg / preview / não-lidas.
   const conversations = useMemo<Conversation[]>(() => {
@@ -259,6 +306,7 @@ export function ChatPanel({
         color: resolveColor(t.color),
         lastAt: 0,
         lastPreview: '',
+        lastIcon: null,
         unread: 0,
       });
     for (const mb of members)
@@ -271,6 +319,7 @@ export function ChatPanel({
           color: null,
           lastAt: 0,
           lastPreview: '',
+          lastIcon: null,
           unread: 0,
         });
     for (const m of allMsgs) {
@@ -280,13 +329,25 @@ export function ChatPanel({
       if (!c) {
         if (!key.startsWith('dm:')) continue;
         const id = key.slice(3);
-        c = { key, kind: 'dm', id, name: id, color: null, lastAt: 0, lastPreview: '', unread: 0 };
+        c = {
+          key,
+          kind: 'dm',
+          id,
+          name: id,
+          color: null,
+          lastAt: 0,
+          lastPreview: '',
+          lastIcon: null,
+          unread: 0,
+        };
         map.set(key, c);
       }
       const at = +new Date(m.capturedAt);
       if (at >= c.lastAt) {
         c.lastAt = at;
-        c.lastPreview = previewOf(decrypted.get(msgKey(m)));
+        const pv = previewOf(decrypted.get(msgKey(m)));
+        c.lastPreview = pv.text;
+        c.lastIcon = pv.icon;
       }
       if (at > (lastRead[key] ?? 0) && m.senderId !== myDirId) c.unread++;
     }
@@ -437,9 +498,9 @@ export function ChatPanel({
   const canSend = !!active && isAdmin;
 
   return (
-    <div style={{ display: 'flex', height: '100%', minHeight: 0 }}>
+    <div ref={rootRef} style={{ display: 'flex', height: '100%', minHeight: 0 }}>
       {/* Coluna esquerda: busca + lista de conversas */}
-      <div style={listCol}>
+      <div style={{ ...listCol, width: listWidth }}>
         <div style={{ padding: 8, borderBottom: '1px solid var(--border)' }}>
           <input
             value={convSearch}
@@ -466,18 +527,30 @@ export function ChatPanel({
                 <Avatar name={c.name} color={c.color} size={38} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={rowLine}>
-                    <span style={convName}>
-                      {c.kind === 'team' ? '👥 ' : ''}
-                      {c.name}
-                    </span>
-                    {c.lastAt > 0 && (
+                    {c.kind === 'team' && (
+                      <Users size={13} style={{ flexShrink: 0, opacity: 0.8 }} aria-hidden />
+                    )}
+                    <span style={convName}>{c.name}</span>
+                    {c.lastAt > 0 && showConvTime && (
                       <span className="muted" style={{ fontSize: 10, flexShrink: 0 }}>
                         {fmtTime(new Date(c.lastAt).toISOString())}
                       </span>
                     )}
                   </div>
                   <div style={rowLine}>
-                    <span style={convPreview}>{c.lastPreview || '—'}</span>
+                    <span style={convPreview}>
+                      {c.lastIcon === 'media' ? (
+                        <>
+                          <ImageIcon size={12} style={{ verticalAlign: '-2px' }} aria-hidden /> Foto
+                        </>
+                      ) : c.lastIcon === 'enc' ? (
+                        <>
+                          <Lock size={12} style={{ verticalAlign: '-2px' }} aria-hidden /> cifrada
+                        </>
+                      ) : (
+                        c.lastPreview || '—'
+                      )}
+                    </span>
                     {c.unread > 0 && <span style={unreadPill}>{c.unread}</span>}
                   </div>
                 </div>
@@ -487,6 +560,18 @@ export function ChatPanel({
         </div>
       </div>
 
+      {/* Borda DnD: arraste para ajustar a largura das colunas. */}
+      <div
+        onMouseDown={() => {
+          draggingCol.current = true;
+          document.body.style.cursor = 'col-resize';
+          document.body.style.userSelect = 'none';
+        }}
+        onDoubleClick={() => setListWidth(280)}
+        title="Arraste para ajustar (duplo-clique reseta)"
+        style={colDivider}
+      />
+
       {/* Coluna direita: conversa ativa */}
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
         {!active ? (
@@ -494,20 +579,28 @@ export function ChatPanel({
         ) : (
           <>
             <div style={threadHeader}>
-              <Avatar name={active.name} color={active.color} size={38} />
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <strong style={{ fontSize: 14, display: 'block' }}>{active.name}</strong>
-                <span className="muted" style={{ fontSize: 11 }}>
-                  {active.kind === 'team'
-                    ? `Equipe · ${teams.find((t) => t.id === active.id)?.agentIds.length ?? 0} membros`
-                    : 'Agente de campo'}
-                </span>
+              {/* Título (avatar + nome) fica junto; a busca cai para a linha de baixo
+                  quando não há espaço horizontal (flex-wrap) em vez de espremer o nome. */}
+              <div style={threadTitleGroup}>
+                <Avatar name={active.name} color={active.color} size={38} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <strong
+                    style={{ fontSize: 14, display: 'block', overflow: 'hidden', textOverflow: 'ellipsis' }}
+                  >
+                    {active.name}
+                  </strong>
+                  <span className="muted" style={{ fontSize: 11 }}>
+                    {active.kind === 'team'
+                      ? `Equipe · ${teams.find((t) => t.id === active.id)?.agentIds.length ?? 0} membros`
+                      : 'Agente de campo'}
+                  </span>
+                </div>
               </div>
               <input
                 value={msgSearch}
                 onChange={(e) => setMsgSearch(e.target.value)}
                 placeholder="Buscar mensagens…"
-                style={{ ...searchInput, maxWidth: 200 }}
+                style={{ ...searchInput, flex: '1 1 200px', minWidth: 160 }}
               />
             </div>
             <div ref={listRef} className="thinscroll" style={msgListStyle}>
@@ -551,8 +644,8 @@ export function ChatPanel({
                             }}
                           />
                         ) : (
-                          <span style={{ fontStyle: 'italic', opacity: 0.7, fontSize: 13 }}>
-                            🔒 mídia indecifrável
+                          <span style={indecifravel}>
+                            <Lock size={13} aria-hidden /> mídia indecifrável
                           </span>
                         )}
                         {m.caption && <div style={{ fontSize: 12, marginTop: 4 }}>{m.caption}</div>}
@@ -560,7 +653,9 @@ export function ChatPanel({
                     ) : (
                       <div style={{ fontSize: 13, lineHeight: 1.35 }}>
                         {m.text ?? (
-                          <span style={{ fontStyle: 'italic', opacity: 0.7 }}>🔒 indecifrável</span>
+                          <span style={indecifravel}>
+                            <Lock size={13} aria-hidden /> indecifrável
+                          </span>
                         )}
                       </div>
                     )}
@@ -607,9 +702,9 @@ export function ChatPanel({
                       onClick={clearPending}
                       disabled={sending}
                       title="Descartar foto"
-                      style={attachBtn}
+                      style={{ ...attachBtn, display: 'grid', placeItems: 'center' }}
                     >
-                      ✕
+                      <X size={16} aria-hidden />
                     </button>
                   </div>
                 )}
@@ -630,9 +725,15 @@ export function ChatPanel({
                     onClick={() => fileRef.current?.click()}
                     disabled={sending}
                     title="Anexar foto (E2EE)"
-                    style={{ ...attachBtn, cursor: sending ? 'not-allowed' : 'pointer', opacity: sending ? 0.5 : 1 }}
+                    style={{
+                      ...attachBtn,
+                      display: 'grid',
+                      placeItems: 'center',
+                      cursor: sending ? 'not-allowed' : 'pointer',
+                      opacity: sending ? 0.5 : 1,
+                    }}
                   >
-                    📷
+                    <Camera size={18} aria-hidden />
                   </button>
                   <textarea
                     value={draft}
@@ -716,6 +817,8 @@ const convName: CSSProperties = {
   whiteSpace: 'nowrap',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
+  flex: 1,
+  minWidth: 0,
 };
 const convPreview: CSSProperties = {
   fontSize: 12,
@@ -751,10 +854,36 @@ const emptyThread: CSSProperties = {
 const threadHeader: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
+  flexWrap: 'wrap', // busca desce para a linha de baixo quando não cabe ao lado do título
   gap: 10,
+  rowGap: 8,
   padding: '8px 12px',
   borderBottom: '1px solid var(--border)',
   flexShrink: 0,
+};
+const threadTitleGroup: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 10,
+  flex: '1 1 200px',
+  minWidth: 0,
+};
+// Borda arrastável entre as colunas (largura ajustável — DnD).
+const colDivider: CSSProperties = {
+  width: 5,
+  flexShrink: 0,
+  cursor: 'col-resize',
+  background: 'var(--border)',
+  alignSelf: 'stretch',
+};
+// Rótulo de conteúdo indecifrável (cadeado + texto), alinhado ao ícone.
+const indecifravel: CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 4,
+  fontStyle: 'italic',
+  opacity: 0.7,
+  fontSize: 13,
 };
 const msgListStyle: CSSProperties = {
   flex: 1,

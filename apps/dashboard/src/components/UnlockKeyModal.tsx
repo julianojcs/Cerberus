@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { Lock, TriangleAlert } from 'lucide-react';
 import { unlock, migrateLegacy, createProtectedKeys, type KeyState } from '@/lib/e2ee';
 
 const MIN_LEN = 8;
@@ -91,7 +92,18 @@ export function UnlockKeyModal({
           borderRadius: 10,
         }}
       >
-        <h2 style={{ margin: 0, fontSize: 18, color: 'var(--text)' }}>🔒 {title}</h2>
+        <h2
+          style={{
+            margin: 0,
+            fontSize: 18,
+            color: 'var(--text)',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 8,
+          }}
+        >
+          <Lock size={18} aria-hidden /> {title}
+        </h2>
         <p className="muted" style={{ margin: 0, fontSize: 13 }}>
           {help}
         </p>
@@ -117,8 +129,18 @@ export function UnlockKeyModal({
         )}
 
         {setting && (
-          <p style={{ margin: 0, fontSize: 12, color: 'var(--accent)' }}>
-            ⚠️ Se esquecer esta senha, não será possível recuperar a chave nem ler o histórico.
+          <p
+            style={{
+              margin: 0,
+              fontSize: 12,
+              color: 'var(--accent)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+            }}
+          >
+            <TriangleAlert size={14} aria-hidden style={{ flexShrink: 0 }} /> Se esquecer esta senha,
+            não será possível recuperar a chave nem ler o histórico.
           </p>
         )}
         {error && (

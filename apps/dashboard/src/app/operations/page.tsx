@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { Users, Settings as SettingsIcon } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import type { Operation } from '@cerberus/shared';
@@ -62,20 +63,31 @@ export default function OperationsPage() {
             <Link
               href="/admin/users"
               className="btn"
-              style={{ background: 'var(--panel-2)', color: '#fff' }}
+              style={{
+                background: 'var(--panel-2)',
+                color: '#fff',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+              }}
               title="Painel administrativo"
             >
-              👥 Admin
+              <Users size={15} aria-hidden /> Admin
             </Link>
           )}
           <button
             type="button"
             className="btn"
-            style={{ background: 'var(--panel-2)' }}
+            style={{
+              background: 'var(--panel-2)',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+            }}
             onClick={() => setSettingsOpen(true)}
             title="Configurações do sistema"
           >
-            ⚙ Configurações
+            <SettingsIcon size={15} aria-hidden /> Configurações
           </button>
           <button className="btn" style={{ background: 'var(--panel-2)' }} onClick={logout}>
             Sair

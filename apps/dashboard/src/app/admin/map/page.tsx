@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Pin } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { OperationStatus, Role, type Operation, type TeamInfo } from '@cerberus/shared';
 import { api, type LatestPosition, type Settings } from '@/lib/api';
@@ -897,9 +898,9 @@ export default function AdminMapPage() {
                   }}
                   title={barPinned ? 'Desafixar a barra de período' : 'Fixar a barra de período'}
                   aria-pressed={barPinned}
-                  style={{ flexShrink: 0, cursor: 'pointer' }}
+                  style={{ flexShrink: 0, cursor: 'pointer', display: 'grid', placeItems: 'center' }}
                 >
-                  📌
+                  <Pin size={15} aria-hidden fill={barPinned ? 'currentColor' : 'none'} />
                 </button>
               </div>
             </div>
