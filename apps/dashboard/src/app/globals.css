@@ -88,6 +88,25 @@
   background: #c1121f;
 }
 
+/* Badge de não-lidas (central de notificações): pulsa para chamar atenção. */
+@keyframes notif-badge-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.18);
+  }
+}
+.notif-badge-pulse {
+  animation: notif-badge-pulse 1.6s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .notif-badge-pulse {
+    animation: none;
+  }
+}
+
 html,
 body {
   margin: 0;

@@ -116,6 +116,7 @@ export function NotificationCenter({
         <Bell size={18} aria-hidden />
         {unread > 0 && (
           <span
+            className="notif-badge-pulse"
             style={{
               position: 'absolute',
               top: -5,
