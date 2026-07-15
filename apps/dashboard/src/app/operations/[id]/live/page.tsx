@@ -203,6 +203,14 @@ export default function LiveOperationPage() {
   const [showLiveTrail, setShowLiveTrail] = useState(true);
   // Efeito "Sentido das trilhas" (setas no mapa) — controlado pelo menu de efeitos.
   const [showTrailDirection, setShowTrailDirection] = useState(false);
+  // Ligar/desligar a trilha ao vivo. Ao DESLIGAR, também desliga o "Sentido das
+  // trilhas" (sem trilha não há sentido a indicar → as setas somem, não ficam órfãs).
+  const setLiveTrail = useCallback((v: boolean) => {
+    setShowLiveTrail(v);
+    if (!v) setShowTrailDirection(false);
+  }, []);
+  // Sentido efetivo: só vale com a trilha ao vivo ligada (defesa contra estado órfão).
+  const trailDirectionOn = showLiveTrail && showTrailDirection;
   // Exibir fotos (pins de mídia geolocalizada) no mapa — menu de efeitos.
   const [showMedia, setShowMedia] = useState(true);
   const seededTrailRef = useRef(false);
@@ -1866,7 +1874,7 @@ export default function LiveOperationPage() {
             <h3 style={{ margin: 0 }}>Agentes ({agentList.length})</h3>
             <Toggle
               checked={showLiveTrail}
-              onChange={setShowLiveTrail}
+              onChange={setLiveTrail}
               label="Trilha ao vivo"
               title="Desenha o caminho do agente ao vivo, conforme ele se desloca"
             />
@@ -2280,7 +2288,7 @@ export default function LiveOperationPage() {
             routes={plottedRoutes}
             trails={liveTrailsForMap}
             showTrails={showLiveTrail}
-            showTrailDirection={showTrailDirection}
+            showTrailDirection={trailDirectionOn}
             agentColors={agentColors}
             fitNonce={fitNonce}
             mediaMarkers={showMedia ? mediaMarkers : []}
@@ -2308,7 +2316,7 @@ export default function LiveOperationPage() {
                 label: 'Trilha ao vivo',
                 title: 'Desenha o caminho do agente ao vivo, conforme ele se desloca',
                 checked: showLiveTrail,
-                onChange: setShowLiveTrail,
+                onChange: setLiveTrail,
               },
               {
                 kind: 'toggle',
@@ -2317,7 +2325,7 @@ export default function LiveOperationPage() {
                 title: showLiveTrail
                   ? 'Setas ao longo das trilhas e rotas indicando a direção do deslocamento'
                   : 'Ative a "Trilha ao vivo" para usar o sentido das trilhas',
-                checked: showTrailDirection,
+                checked: trailDirectionOn,
                 // Sem trilha ao vivo não há trilha para indicar sentido — desabilita.
                 disabled: !showLiveTrail,
                 onChange: setShowTrailDirection,
