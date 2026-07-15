@@ -1741,11 +1741,15 @@ export default function LiveOperationPage() {
                         );
                         if (
                           zone &&
+                          (zone.shape ?? 'circle') === 'circle' &&
                           zone.lng != null &&
                           zone.lat != null &&
                           zone.radiusMeters != null
                         ) {
-                          // Foco na borda: só círculo (usa raio). Outras formas caem no ponto.
+                          // Foco na borda: SÓ círculo real (checa `shape`, não só o raio —
+                          // um polígono convertido de círculo pode reter `radiusMeters` e cairia
+                          // aqui por engano, projetando o alerta num círculo fantasma). Outras
+                          // formas usam o ponto salvo cru.
                           const f = alertBorderFocus(
                             [a.lng, a.lat],
                             [zone.lng, zone.lat],

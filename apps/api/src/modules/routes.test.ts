@@ -989,6 +989,27 @@ describe('geofencing + alertas', () => {
     expect(g.lng).toBeCloseTo(-43.94);
   });
 
+  it('converter para polígono (PATCH shape) LIMPA o raio do círculo', async () => {
+    const vertices = [
+      [-43.95, -19.95],
+      [-43.94, -19.95],
+      [-43.945, -19.94],
+    ];
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/operations/${operationId}/geofences/${geofenceId}`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { shape: 'polygon', vertices },
+    });
+    expect(res.statusCode).toBe(200);
+    const g = res.json();
+    expect(g.shape).toBe('polygon');
+    expect(g.vertices).toHaveLength(3);
+    // O raio do círculo (300) não pode sobreviver na zona convertida — senão o
+    // dashboard projeta o alerta num círculo fantasma (bug do alerta de saída).
+    expect(g.radiusMeters).toBeUndefined();
+  });
+
   it('agente (não-admin) não edita geofence (403)', async () => {
     const res = await app.inject({
       method: 'PATCH',
