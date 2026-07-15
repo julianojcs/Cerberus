@@ -230,8 +230,10 @@ export default function LiveOperationPage() {
   // Sinal para o mapa enquadrar (fitBounds) todas as rotas plotadas.
   const [fitNonce, setFitNonce] = useState(0);
   const [firstTs, setFirstTs] = useState<number | null>(null);
-  // "Agora" — teto do período; avança periodicamente para acompanhar o horário atual.
-  const [nowTs, setNowTs] = useState(() => Date.now());
+  // "Agora" — teto do período; avança para acompanhar o horário atual. Inicia em 0
+  // (estável no SSR) e recebe o Date.now() real no mount (evita mismatch de hidratação:
+  // Date.now() no init difere entre servidor e cliente).
+  const [nowTs, setNowTs] = useState(0);
   // Ponta direita "ao vivo": segue o "agora" até o operador arrastá-la para trás.
   const [liveEnd, setLiveEnd] = useState(true);
   const liveEndRef = useRef(true);
@@ -244,6 +246,7 @@ export default function LiveOperationPage() {
   // direita está "ao vivo", ela segue junto — assim posições recém-chegadas entram no
   // período e o card do agente fica selecionável sem precisar recarregar.
   useEffect(() => {
+    setNowTs(Date.now()); // valor real só no cliente (SSR fica com 0)
     const id = setInterval(() => {
       const now = Date.now();
       setNowTs(now);
