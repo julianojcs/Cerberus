@@ -15,7 +15,6 @@ import {
   Eye,
   Star,
   Lock,
-  Camera,
   Settings as SettingsIcon,
 } from 'lucide-react';
 import Link from 'next/link';
@@ -64,6 +63,8 @@ import { MediaViewer } from '@/components/MediaViewer';
 import { ResizableSidebar } from '@/components/ResizableSidebar';
 import { ColorPalettePicker } from '@/components/ColorPalettePicker';
 import { SettingsModal } from '@/components/SettingsModal';
+import { NotificationCenter, type NotifItem } from '@/components/NotificationCenter';
+import { UserMenu } from '@/components/UserMenu';
 import { PeriodRange } from '@/components/PeriodRange';
 import { alertBorderFocus, routeBearingAt, type AlertFocus } from '@/lib/geo';
 import { resolveColor } from '@/lib/tailwind-colors';
@@ -84,19 +85,6 @@ const HOUR_MS = 60 * 60 * 1000;
 type AgentCard =
   | (AgentPoint & { hasSignal: true })
   | { agentId: string; hasSignal: false };
-/** Botão do stepper (± quantidade) no cabeçalho do card de mensagens. */
-const stepBtnStyle: React.CSSProperties = {
-  width: 22,
-  height: 22,
-  borderRadius: 6,
-  border: '1px solid var(--border)',
-  background: 'transparent',
-  color: 'var(--text)',
-  cursor: 'pointer',
-  fontSize: 14,
-  lineHeight: 1,
-  padding: 0,
-};
 
 /** Mensagem de texto/broadcast já decifrada para exibição (`text: null` = falha). */
 interface DecryptedMessage {
@@ -1234,21 +1222,26 @@ export default function LiveOperationPage() {
     );
   }, [chatMsgs, mediaMsgs]);
 
-  // Atalho no card p/ mudar a quantidade — persiste nas Configurações do sistema.
-  async function changeSidebarCount(delta: number) {
-    // Fallback 5: a API deployada pode ainda não devolver o campo (pré-deploy).
-    const cur = settings.sidebarMessageCount ?? 5;
-    const next = Math.min(50, Math.max(1, cur + delta));
-    if (next === cur) return;
-    setSettings((s) => ({ ...s, sidebarMessageCount: next }));
-    try {
-      const saved = await api.patchSettings({ sidebarMessageCount: next });
-      // Mantém o valor pedido se a API (pré-deploy) ainda não ecoar o campo.
-      setSettings({ ...saved, sidebarMessageCount: saved.sidebarMessageCount ?? next });
-    } catch {
-      /* mantém o valor otimista */
-    }
-  }
+  // Feed da central de notificações: avatar do remetente + título na COR DA TRILHA do
+  // agente + prévia, agrupado por Equipe (mensagens sem equipe → "Direto").
+  const notifItems = useMemo<NotifItem[]>(
+    () =>
+      cardMsgs.map((m) => {
+        const isBroadcast = m.type === 'broadcast';
+        const teamName = m.teamId ? teams.find((t) => t.id === m.teamId)?.name : undefined;
+        return {
+          id: m.id,
+          senderName: isBroadcast ? 'Central' : (memberNames[m.senderId] ?? m.senderId),
+          // Cor da trilha do agente; Central/broadcast (sem trilha) usa o vermelho institucional.
+          color: isBroadcast ? 'var(--accent)' : (agentColors[m.senderId] ?? 'var(--accent)'),
+          isMedia: m.type === 'media',
+          preview: m.type === 'media' ? (m.caption || 'Foto') : (m.text ?? 'cifrada'),
+          capturedAt: m.capturedAt,
+          group: teamName ? `Equipe ${teamName}` : 'Direto',
+        };
+      }),
+    [cardMsgs, teams, agentColors, memberNames],
+  );
 
   async function handleRecompute() {
     setRecomputing(true);
@@ -1310,6 +1303,15 @@ export default function LiveOperationPage() {
           <span className="badge" style={{ color: connected ? 'var(--ok)' : 'var(--muted)' }}>
             {connected ? '● barramento conectado' : '○ aguardando telemetria'}
           </span>
+          <NotificationCenter
+            items={notifItems}
+            storageKey={`cerberus_notif_seen:${operationId}`}
+            onOpen={(id) => {
+              const m = cardMsgs.find((x) => x.id === id);
+              if (m) openInChat(m);
+            }}
+          />
+          <UserMenu onSettings={() => setSettingsOpen(true)} />
         </div>
       </div>
 
@@ -1366,160 +1368,6 @@ export default function LiveOperationPage() {
               </div>
             )}
           </div>
-
-          {cardMsgs.length > 0 && (
-            <div className="card" style={{ padding: 12, marginBottom: 16 }}>
-              <div
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  gap: 8,
-                }}
-              >
-                <strong style={{ fontSize: 14 }}>Mensagens (E2EE) ({cardMsgs.length})</strong>
-                {/* Atalho: quantidade exibida (persiste nas Configurações). */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                  <button
-                    type="button"
-                    onClick={() => void changeSidebarCount(-1)}
-                    title="Menos mensagens"
-                    style={stepBtnStyle}
-                  >
-                    −
-                  </button>
-                  <span
-                    className="muted"
-                    style={{ fontSize: 12, minWidth: 16, textAlign: 'center' }}
-                    title="Mensagens exibidas no card"
-                  >
-                    {settings.sidebarMessageCount ?? 5}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => void changeSidebarCount(1)}
-                    title="Mais mensagens"
-                    style={stepBtnStyle}
-                  >
-                    +
-                  </button>
-                </div>
-              </div>
-              <p className="muted" style={{ fontSize: 12, margin: '4px 0 8px' }}>
-                Clique para abrir no Chat. Decifradas neste dispositivo.
-              </p>
-              <div
-                className="thinscroll"
-                style={{ display: 'grid', gap: 6, maxHeight: 320, overflowY: 'auto' }}
-              >
-                {cardMsgs.slice(0, settings.sidebarMessageCount ?? 5).map((m) => {
-                  const isBroadcast = m.type === 'broadcast';
-                  const who = nameFor(m.senderId, m.type);
-                  const when = new Date(m.capturedAt).toLocaleString('pt-BR', {
-                    day: '2-digit',
-                    month: '2-digit',
-                    hour: '2-digit',
-                    minute: '2-digit',
-                  });
-                  return (
-                    <button
-                      type="button"
-                      key={m.id}
-                      onClick={() => openInChat(m)}
-                      title="Abrir no Chat"
-                      style={{
-                        display: 'block',
-                        width: '100%',
-                        textAlign: 'left',
-                        cursor: 'pointer',
-                        color: 'inherit',
-                        background: 'var(--panel-2, #1c2733)',
-                        border: `1px solid ${isBroadcast ? 'var(--accent, #c1121f)' : 'var(--border)'}`,
-                        borderRadius: 8,
-                        padding: '6px 8px',
-                      }}
-                    >
-                      <div
-                        style={{
-                          display: 'flex',
-                          justifyContent: 'space-between',
-                          gap: 8,
-                          fontSize: 11,
-                          color: 'var(--muted, #8b9aa8)',
-                          marginBottom: 2,
-                        }}
-                      >
-                        <span
-                          style={{
-                            fontWeight: 700,
-                            color: isBroadcast ? 'var(--accent, #c1121f)' : 'var(--text, #e6edf3)',
-                          }}
-                        >
-                          {who}
-                        </span>
-                        <span>{when}</span>
-                      </div>
-                      {m.mediaRef ? (
-                        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                          {m.crypto ? (
-                            <AuthImage
-                              path={api.mediaPath(operationId, m.mediaRef)}
-                              mediaKey={m.crypto}
-                              mime={m.mime}
-                              alt={m.caption ?? 'foto'}
-                              style={{
-                                width: 40,
-                                height: 40,
-                                borderRadius: 6,
-                                objectFit: 'cover',
-                                flexShrink: 0,
-                                background: 'var(--border)',
-                              }}
-                            />
-                          ) : (
-                            <Lock size={14} aria-hidden style={{ flexShrink: 0 }} />
-                          )}
-                          <span style={{ fontSize: 13, color: 'var(--text, #e6edf3)' }}>
-                            {m.caption || (
-                              <span
-                                className="muted"
-                                style={{
-                                  fontStyle: 'italic',
-                                  display: 'inline-flex',
-                                  alignItems: 'center',
-                                  gap: 4,
-                                }}
-                              >
-                                <Camera size={13} aria-hidden /> Foto
-                              </span>
-                            )}
-                          </span>
-                        </div>
-                      ) : (
-                        <div
-                          style={{ fontSize: 13, color: 'var(--text, #e6edf3)', lineHeight: 1.35 }}
-                        >
-                          {m.text ?? (
-                            <span
-                              className="muted"
-                              style={{
-                                fontStyle: 'italic',
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                gap: 4,
-                              }}
-                            >
-                              <Lock size={13} aria-hidden /> não foi possível decifrar
-                            </span>
-                          )}
-                        </div>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          )}
 
           {mediaMsgs.length > 0 && (
             <div className="card" style={{ padding: 12, marginBottom: 16 }}>
