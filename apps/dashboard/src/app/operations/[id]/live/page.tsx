@@ -15,7 +15,10 @@ import {
   Eye,
   Star,
   Lock,
-  Settings as SettingsIcon,
+  Bell,
+  MessageSquareCheck,
+  GlobeLock,
+  GlobeOff,
 } from 'lucide-react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
@@ -43,8 +46,6 @@ import {
   AdvancedZoneFields,
   localTimeToUtcMin,
   utcMinToLocalTime,
-  SEVERITY_COLOR,
-  SEVERITY_LABEL,
   type AdvancedZoneValue,
 } from '@/components/AdvancedZoneFields';
 import { subscribeToOperation, type IncomingMessage, type LivePosition } from '@/lib/mqtt';
@@ -1242,6 +1243,45 @@ export default function LiveOperationPage() {
     [cardMsgs, teams, agentColors, memberNames],
   );
 
+  // Alertas de entrada/saída de zona como itens de notificação (agrupados por zona).
+  const alertItems = useMemo<NotifItem[]>(
+    () =>
+      periodAlerts.map((a) => ({
+        id: a.id,
+        senderName: memberNames[a.agentId] ?? a.agentId,
+        color: agentColors[a.agentId] ?? '#c1121f',
+        isMedia: false,
+        preview: `${a.type === 'enter' ? 'entrou em' : 'saiu de'} ${a.geofenceName}`,
+        capturedAt: a.capturedAt,
+        group: a.geofenceName,
+      })),
+    [periodAlerts, agentColors, memberNames],
+  );
+
+  // Clique num alerta → foca o mapa no cruzamento e planta a seta (só círculo real
+  // projeta na borda; ver fix #122). Chamado pela área de notificações de Alertas.
+  function focusAlert(alertId: string) {
+    const a = periodAlerts.find((x) => x.id === alertId);
+    if (!a || a.lng == null || a.lat == null) return;
+    const zone = geofences.find((g) => g.id === a.geofenceId);
+    const travel = routeBearingAt(
+      (routes[a.agentId] ?? []).map((r) => r.points),
+      [a.lng, a.lat],
+    );
+    if (
+      zone &&
+      (zone.shape ?? 'circle') === 'circle' &&
+      zone.lng != null &&
+      zone.lat != null &&
+      zone.radiusMeters != null
+    ) {
+      const f = alertBorderFocus([a.lng, a.lat], [zone.lng, zone.lat], zone.radiusMeters, a.type);
+      setAlertFocus(travel != null ? { ...f, bearing: travel } : f);
+    } else {
+      setAlertFocus({ lng: a.lng, lat: a.lat, bearing: travel ?? 0, type: a.type });
+    }
+  }
+
   async function handleRecompute() {
     setRecomputing(true);
     try {
@@ -1284,26 +1324,31 @@ export default function LiveOperationPage() {
           </Link>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-          <button
-            type="button"
-            onClick={() => setSettingsOpen(true)}
-            className="badge"
-            title="Configurações do sistema"
-            style={{
-              cursor: 'pointer',
-              border: '1px solid var(--border)',
-              background: 'transparent',
-            }}
+          {/* Status do barramento MQTT: ícone com tooltip (azul = conectado; branco-fumaça = desconectado). */}
+          <span
+            role="img"
+            title={connected ? 'Barramento conectado' : 'Barramento desconectado'}
+            aria-label={connected ? 'Barramento conectado' : 'Barramento desconectado'}
+            style={{ display: 'inline-flex', alignItems: 'center' }}
           >
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-              <SettingsIcon size={15} aria-hidden /> Configurações
-            </span>
-          </button>
-          <span className="badge" style={{ color: connected ? 'var(--ok)' : 'var(--muted)' }}>
-            {connected ? '● barramento conectado' : '○ aguardando telemetria'}
+            {connected ? (
+              <GlobeLock size={20} aria-hidden style={{ color: 'var(--accent-2)' }} />
+            ) : (
+              <GlobeOff size={20} aria-hidden style={{ color: 'whitesmoke' }} />
+            )}
           </span>
           <NotificationCenter
+            items={alertItems}
+            icon={Bell}
+            title="Alertas de zona"
+            emptyLabel="Nenhum alerta."
+            storageKey={`cerberus_alert_seen:${operationId}`}
+            onOpen={focusAlert}
+          />
+          <NotificationCenter
             items={notifItems}
+            icon={MessageSquareCheck}
+            title="Mensagens"
             storageKey={`cerberus_notif_seen:${operationId}`}
             onOpen={(id) => {
               const m = cardMsgs.find((x) => x.id === id);
@@ -1716,87 +1761,6 @@ export default function LiveOperationPage() {
               {recomputing ? 'Recalculando…' : '↻ Recalcular alertas do histórico'}
             </button>
           </div>
-
-          {periodAlerts.length > 0 && (
-            <div className="card" style={{ padding: 12, marginBottom: 16 }}>
-              <strong style={{ fontSize: 14 }}>Alertas ({periodAlerts.length})</strong>
-              <div
-                className="thinscroll"
-                style={{ maxHeight: 220, overflowY: 'auto', marginTop: 4 }}
-              >
-                {periodAlerts.map((a) => {
-                  const hasLoc = a.lng != null && a.lat != null;
-                  return (
-                    <div
-                      key={a.id}
-                      className="muted"
-                      onClick={() => {
-                        if (a.lng == null || a.lat == null) return;
-                        const zone = geofences.find((g) => g.id === a.geofenceId);
-                        // Direção da seta = sentido do deslocamento na rota no cruzamento
-                        // (não o raio da zona). Fallback: radial, se a rota não for achada.
-                        const travel = routeBearingAt(
-                          (routes[a.agentId] ?? []).map((r) => r.points),
-                          [a.lng, a.lat],
-                        );
-                        if (
-                          zone &&
-                          (zone.shape ?? 'circle') === 'circle' &&
-                          zone.lng != null &&
-                          zone.lat != null &&
-                          zone.radiusMeters != null
-                        ) {
-                          // Foco na borda: SÓ círculo real (checa `shape`, não só o raio —
-                          // um polígono convertido de círculo pode reter `radiusMeters` e cairia
-                          // aqui por engano, projetando o alerta num círculo fantasma). Outras
-                          // formas usam o ponto salvo cru.
-                          const f = alertBorderFocus(
-                            [a.lng, a.lat],
-                            [zone.lng, zone.lat],
-                            zone.radiusMeters,
-                            a.type,
-                          );
-                          setAlertFocus(travel != null ? { ...f, bearing: travel } : f);
-                        } else {
-                          setAlertFocus({
-                            lng: a.lng,
-                            lat: a.lat,
-                            bearing: travel ?? 0,
-                            type: a.type,
-                          });
-                        }
-                      }}
-                      title={hasLoc ? 'Ver no mapa' : undefined}
-                      style={{
-                        fontSize: 13,
-                        marginTop: 6,
-                        cursor: hasLoc ? 'pointer' : 'default',
-                      }}
-                    >
-                      <span style={{ color: a.type === 'enter' ? 'var(--ok)' : '#e3b341' }}>
-                        {a.type === 'enter' ? '⊕' : '⊖'}
-                      </span>{' '}
-                      {a.agentId} {a.type === 'enter' ? 'entrou em' : 'saiu de'}{' '}
-                      <strong>{a.geofenceName}</strong>
-                      <span
-                        title={`Severidade: ${SEVERITY_LABEL[a.severity ?? 'medium'] ?? a.severity}`}
-                        style={{
-                          display: 'inline-block',
-                          marginLeft: 6,
-                          width: 8,
-                          height: 8,
-                          borderRadius: '50%',
-                          verticalAlign: 'middle',
-                          background: SEVERITY_COLOR[a.severity ?? 'medium'] ?? '#8b9aa8',
-                          boxShadow: a.severity === 'critical' ? '0 0 6px #c1121f' : 'none',
-                        }}
-                      />
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
 
           <div
             style={{

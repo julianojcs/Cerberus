@@ -1,7 +1,14 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { Bell, CheckCheck, ChevronDown, ChevronRight, Image as ImageIcon } from 'lucide-react';
+import {
+  Bell,
+  CheckCheck,
+  ChevronDown,
+  ChevronRight,
+  Image as ImageIcon,
+  type LucideIcon,
+} from 'lucide-react';
 import { Avatar } from './Avatar';
 import { Button } from './ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
@@ -43,11 +50,20 @@ export function NotificationCenter({
   items,
   onOpen,
   storageKey,
+  icon: Icon = Bell,
+  title = 'Notificações',
+  emptyLabel = 'Nenhuma mensagem.',
 }: {
   items: NotifItem[];
   onOpen: (id: string) => void;
   /** Chave de "visto até" por operação (localStorage). */
   storageKey: string;
+  /** Ícone do gatilho (sino) e do estado vazio. Default: Bell. */
+  icon?: LucideIcon;
+  /** Rótulo do cabeçalho + tooltip/aria-label do botão. */
+  title?: string;
+  /** Texto do estado vazio. */
+  emptyLabel?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [seenTs, setSeenTs] = useState(0);
@@ -90,11 +106,11 @@ export function NotificationCenter({
         <Button
           variant="ghost"
           size="icon"
-          aria-label="Notificações"
-          title="Mensagens (E2EE)"
+          aria-label={title}
+          title={title}
           className="relative border border-solid border-border rounded-lg"
         >
-          <Bell size={18} aria-hidden />
+          <Icon size={18} aria-hidden />
           {unread > 0 && (
             <span className="pointer-events-none absolute -top-[5px] -right-[5px] grid place-items-center">
               {/* Anel do "ping" — expande e some ATRÁS do badge. */}
@@ -116,7 +132,7 @@ export function NotificationCenter({
           className="flex items-center justify-between px-3.5 py-2.5"
           style={{ borderBottom: '1px solid var(--border)' }}
         >
-          <strong className="text-sm">Notificações</strong>
+          <strong className="text-sm">{title}</strong>
           {unread > 0 && (
             <button
               type="button"
@@ -132,8 +148,8 @@ export function NotificationCenter({
         <ScrollArea className="max-h-[360px]">
           {items.length === 0 ? (
             <div className="px-6 py-6 text-center text-muted">
-              <Bell size={26} aria-hidden className="mx-auto mb-1.5 block opacity-50" />
-              <div className="text-[13px]">Nenhuma mensagem.</div>
+              <Icon size={26} aria-hidden className="mx-auto mb-1.5 block opacity-50" />
+              <div className="text-[13px]">{emptyLabel}</div>
             </div>
           ) : (
             groups.map(([label, msgs]) => {
