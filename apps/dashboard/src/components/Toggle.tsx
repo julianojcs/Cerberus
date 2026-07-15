@@ -9,11 +9,13 @@ export function Toggle({
   onChange,
   label,
   title,
+  disabled = false,
 }: {
   checked: boolean;
   onChange: (value: boolean) => void;
   label?: string;
   title?: string;
+  disabled?: boolean;
 }) {
   return (
     <label
@@ -22,8 +24,9 @@ export function Toggle({
         display: 'inline-flex',
         alignItems: 'center',
         gap: 8,
-        cursor: 'pointer',
+        cursor: disabled ? 'not-allowed' : 'pointer',
         userSelect: 'none',
+        opacity: disabled ? 0.5 : 1,
       }}
     >
       {label && (
@@ -36,7 +39,8 @@ export function Toggle({
         role="switch"
         aria-checked={checked}
         aria-label={label}
-        onClick={() => onChange(!checked)}
+        disabled={disabled}
+        onClick={() => !disabled && onChange(!checked)}
         style={{
           position: 'relative',
           width: 40,
@@ -46,7 +50,7 @@ export function Toggle({
           border: '1px solid var(--border)',
           background: checked ? '#c1121f' : 'transparent',
           transition: 'background 0.15s ease',
-          cursor: 'pointer',
+          cursor: disabled ? 'not-allowed' : 'pointer',
           padding: 0,
         }}
       >

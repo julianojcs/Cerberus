@@ -1,6 +1,23 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
+import {
+  Map as MapIcon,
+  MessageSquare,
+  Images,
+  FileText,
+  FileSpreadsheet,
+  FileArchive,
+  File as FileIcon,
+  Columns2,
+  PanelTop,
+ // Pin,
+  Eye,
+  Star,
+  Lock,
+  Camera,
+  Settings as SettingsIcon,
+} from 'lucide-react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import {
@@ -51,7 +68,8 @@ import { SettingsModal } from '@/components/SettingsModal';
 import { PeriodRange } from '@/components/PeriodRange';
 import { alertBorderFocus, routeBearingAt, type AlertFocus } from '@/lib/geo';
 import { resolveColor } from '@/lib/tailwind-colors';
-import { buildRoutes, assignAgentColors, type Route } from '@/lib/routes';
+import { buildRoutes, assignAgentColors, splitSegments, type Route } from '@/lib/routes';
+import { MapEffectsMenu } from '@/components/MapEffectsMenu';
 
 /** Histórico buscado para montar as rotas por agente. */
 const HISTORY_LIMIT = 5000;
@@ -179,8 +197,14 @@ export default function LiveOperationPage() {
   const [rawPositions, setRawPositions] = useState<LatestPosition[]>([]);
   // Trilha AO VIVO por agente: cresce a cada posição do MQTT durante o deslocamento
   // (semeada com o histórico recente na carga). `[lng,lat][]` — um traço por agente.
-  const [liveTrails, setLiveTrails] = useState<Record<string, [number, number][]>>({});
+  const [liveTrails, setLiveTrails] = useState<
+    Record<string, { lng: number; lat: number; capturedAt: string }[]>
+  >({});
   const [showLiveTrail, setShowLiveTrail] = useState(true);
+  // Efeito "Sentido das trilhas" (setas no mapa) — controlado pelo menu de efeitos.
+  const [showTrailDirection, setShowTrailDirection] = useState(false);
+  // Exibir fotos (pins de mídia geolocalizada) no mapa — menu de efeitos.
+  const [showMedia, setShowMedia] = useState(true);
   const seededTrailRef = useRef(false);
   // Cor por agente: token auto-atribuído + override escolhido pelo admin (localStorage).
   const [agentColorTokens, setAgentColorTokens] = useState<Record<string, string>>({});
@@ -205,6 +229,27 @@ export default function LiveOperationPage() {
     sidebarMessageCount: 5,
   });
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Persiste alterações de Configurações feitas pelo menu de efeitos. Aplica local
+  // na hora (o mapa reage) e faz o PATCH com debounce+acúmulo (evita 1 request por
+  // tecla nos campos numéricos). Mesmos campos do SettingsModal — os dois coexistem.
+  const settingsPatchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingSettingsPatch = useRef<Partial<Settings>>({});
+  const updateSetting = useCallback((patch: Partial<Settings>) => {
+    setSettings((s) => ({ ...s, ...patch }));
+    pendingSettingsPatch.current = { ...pendingSettingsPatch.current, ...patch };
+    if (settingsPatchTimer.current) clearTimeout(settingsPatchTimer.current);
+    settingsPatchTimer.current = setTimeout(() => {
+      const body = pendingSettingsPatch.current;
+      pendingSettingsPatch.current = {};
+      api
+        .patchSettings(body)
+        .then((saved) => setSettings((s) => ({ ...s, ...saved })))
+        .catch(() => {
+          // Sem permissão / falha — recarrega o estado real do servidor.
+          api.settings().then(setSettings).catch(() => {});
+        });
+    }, 500);
+  }, []);
   // Nome de exibição por id (agente/usuário) para o card de mensagens.
   const [memberNames, setMemberNames] = useState<Record<string, string>>({});
 
@@ -439,8 +484,8 @@ export default function LiveOperationPage() {
       });
 
     // Monta as rotas por agente a partir do histórico (segmentadas nos gaps de
-    // transmissão). O trajeto é exibido SOMENTE pela seleção de rotas por agente —
-    // não há trilha "ao vivo" duplicando as rotas no mapa.
+    // transmissão) para a lista/seleção de rotas. A "trilha ao vivo" (semeada com
+    // este mesmo histórico e também segmentada nos gaps) cresce em tempo real no mapa.
     api
       .positionHistory(operationId, HISTORY_LIMIT)
       .then((positions: LatestPosition[]) => {
@@ -534,10 +579,11 @@ export default function LiveOperationPage() {
             activity: pos.activity,
           },
         }));
-        // Estende a trilha ao vivo do agente (limita o comprimento).
+        // Estende a trilha ao vivo do agente (limita o comprimento). Guarda o
+        // `capturedAt` para segmentar nos gaps (não ligar por reta o "pulo").
         setLiveTrails((prev) => {
           const cur = prev[pos.agentId] ?? [];
-          const next: [number, number][] = [...cur, [pos.lng, pos.lat]];
+          const next = [...cur, { lng: pos.lng, lat: pos.lat, capturedAt: pos.capturedAt }];
           return {
             ...prev,
             [pos.agentId]: next.length > MAX_LIVE_TRAIL ? next.slice(-MAX_LIVE_TRAIL) : next,
@@ -571,10 +617,10 @@ export default function LiveOperationPage() {
   useEffect(() => {
     if (seededTrailRef.current || rawPositions.length === 0) return;
     const asc = [...rawPositions].sort((a, b) => +new Date(a.capturedAt) - +new Date(b.capturedAt));
-    const byAgent: Record<string, [number, number][]> = {};
+    const byAgent: Record<string, { lng: number; lat: number; capturedAt: string }[]> = {};
     for (const p of asc) {
       if (p.lng == null || p.lat == null) continue;
-      (byAgent[p.agentId] ??= []).push([p.lng, p.lat]);
+      (byAgent[p.agentId] ??= []).push({ lng: p.lng, lat: p.lat, capturedAt: p.capturedAt });
     }
     seededTrailRef.current = true;
     setLiveTrails((prev) => {
@@ -588,12 +634,15 @@ export default function LiveOperationPage() {
     });
   }, [rawPositions]);
 
-  // Formato do mapa (AgentTrails = 1+ traços por agente): a trilha ao vivo é 1 traço.
+  // Formato do mapa (AgentTrails = LISTA DE SEGMENTOS por agente): a trilha ao vivo
+  // é quebrada nos gaps de transmissão (mesmo limiar das rotas) para NÃO ligar por
+  // uma reta dois pontos separados por um "pulo" que não aconteceu de verdade.
   const liveTrailsForMap = useMemo<AgentTrails>(() => {
+    const gapMs = settings.maxGapMinutes * 60_000;
     const out: AgentTrails = {};
-    for (const [id, pts] of Object.entries(liveTrails)) out[id] = [pts];
+    for (const [id, pts] of Object.entries(liveTrails)) out[id] = splitSegments(pts, gapMs);
     return out;
-  }, [liveTrails]);
+  }, [liveTrails, settings.maxGapMinutes]);
 
   // Define a cor (token de família) de um agente e persiste por operação.
   function setAgentColor(agentId: string, token: string) {
@@ -957,17 +1006,18 @@ export default function LiveOperationPage() {
   const nameFor = (senderId: string, type?: string): string =>
     type === 'broadcast' ? 'Central' : (memberNames[senderId] ?? senderId);
 
-  // Ícone por tipo de documento (Fase 6d).
-  const docIcon = (mime: string): string =>
-    mime.includes('pdf')
-      ? '📕'
-      : mime.includes('word') || mime.includes('document')
-        ? '📘'
-        : mime.includes('sheet') || mime.includes('excel') || mime.includes('csv')
-          ? '📗'
-          : mime.includes('zip') || mime.includes('compress')
-            ? '🗜️'
-            : '📄';
+  // Ícone por tipo de documento (Fase 6d) — Lucide colorido por família de arquivo.
+  const docIcon = (mime: string): ReactElement => {
+    const s = 22;
+    if (mime.includes('pdf')) return <FileText size={s} color="#e5534b" aria-hidden />;
+    if (mime.includes('word') || mime.includes('document'))
+      return <FileText size={s} color="#539bf5" aria-hidden />;
+    if (mime.includes('sheet') || mime.includes('excel') || mime.includes('csv'))
+      return <FileSpreadsheet size={s} color="#3fb950" aria-hidden />;
+    if (mime.includes('zip') || mime.includes('compress'))
+      return <FileArchive size={s} color="#c9a227" aria-hidden />;
+    return <FileIcon size={s} color="var(--muted)" aria-hidden />;
+  };
 
   // Fase 6b — conta a visualização (uma vez por mídia na sessão) e atualiza o total.
   async function handleViewMedia(item: { id: string }) {
@@ -1112,6 +1162,10 @@ export default function LiveOperationPage() {
     setRecomputing(false);
   }
 
+  // Só admin edita as Configurações do sistema (o backend também impõe 403); os
+  // controles de exibição (camadas) valem para qualquer operador.
+  const isAdmin = getUser()?.role === 'admin';
+
   const gfInputStyle: React.CSSProperties = {
     width: '100%',
     background: 'var(--bg, #0b0f14)',
@@ -1150,7 +1204,9 @@ export default function LiveOperationPage() {
               background: 'transparent',
             }}
           >
-            ⚙ Configurações
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <SettingsIcon size={15} aria-hidden /> Configurações
+            </span>
           </button>
           <span className="badge" style={{ color: connected ? 'var(--ok)' : 'var(--muted)' }}>
             {connected ? '● barramento conectado' : '○ aguardando telemetria'}
@@ -1322,12 +1378,20 @@ export default function LiveOperationPage() {
                               }}
                             />
                           ) : (
-                            <span style={{ fontSize: 13 }}>🔒</span>
+                            <Lock size={14} aria-hidden style={{ flexShrink: 0 }} />
                           )}
                           <span style={{ fontSize: 13, color: 'var(--text, #e6edf3)' }}>
                             {m.caption || (
-                              <span className="muted" style={{ fontStyle: 'italic' }}>
-                                📷 Foto
+                              <span
+                                className="muted"
+                                style={{
+                                  fontStyle: 'italic',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: 4,
+                                }}
+                              >
+                                <Camera size={13} aria-hidden /> Foto
                               </span>
                             )}
                           </span>
@@ -1337,8 +1401,16 @@ export default function LiveOperationPage() {
                           style={{ fontSize: 13, color: 'var(--text, #e6edf3)', lineHeight: 1.35 }}
                         >
                           {m.text ?? (
-                            <span className="muted" style={{ fontStyle: 'italic' }}>
-                              🔒 não foi possível decifrar
+                            <span
+                              className="muted"
+                              style={{
+                                fontStyle: 'italic',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: 4,
+                              }}
+                            >
+                              <Lock size={13} aria-hidden /> não foi possível decifrar
                             </span>
                           )}
                         </div>
@@ -1980,19 +2052,32 @@ export default function LiveOperationPage() {
                   className="badge"
                   style={{
                     cursor: 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
                     border: '1px solid var(--border)',
                     color: 'var(--text)',
                     background: mainTab === tab ? 'var(--panel-2)' : 'transparent',
                     borderColor: mainTab === tab ? 'var(--accent)' : 'var(--border)',
                   }}
                 >
-                  {tab === 'map'
-                    ? '🗺 Mapa'
-                    : tab === 'chat'
-                      ? '💬 Chat'
-                      : tab === 'gallery'
-                        ? '🖼 Galeria'
-                        : '📄 Docs'}
+                  {tab === 'map' ? (
+                    <>
+                      <MapIcon size={15} aria-hidden /> Mapa
+                    </>
+                  ) : tab === 'chat' ? (
+                    <>
+                      <MessageSquare size={15} aria-hidden /> Chat
+                    </>
+                  ) : tab === 'gallery' ? (
+                    <>
+                      <Images size={15} aria-hidden /> Galeria
+                    </>
+                  ) : (
+                    <>
+                      <FileText size={15} aria-hidden /> Docs
+                    </>
+                  )}
                 </button>
               ))}
             {/* Alternador de layout: abas ↔ split (Chat e Mapa lado a lado). */}
@@ -2009,13 +2094,25 @@ export default function LiveOperationPage() {
                   title={mode === 'tabs' ? 'Abas Mapa/Chat' : 'Mapa e Chat lado a lado'}
                   style={{
                     cursor: 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
                     border: '1px solid var(--border)',
                     color: 'var(--text)',
                     background: layout === mode ? 'var(--panel-2)' : 'transparent',
                     borderColor: layout === mode ? 'var(--accent)' : 'var(--border)',
                   }}
                 >
-                  {mode === 'tabs' ? '▭ Abas' : '⊟ Split'}
+                  {mode === 'tabs' ? (
+                    <>
+                      <PanelTop size={15} aria-hidden /> Abas
+                    </>
+                  ) : (
+                    <>
+                      {/* split é em COLUNAS → ícone de duas colunas */}
+                      <Columns2 size={15} aria-hidden /> Split
+                    </>
+                  )}
                 </button>
               ))}
             </div>
@@ -2137,7 +2234,7 @@ export default function LiveOperationPage() {
                     }}
                     title={barPinned ? 'Desafixar a barra de período' : 'Fixar a barra de período'}
                     aria-pressed={barPinned}
-                    style={{ flexShrink: 0, cursor: 'pointer' }}
+                    style={{ flexShrink: 0, cursor: 'pointer', display: 'grid', placeItems: 'center' }}
                   >
                     📌
                   </button>
@@ -2183,9 +2280,10 @@ export default function LiveOperationPage() {
             routes={plottedRoutes}
             trails={liveTrailsForMap}
             showTrails={showLiveTrail}
+            showTrailDirection={showTrailDirection}
             agentColors={agentColors}
             fitNonce={fitNonce}
-            mediaMarkers={mediaMarkers}
+            mediaMarkers={showMedia ? mediaMarkers : []}
             onMediaClick={(id) => {
               const i = mediaMsgs.findIndex((m) => m.id === id);
               if (i >= 0) setLightboxIndex(i);
@@ -2200,6 +2298,83 @@ export default function LiveOperationPage() {
             onGeofenceResize={(radiusMeters) => setEditGeo((e) => (e ? { ...e, radiusMeters } : e))}
             onGeofenceReshape={(vertices) => setEditGeo((e) => (e ? { ...e, vertices } : e))}
             focus={alertFocus}
+          />
+          <MapEffectsMenu
+            controls={[
+              { kind: 'section', id: 'sec-layers', label: 'Camadas' },
+              {
+                kind: 'toggle',
+                id: 'live-trail',
+                label: 'Trilha ao vivo',
+                title: 'Desenha o caminho do agente ao vivo, conforme ele se desloca',
+                checked: showLiveTrail,
+                onChange: setShowLiveTrail,
+              },
+              {
+                kind: 'toggle',
+                id: 'trail-direction',
+                label: 'Sentido das trilhas',
+                title: 'Setas ao longo das trilhas e rotas indicando a direção do deslocamento',
+                checked: showTrailDirection,
+                onChange: setShowTrailDirection,
+              },
+              {
+                kind: 'toggle',
+                id: 'zones',
+                label: 'Exibir zonas',
+                title: 'Exibir/ocultar as zonas (geofences) no mapa',
+                checked: showZones,
+                onChange: setShowZones,
+              },
+              {
+                kind: 'toggle',
+                id: 'media',
+                label: 'Exibir fotos',
+                title: 'Exibir/ocultar os pins de fotos geolocalizadas no mapa',
+                checked: showMedia,
+                onChange: setShowMedia,
+              },
+              { kind: 'section', id: 'sec-routes', label: 'Rotas' },
+              {
+                kind: 'toggle',
+                id: 'connect-routes',
+                label: 'Ligar rotas',
+                title: isAdmin
+                  ? 'Liga o fim de uma rota ao início da próxima (linha tracejada)'
+                  : 'Apenas administradores alteram as configurações',
+                checked: settings.connectRoutes,
+                disabled: !isAdmin,
+                onChange: (v) => updateSetting({ connectRoutes: v }),
+              },
+              {
+                kind: 'number',
+                id: 'min-route-points',
+                label: 'Pontos mínimos por rota',
+                title: isAdmin
+                  ? 'Rotas com menos pontos que isso são ocultadas (trechos insignificantes)'
+                  : 'Apenas administradores alteram as configurações',
+                value: settings.minRoutePoints,
+                min: 1,
+                max: 1000,
+                disabled: !isAdmin,
+                onChange: (v) =>
+                  updateSetting({ minRoutePoints: Math.min(1000, Math.max(1, Math.round(v))) }),
+              },
+              {
+                kind: 'number',
+                id: 'max-gap-minutes',
+                label: 'Intervalo que quebra a rota (min)',
+                title: isAdmin
+                  ? 'Sem transmissão por mais que isso, o trajeto é quebrado (evita o “pulo”)'
+                  : 'Apenas administradores alteram as configurações',
+                value: settings.maxGapMinutes,
+                min: 1,
+                max: 1440,
+                disabled: !isAdmin,
+                onChange: (v) =>
+                  updateSetting({ maxGapMinutes: Math.min(1440, Math.max(1, Math.round(v))) }),
+              },
+            ]}
           />
           </div>
             {layout === 'split' && (
@@ -2239,7 +2414,9 @@ export default function LiveOperationPage() {
                 className="thinscroll"
                 style={{ flex: 1, minWidth: 0, minHeight: 0, overflowY: 'auto', padding: 12 }}
               >
-                <strong style={{ fontSize: 15 }}>🖼 Galeria ({mediaMsgs.length})</strong>
+                <strong style={{ fontSize: 15, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                  <Images size={16} aria-hidden /> Galeria ({mediaMsgs.length})
+                </strong>
                 {mediaMsgs.length === 0 ? (
                   <div className="muted" style={{ fontSize: 13, textAlign: 'center', marginTop: 40 }}>
                     Nenhuma mídia na operação ainda.
@@ -2297,9 +2474,11 @@ export default function LiveOperationPage() {
                             background: 'linear-gradient(transparent, rgba(0,0,0,.7))',
                           }}
                         >
-                          <span>👁 {mediaStats[m.id]?.views ?? 0}</span>
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                            <Eye size={12} aria-hidden /> {mediaStats[m.id]?.views ?? 0}
+                          </span>
                           {mediaStats[m.id]?.favorited && (
-                            <span style={{ color: '#e3b341' }}>★</span>
+                            <Star size={12} color="#e3b341" fill="#e3b341" aria-hidden />
                           )}
                         </div>
                       </button>
@@ -2316,7 +2495,9 @@ export default function LiveOperationPage() {
                 <div
                   style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}
                 >
-                  <strong style={{ fontSize: 15 }}>📄 Documentos ({docMsgs.length})</strong>
+                  <strong style={{ fontSize: 15, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                  <FileText size={16} aria-hidden /> Documentos ({docMsgs.length})
+                </strong>
                   <input
                     ref={docFileRef}
                     type="file"
@@ -2365,7 +2546,7 @@ export default function LiveOperationPage() {
                           background: 'var(--panel-2)',
                         }}
                       >
-                        <span style={{ fontSize: 22 }}>{docIcon(d.mime)}</span>
+                        <span style={{ display: 'flex', flexShrink: 0 }}>{docIcon(d.mime)}</span>
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <div
                             style={{
@@ -2404,8 +2585,8 @@ export default function LiveOperationPage() {
                             ⤓ Baixar
                           </button>
                         ) : (
-                          <span className="muted" style={{ fontSize: 12 }}>
-                            🔒
+                          <span className="muted" style={{ display: 'inline-flex' }} title="Indecifrável">
+                            <Lock size={14} aria-hidden />
                           </span>
                         )}
                       </div>
@@ -2448,10 +2629,15 @@ export default function LiveOperationPage() {
                 background: 'rgba(0,0,0,.4)',
                 color: mediaStats[it.id]?.favorited ? '#e3b341' : '#fff',
                 cursor: 'pointer',
-                fontSize: 16,
+                display: 'grid',
+                placeItems: 'center',
               }}
             >
-              {mediaStats[it.id]?.favorited ? '★' : '☆'}
+              <Star
+                size={18}
+                aria-hidden
+                fill={mediaStats[it.id]?.favorited ? '#e3b341' : 'none'}
+              />
             </button>
           )}
           extraInfo={(it) => (
@@ -2459,8 +2645,11 @@ export default function LiveOperationPage() {
               style={{ display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: 12 }}
             >
               <span className="muted">Visualizações · Favoritos</span>
-              <span style={{ color: 'var(--text)' }}>
-                👁 {mediaStats[it.id]?.views ?? 0} · ★ {mediaStats[it.id]?.favorites ?? 0}
+              <span
+                style={{ color: 'var(--text)', display: 'inline-flex', alignItems: 'center', gap: 6 }}
+              >
+                <Eye size={13} aria-hidden /> {mediaStats[it.id]?.views ?? 0} ·{' '}
+                <Star size={13} aria-hidden /> {mediaStats[it.id]?.favorites ?? 0}
               </span>
             </div>
           )}

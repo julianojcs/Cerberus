@@ -24,6 +24,30 @@ function esc(s: string): string {
 }
 
 /**
+ * Seta (imagem SDF) para o efeito "Sentido das trilhas". Desenhada apontando para
+ * +x (leste); com `symbol-placement: 'line'` o MapLibre a rotaciona para seguir a
+ * direção da linha — e como as coordenadas estão em ordem cronológica, isso aponta
+ * no sentido do deslocamento. SDF (`{ sdf: true }`) permite recolorir por dado
+ * (`icon-color`), fazendo cada seta sair na cor do agente.
+ */
+function makeDirectionArrow(size = 40): ImageData {
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return new ImageData(size, size);
+  // No modo SDF só o canal alfa importa; a cor de preenchimento é irrelevante.
+  ctx.fillStyle = '#000';
+  ctx.beginPath();
+  ctx.moveTo(size * 0.3, size * 0.2);
+  ctx.lineTo(size * 0.82, size * 0.5);
+  ctx.lineTo(size * 0.3, size * 0.8);
+  ctx.closePath();
+  ctx.fill();
+  return ctx.getImageData(0, 0, size, size);
+}
+
+/**
  * Trilha por agente: LISTA DE SEGMENTOS (cada um em ordem cronológica, [lng, lat]).
  * A quebra em segmentos evita ligar por uma reta dois pontos separados por um gap
  * de transmissão (o "pulo" que não aconteceu de verdade).
@@ -223,6 +247,7 @@ export function LiveMap({
   agents,
   trails = {},
   showTrails = true,
+  showTrailDirection = false,
   routes = [],
   agentColors = {},
   mediaMarkers = [],
@@ -241,6 +266,8 @@ export function LiveMap({
   agents: Record<string, AgentPoint>;
   trails?: AgentTrails;
   showTrails?: boolean;
+  /** Efeito "Sentido das trilhas": setas ao longo das trilhas e rotas. */
+  showTrailDirection?: boolean;
   routes?: PlottedRoute[];
   agentColors?: Record<string, string>;
   mediaMarkers?: MediaMarker[];
@@ -296,6 +323,8 @@ export function LiveMap({
   trailsRef.current = trails;
   const showTrailsRef = useRef(showTrails);
   showTrailsRef.current = showTrails;
+  const showTrailDirectionRef = useRef(showTrailDirection);
+  showTrailDirectionRef.current = showTrailDirection;
   const routesRef = useRef<PlottedRoute[]>(routes);
   routesRef.current = routes;
   const agentColorsRef = useRef<Record<string, string>>(agentColors);
@@ -327,6 +356,10 @@ export function LiveMap({
 
     // As camadas de dados só podem ser adicionadas após o estilo carregar.
     map.on('load', () => {
+      // Seta reutilizada pelo efeito "Sentido das trilhas" (SDF → recolorível).
+      if (!map.hasImage('trail-arrow')) {
+        map.addImage('trail-arrow', makeDirectionArrow(), { sdf: true });
+      }
       // Geofences (embaixo): preenchimento + contorno.
       map.addSource('geofences', {
         type: 'geojson',
@@ -388,6 +421,37 @@ export function LiveMap({
           'line-opacity': 0.85,
           'line-dasharray': [2, 2],
         },
+      });
+      // Efeito "Sentido das trilhas": setas ao longo das linhas indicando a direção
+      // do deslocamento (por cima das trilhas e das rotas). Uma camada por fonte;
+      // `icon-color` herda a cor do agente. Visibilidade inicial vem do ref.
+      const directionVisibility: 'visible' | 'none' = showTrailDirectionRef.current
+        ? 'visible'
+        : 'none';
+      const directionLayout = {
+        visibility: directionVisibility,
+        'symbol-placement': 'line' as const,
+        'symbol-spacing': 110,
+        'icon-image': 'trail-arrow',
+        // Fonte 40px × 0.75 ≈ 30px — mesmo porte das setas de cruzamento de zona.
+        'icon-size': 0.75,
+        'icon-rotation-alignment': 'map' as const,
+        'icon-allow-overlap': true,
+        'icon-ignore-placement': true,
+      };
+      map.addLayer({
+        id: 'trails-direction',
+        type: 'symbol',
+        source: 'trails',
+        layout: directionLayout,
+        paint: { 'icon-color': ['get', 'color'], 'icon-opacity': 0.9 },
+      });
+      map.addLayer({
+        id: 'agent-routes-direction',
+        type: 'symbol',
+        source: 'agent-routes',
+        layout: directionLayout,
+        paint: { 'icon-color': ['get', 'color'] },
       });
       styleReadyRef.current = true;
     });
@@ -482,6 +546,15 @@ export function LiveMap({
     if (!map || !styleReadyRef.current) return;
     map.setLayoutProperty('trails-line', 'visibility', showTrails ? 'visible' : 'none');
   }, [showTrails]);
+
+  // Liga/desliga o efeito "Sentido das trilhas" (setas nas trilhas e nas rotas).
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !styleReadyRef.current) return;
+    const v = showTrailDirection ? 'visible' : 'none';
+    map.setLayoutProperty('trails-direction', 'visibility', v);
+    map.setLayoutProperty('agent-routes-direction', 'visibility', v);
+  }, [showTrailDirection]);
 
   // Sincroniza marcadores de mídia (fotos geolocalizadas) — pin de câmera clicável.
   useEffect(() => {

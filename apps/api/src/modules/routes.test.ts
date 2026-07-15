@@ -1043,6 +1043,46 @@ describe('geofencing + alertas', () => {
     expect(mine).toEqual(expect.arrayContaining(['enter', 'exit']));
   });
 
+  it('zona criada em volta de agente JÁ dentro semeia pertencimento (sem enter falso)', async () => {
+    const { Position, GeofenceMembership } = await import('../models/index.js');
+    const center = { lng: -43.3, lat: -19.3 };
+    // Última posição conhecida do agente: parado DENTRO da futura zona.
+    await Position.create({
+      operationId,
+      agentId: 'AG-INSIDE',
+      location: { type: 'Point', coordinates: [center.lng, center.lat] },
+      capturedAt: new Date('2026-07-13T09:00:00Z'),
+      receivedAt: new Date(),
+    });
+    const create = await app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/geofences`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'ZonaEnvolvente', lng: center.lng, lat: center.lat, radiusMeters: 150, color: 'teal' },
+    });
+    expect(create.statusCode).toBe(201);
+    const gid = create.json().id as string;
+    // Pertencimento semeado como "dentro" → a próxima posição ao vivo não vira enter.
+    const mem = await GeofenceMembership.findOne({
+      operationId,
+      agentId: 'AG-INSIDE',
+      geofenceId: gid,
+    }).lean();
+    expect(mem?.inside).toBe(true);
+    // A criação não gera alertas por si; nenhum enter falso para o agente já dentro.
+    const alerts = await app.inject({
+      method: 'GET',
+      url: `/operations/${operationId}/alerts`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const enters = (
+      alerts.json() as Array<{ agentId: string; geofenceName: string; type: string }>
+    ).filter(
+      (a) => a.agentId === 'AG-INSIDE' && a.geofenceName === 'ZonaEnvolvente' && a.type === 'enter',
+    );
+    expect(enters).toHaveLength(0);
+  });
+
   it('agente (não-admin) não recalcula alertas (403)', async () => {
     const res = await app.inject({
       method: 'POST',
