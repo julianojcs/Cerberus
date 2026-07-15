@@ -59,7 +59,6 @@ import {
   type GeofenceCircle,
   type PlottedRoute,
 } from '@/components/LiveMap';
-import { Toggle } from '@/components/Toggle';
 import { AuthImage } from '@/components/AuthImage';
 import { MediaViewer } from '@/components/MediaViewer';
 import { ResizableSidebar } from '@/components/ResizableSidebar';
@@ -214,6 +213,8 @@ export default function LiveOperationPage() {
   // Exibir fotos (pins de mídia geolocalizada) no mapa — menu de efeitos.
   const [showMedia, setShowMedia] = useState(true);
   const seededTrailRef = useRef(false);
+  // Seleção inicial das rotas: marca todos os agentes por padrão na 1ª carga (uma vez).
+  const seededSelectionRef = useRef(false);
   // Cor por agente: token auto-atribuído + override escolhido pelo admin (localStorage).
   const [agentColorTokens, setAgentColorTokens] = useState<Record<string, string>>({});
   const [agentColorOverrides, setAgentColorOverrides] = useState<Record<string, string>>({});
@@ -705,6 +706,16 @@ export default function LiveOperationPage() {
     }
     return out;
   }, [routes, settings.minRoutePoints]);
+
+  // Marca os agentes por padrão: seleciona TODAS as rotas visíveis na primeira carga
+  // (uma vez). A partir daí, respeita as escolhas do operador (marcar/desmarcar).
+  useEffect(() => {
+    if (seededSelectionRef.current) return;
+    const allIds = Object.values(visibleRoutes).flatMap((rs) => rs.map((r) => r.id));
+    if (allIds.length === 0) return;
+    seededSelectionRef.current = true;
+    setSelectedRouteIds(new Set(allIds));
+  }, [visibleRoutes]);
 
   // Rotas efetivamente plotadas: selecionadas E dentro do período. Com a opção
   // "ligar rotas", adiciona conectores tracejados entre rotas consecutivas.
@@ -1471,12 +1482,6 @@ export default function LiveOperationPage() {
             >
               <strong style={{ fontSize: 14 }}>Zonas ({geofences.length})</strong>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <Toggle
-                  checked={showZones}
-                  onChange={setShowZones}
-                  label="Exibir"
-                  title="Exibir/ocultar as zonas no mapa"
-                />
                 <button
                   type="button"
                   onClick={() => {
@@ -1872,12 +1877,6 @@ export default function LiveOperationPage() {
             }}
           >
             <h3 style={{ margin: 0 }}>Agentes ({agentList.length})</h3>
-            <Toggle
-              checked={showLiveTrail}
-              onChange={setLiveTrail}
-              label="Trilha ao vivo"
-              title="Desenha o caminho do agente ao vivo, conforme ele se desloca"
-            />
           </div>
           <p className="muted" style={{ fontSize: 12, margin: '8px 0' }}>
             A <strong>trilha ao vivo</strong> (cor do agente) cresce em tempo real durante o
