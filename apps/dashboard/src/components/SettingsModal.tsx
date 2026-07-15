@@ -152,7 +152,11 @@ export function SettingsModal({
     try {
       const ok = await setCloudBackup(me.id, on);
       if (on && !ok) {
-        setPortMsg({ ok: false, text: 'Não foi possível subir a cópia (há chave neste dispositivo?).' });
+        // `false` = não há chave local (distinto de erro de servidor, que é lançado).
+        setPortMsg({
+          ok: false,
+          text: 'Nenhuma chave neste dispositivo para subir. Desbloqueie ou crie a chave primeiro.',
+        });
         return;
       }
       setCloudOn(on);
@@ -161,6 +165,12 @@ export function SettingsModal({
         text: on
           ? 'Cópia na nuvem ligada — o blob cifrado sobe a cada troca de chave.'
           : 'Cópia na nuvem desligada e removida do servidor.',
+      });
+    } catch {
+      // Erro de rede/servidor (ex.: API fora do ar / rota ainda não deployada).
+      setPortMsg({
+        ok: false,
+        text: 'Falha ao contatar o servidor. Verifique a conexão e tente novamente.',
       });
     } finally {
       setCloudBusy(false);

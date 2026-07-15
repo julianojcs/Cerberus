@@ -284,16 +284,16 @@ export function isCloudBackupEnabled(userId: string): boolean {
   return localStorage.getItem(`${CLOUD_PREFIX}${userId}`) === '1';
 }
 
-/** Sobe o blob cifrado atual para a nuvem (servidor guarda opaco). `false` se sem chave. */
+/**
+ * Sobe o blob cifrado atual para a nuvem (servidor guarda opaco). Devolve `false` se
+ * NÃO há chave local para subir; um erro de rede/servidor é PROPAGADO (não vira
+ * "sem chave") para o chamador poder distinguir as duas falhas.
+ */
 export async function backupToCloud(userId: string): Promise<boolean> {
   const raw = localStorage.getItem(encKey(userId));
   if (!raw) return false;
-  try {
-    await api.putE2eeBackup(JSON.parse(raw) as EncBlob);
-    return true;
-  } catch {
-    return false;
-  }
+  await api.putE2eeBackup(JSON.parse(raw) as EncBlob); // deixa o erro de API propagar
+  return true;
 }
 
 /** Liga/desliga a cópia na nuvem. Ligar sobe o blob atual; desligar apaga o do servidor. */
