@@ -2249,6 +2249,18 @@ export default function LiveOperationPage() {
                   <span className="muted" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
                     Período
                   </span>
+                  <span
+                    style={{
+                      fontSize: 11,
+                      whiteSpace: 'nowrap',
+                      fontVariantNumeric: 'tabular-nums',
+                      minWidth: 78,
+                      textAlign: 'right',
+                    }}
+                    title="Início do período"
+                  >
+                    {fmtDateTime(windowStartMs)}
+                  </span>
                   <PeriodRange
                     min={rangeMin}
                     max={rangeMax}
@@ -2262,6 +2274,17 @@ export default function LiveOperationPage() {
                       setLiveEnd(e >= nowTs - 60_000);
                     }}
                   />
+                  <span
+                    style={{
+                      fontSize: 11,
+                      whiteSpace: 'nowrap',
+                      fontVariantNumeric: 'tabular-nums',
+                      minWidth: 78,
+                    }}
+                    title="Fim do período"
+                  >
+                    {fmtDateTime(windowEndMs)}
+                  </span>
                   <button
                     type="button"
                     className="pinbtn"
