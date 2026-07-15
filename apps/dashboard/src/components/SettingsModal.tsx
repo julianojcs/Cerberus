@@ -3,7 +3,7 @@
 import { useRef, useState } from 'react';
 import { api, type Settings } from '@/lib/api';
 import { getUser } from '@/lib/auth';
-import { Settings as SettingsIcon, Key, X, Download, Upload, Cloud } from 'lucide-react';
+import { Settings as SettingsIcon, Key, X, Download, Upload, Cloud, CloudDownload } from 'lucide-react';
 import {
   keyState,
   rotateKey,
@@ -11,6 +11,7 @@ import {
   importBlob,
   isCloudBackupEnabled,
   setCloudBackup,
+  restoreFromCloud,
 } from '@/lib/e2ee';
 import { Toggle } from './Toggle';
 
@@ -125,6 +126,23 @@ export function SettingsModal({
       ok: true,
       text: 'Chave importada. Recarregue a página e desbloqueie com a senha dela.',
     });
+  }
+
+  async function doRestoreCloud() {
+    if (!me || cloudBusy) return;
+    setCloudBusy(true);
+    setPortMsg(null);
+    try {
+      const ok = await restoreFromCloud(me.id);
+      setPortMsg(
+        ok
+          ? { ok: true, text: 'Chave restaurada da nuvem. Recarregue a página e desbloqueie com a senha dela.' }
+          : { ok: false, text: 'Nenhuma cópia na nuvem encontrada para esta conta.' },
+      );
+      if (ok) setCloudOn(true);
+    } finally {
+      setCloudBusy(false);
+    }
   }
 
   async function toggleCloud(on: boolean) {
@@ -403,6 +421,15 @@ export function SettingsModal({
                 style={portBtn}
               >
                 <Upload size={14} aria-hidden /> Importar
+              </button>
+              <button
+                type="button"
+                onClick={doRestoreCloud}
+                disabled={cloudBusy}
+                title="Baixa a cópia cifrada da nuvem e substitui a chave deste dispositivo"
+                style={{ ...portBtn, cursor: cloudBusy ? 'progress' : 'pointer', opacity: cloudBusy ? 0.6 : 1 }}
+              >
+                <CloudDownload size={14} aria-hidden /> Restaurar da nuvem
               </button>
               <input
                 ref={importRef}
