@@ -16,6 +16,7 @@ import type { Session } from '../services/auth';
 import { getSecretKey } from '../services/keys';
 import { fetchMessageHistory, sendTeamMessage, sendText } from '../services/messages';
 import { fetchMyTeams, type MyTeam } from '../services/teams';
+import { fetchOperationName } from '../services/operations';
 import {
   connectMqtt,
   disconnectMqtt,
@@ -91,6 +92,8 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
   const [myTeams, setMyTeams] = useState<MyTeam[]>([]);
   // Destino do composer: `null` = operação (central); MyTeam = a equipe escolhida.
   const [composeTeam, setComposeTeam] = useState<MyTeam | null>(null);
+  // Nome da operação (cabeçalho) — o token só traz o id; buscamos o nome.
+  const [operationName, setOperationName] = useState<string | null>(null);
 
   useEffect(() => {
     connectMqtt(session.token, agentId);
@@ -125,6 +128,21 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
       }),
     [],
   );
+
+  // Nome da operação para o cabeçalho (o token só traz o id).
+  useEffect(() => {
+    if (!operationId) {
+      setOperationName(null);
+      return;
+    }
+    let cancelled = false;
+    void fetchOperationName(session, operationId).then((n) => {
+      if (!cancelled) setOperationName(n);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [operationId, session]);
 
   // Descobre as equipes do agente (para assinar os tópicos de equipe + enviar a elas).
   useEffect(() => {
@@ -288,7 +306,9 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
         <Text style={styles.brand}>CERBERUS</Text>
         <Text style={styles.agent}>{session.name}</Text>
         <Text style={styles.meta}>Agente: {agentId}</Text>
-        <Text style={styles.meta}>Operação: {operationId ?? 'nenhuma atribuída'}</Text>
+        <Text style={styles.meta}>
+          Operação: {operationName ?? operationId ?? 'nenhuma atribuída'}
+        </Text>
 
         <View style={styles.card}>
           <View style={styles.row}>
