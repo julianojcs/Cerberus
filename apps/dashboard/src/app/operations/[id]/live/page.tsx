@@ -2314,8 +2314,12 @@ export default function LiveOperationPage() {
                 kind: 'toggle',
                 id: 'trail-direction',
                 label: 'Sentido das trilhas',
-                title: 'Setas ao longo das trilhas e rotas indicando a direção do deslocamento',
+                title: showLiveTrail
+                  ? 'Setas ao longo das trilhas e rotas indicando a direção do deslocamento'
+                  : 'Ative a "Trilha ao vivo" para usar o sentido das trilhas',
                 checked: showTrailDirection,
+                // Sem trilha ao vivo não há trilha para indicar sentido — desabilita.
+                disabled: !showLiveTrail,
                 onChange: setShowTrailDirection,
               },
               {
