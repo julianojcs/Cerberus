@@ -206,9 +206,29 @@ export async function geofenceRoutes(app: FastifyInstance): Promise<void> {
         update.center = { type: 'Point', coordinates: [body.data.lng, body.data.lat] };
       }
 
+      // Ao trocar de forma, REMOVE a geometria que não pertence à nova forma — senão
+      // sobra lixo (ex.: o `radiusMeters` do círculo preso num polígono convertido, que
+      // engana o render do alerta no dashboard). Prevalece sobre um $set do mesmo campo.
+      const unset: Record<string, ''> = {};
+      if (body.data.shape !== undefined) {
+        const geomByShape: Record<string, string[]> = {
+          circle: ['radiusMeters'],
+          rectangle: ['widthMeters', 'heightMeters', 'rotationDeg'],
+          polygon: ['vertices'],
+        };
+        const allGeom = ['radiusMeters', 'widthMeters', 'heightMeters', 'rotationDeg', 'vertices'];
+        const kept = new Set(geomByShape[body.data.shape] ?? []);
+        for (const f of allGeom) {
+          if (!kept.has(f)) {
+            delete update[f]; // não faz sentido setar geometria de outra forma
+            unset[f] = '';
+          }
+        }
+      }
+
       const g = await Geofence.findOneAndUpdate(
         { _id: gid, operationId: id },
-        { $set: update },
+        Object.keys(unset).length ? { $set: update, $unset: unset } : { $set: update },
         { new: true },
       );
       if (!g) return reply.code(404).send({ error: 'Geofence não encontrada' });
