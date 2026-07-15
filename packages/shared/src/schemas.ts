@@ -70,6 +70,20 @@ export const publicKeyRegistrationSchema = z.object({
 export type PublicKeyRegistration = z.infer<typeof publicKeyRegistrationSchema>;
 
 /**
+ * Backup da chave E2EE cifrado NO CLIENTE (Fase 5e-3). O que trafega/persiste é só o
+ * blob AES-GCM da(s) secreta(s), embrulhado pela passphrase do operador (PBKDF2). O
+ * servidor guarda opaco — nunca vê a chave nem a senha. Restaurável em outro
+ * dispositivo/origem desbloqueando localmente com a mesma senha.
+ */
+export const e2eeKeyBackupSchema = z.object({
+  v: z.literal(1),
+  salt: z.string().min(1).max(64), // base64
+  iv: z.string().min(1).max(64), // base64
+  ct: z.string().min(1).max(8192), // base64 (AES-GCM da lista de secretas)
+});
+export type E2eeKeyBackup = z.infer<typeof e2eeKeyBackupSchema>;
+
+/**
  * Entrada do diretório de chaves de uma operação. `id` é o identificador usado
  * como destinatário no envelope E2EE (agentId do agente, ou userId do admin).
  */

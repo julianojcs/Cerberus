@@ -2510,3 +2510,61 @@ describe('rotação de chave E2EE (Fase 5e-2)', () => {
     expect(await revokedOf()).toBe(false);
   });
 });
+
+describe('backup de chave E2EE na nuvem (Fase 5e-3)', () => {
+  const blob = { v: 1 as const, salt: 'c2FsdA==', iv: 'aXY=', ct: 'Y2lwaGVydGV4dA==' };
+  const auth = (t: string) => ({ authorization: `Bearer ${t}` });
+
+  it('sem backup 404; sem auth 401; corpo inválido 400; PUT guarda; GET devolve; DELETE remove', async () => {
+    expect(
+      (await app.inject({ method: 'GET', url: '/auth/e2ee-backup', headers: auth(agentToken) }))
+        .statusCode,
+    ).toBe(404);
+    expect((await app.inject({ method: 'GET', url: '/auth/e2ee-backup' })).statusCode).toBe(401);
+    const bad = await app.inject({
+      method: 'PUT',
+      url: '/auth/e2ee-backup',
+      headers: auth(agentToken),
+      payload: { v: 1, salt: 'x' }, // faltam iv/ct
+    });
+    expect(bad.statusCode).toBe(400);
+    const put = await app.inject({
+      method: 'PUT',
+      url: '/auth/e2ee-backup',
+      headers: auth(agentToken),
+      payload: blob,
+    });
+    expect(put.statusCode).toBe(204);
+    const got = await app.inject({
+      method: 'GET',
+      url: '/auth/e2ee-backup',
+      headers: auth(agentToken),
+    });
+    expect(got.statusCode).toBe(200);
+    expect(got.json()).toMatchObject(blob);
+    const del = await app.inject({
+      method: 'DELETE',
+      url: '/auth/e2ee-backup',
+      headers: auth(agentToken),
+    });
+    expect(del.statusCode).toBe(204);
+    expect(
+      (await app.inject({ method: 'GET', url: '/auth/e2ee-backup', headers: auth(agentToken) }))
+        .statusCode,
+    ).toBe(404);
+  });
+
+  it('isolamento: o backup de um usuário não vaza para outro (escopo por token)', async () => {
+    await app.inject({ method: 'PUT', url: '/auth/e2ee-backup', headers: auth(token), payload: blob });
+    // o agente (outro usuário) vê o SEU backup (404, não tem) — nunca o do admin.
+    expect(
+      (await app.inject({ method: 'GET', url: '/auth/e2ee-backup', headers: auth(agentToken) }))
+        .statusCode,
+    ).toBe(404);
+    // o admin continua vendo o dele.
+    expect(
+      (await app.inject({ method: 'GET', url: '/auth/e2ee-backup', headers: auth(token) })).statusCode,
+    ).toBe(200);
+    await app.inject({ method: 'DELETE', url: '/auth/e2ee-backup', headers: auth(token) });
+  });
+});

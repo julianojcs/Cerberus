@@ -32,6 +32,18 @@ const userSchema = new Schema(
     publicKeyHistory: { type: [String], default: [] },
     /** Fase 5e-2 — chave atual revogada (admin/SA): o usuário precisa rotacionar. */
     keyRevoked: { type: Boolean, default: false },
+    /**
+     * Fase 5e-3 — backup da chave E2EE cifrado NO CLIENTE (opt-in). Guardamos apenas o
+     * blob opaco (AES-GCM da(s) secreta(s), embrulhado pela passphrase via PBKDF2); o
+     * servidor NUNCA vê a chave nem a senha. Restaura em outro dispositivo/origem.
+     */
+    e2eeBackup: {
+      v: { type: Number },
+      salt: { type: String },
+      iv: { type: String },
+      ct: { type: String },
+      updatedAt: { type: Date },
+    },
     /** Conta bloqueada pelo SA — barra o login e revoga as sessões existentes. */
     blocked: { type: Boolean, default: false },
   },

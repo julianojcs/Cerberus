@@ -29,6 +29,7 @@ function notifyUnlock(): void {
 
 const ENC_PREFIX = 'cerberus_e2ee_enc:'; // blob cifrado (novo)
 const SK_PREFIX = 'cerberus_e2ee_sk:'; // texto claro LEGADO (fonte da migração)
+const CLOUD_PREFIX = 'cerberus_e2ee_cloud:'; // opt-in de cópia na nuvem, por usuário/origem
 
 const PBKDF2_ITERATIONS = 210_000;
 
@@ -176,6 +177,8 @@ async function persistSecrets(userId: string, keys: string[], passphrase: string
   const blob = await encryptSecret(JSON.stringify(keys), passphrase);
   localStorage.setItem(encKey(userId), JSON.stringify(blob));
   unlocked.set(userId, keys);
+  // Fase 5e-3 — se a cópia na nuvem está ligada, re-sobe o blob (create/rotação/migração).
+  if (isCloudBackupEnabled(userId)) void api.putE2eeBackup(blob).catch(() => {});
 }
 
 /** Desbloqueia a chave existente (returning user). `true` se a passphrase abriu. */
@@ -241,4 +244,91 @@ export function clearKeys(userId: string): void {
   unlocked.delete(userId);
   localStorage.removeItem(encKey(userId));
   localStorage.removeItem(skKey(userId));
+}
+
+// ---------------- Fase 5e-3: portabilidade da chave ----------------
+// Export/import de arquivo + backup na nuvem. Em TODOS os casos o que trafega é só o
+// BLOB cifrado pela passphrase — a secreta em claro nunca sai do dispositivo.
+
+/** Exporta o blob cifrado (string JSON) para arquivo/transferência. `null` se sem chave. */
+export function exportBlob(userId: string): string | null {
+  if (typeof window === 'undefined') return null;
+  return localStorage.getItem(encKey(userId));
+}
+
+/**
+ * Importa um blob cifrado (de arquivo / outra origem) para o localStorage. Valida a
+ * forma; depois é preciso DESBLOQUEAR com a passphrase. `false` se inválido.
+ */
+export function importBlob(userId: string, json: string): boolean {
+  try {
+    const b = JSON.parse(json) as Partial<EncBlob>;
+    if (
+      b.v !== 1 ||
+      typeof b.salt !== 'string' ||
+      typeof b.iv !== 'string' ||
+      typeof b.ct !== 'string'
+    ) {
+      return false;
+    }
+    localStorage.setItem(encKey(userId), JSON.stringify({ v: 1, salt: b.salt, iv: b.iv, ct: b.ct }));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** A cópia na nuvem está ligada NESTA origem/dispositivo? (opt-in, por usuário). */
+export function isCloudBackupEnabled(userId: string): boolean {
+  if (typeof window === 'undefined') return false;
+  return localStorage.getItem(`${CLOUD_PREFIX}${userId}`) === '1';
+}
+
+/** Sobe o blob cifrado atual para a nuvem (servidor guarda opaco). `false` se sem chave. */
+export async function backupToCloud(userId: string): Promise<boolean> {
+  const raw = localStorage.getItem(encKey(userId));
+  if (!raw) return false;
+  try {
+    await api.putE2eeBackup(JSON.parse(raw) as EncBlob);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Liga/desliga a cópia na nuvem. Ligar sobe o blob atual; desligar apaga o do servidor. */
+export async function setCloudBackup(userId: string, on: boolean): Promise<boolean> {
+  if (on) {
+    const ok = await backupToCloud(userId);
+    if (ok) localStorage.setItem(`${CLOUD_PREFIX}${userId}`, '1');
+    return ok;
+  }
+  localStorage.removeItem(`${CLOUD_PREFIX}${userId}`);
+  await api.deleteE2eeBackup().catch(() => {});
+  return true;
+}
+
+/** Existe backup na nuvem para o usuário logado? (404/erro ⇒ false). */
+export async function cloudBackupExists(): Promise<boolean> {
+  try {
+    await api.getE2eeBackup();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Restaura o blob da nuvem para ESTA origem (grava no localStorage) e liga o opt-in
+ * aqui. Depois é preciso DESBLOQUEAR com a passphrase. `false` se não houver backup.
+ */
+export async function restoreFromCloud(userId: string): Promise<boolean> {
+  try {
+    const b = await api.getE2eeBackup();
+    localStorage.setItem(encKey(userId), JSON.stringify({ v: 1, salt: b.salt, iv: b.iv, ct: b.ct }));
+    localStorage.setItem(`${CLOUD_PREFIX}${userId}`, '1');
+    return true;
+  } catch {
+    return false;
+  }
 }
