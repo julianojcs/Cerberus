@@ -180,6 +180,44 @@ function fmtDateTime(ms: number): string {
   }).format(new Date(ms));
 }
 
+/** Data e hora em partes (para os badges das extremidades em DUAS linhas). */
+function fmtDateParts(ms: number): { date: string; time: string } {
+  const d = new Date(ms);
+  return {
+    date: new Intl.DateTimeFormat('pt-BR', {
+      timeZone: 'America/Sao_Paulo',
+      day: '2-digit',
+      month: '2-digit',
+    }).format(d),
+    time: new Intl.DateTimeFormat('pt-BR', {
+      timeZone: 'America/Sao_Paulo',
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(d),
+  };
+}
+
+/** Badge de extremidade: data em cima, hora embaixo. */
+function EdgeStamp({ ms, title, align }: { ms: number; title: string; align: 'left' | 'right' }) {
+  const { date, time } = fmtDateParts(ms);
+  return (
+    <span
+      style={{
+        fontSize: 11,
+        whiteSpace: 'nowrap',
+        fontVariantNumeric: 'tabular-nums',
+        minWidth: 44,
+        textAlign: align,
+        lineHeight: 1.15,
+      }}
+      title={title}
+    >
+      <span style={{ display: 'block' }}>{date}</span>
+      <span style={{ display: 'block' }}>{time}</span>
+    </span>
+  );
+}
+
 export default function LiveOperationPage() {
   const router = useRouter();
   const params = useParams<{ id: string }>();
@@ -2252,18 +2290,7 @@ export default function LiveOperationPage() {
                   <span className="muted" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
                     Período
                   </span>
-                  <span
-                    style={{
-                      fontSize: 11,
-                      whiteSpace: 'nowrap',
-                      fontVariantNumeric: 'tabular-nums',
-                      minWidth: 78,
-                      textAlign: 'right',
-                    }}
-                    title="Início da faixa disponível"
-                  >
-                    {fmtDateTime(rangeMin)}
-                  </span>
+                  <EdgeStamp ms={rangeMin} title="Início da faixa disponível" align="right" />
                   <PeriodRange
                     min={rangeMin}
                     max={rangeMax}
@@ -2277,17 +2304,7 @@ export default function LiveOperationPage() {
                       setLiveEnd(e >= nowTs - 60_000);
                     }}
                   />
-                  <span
-                    style={{
-                      fontSize: 11,
-                      whiteSpace: 'nowrap',
-                      fontVariantNumeric: 'tabular-nums',
-                      minWidth: 78,
-                    }}
-                    title="Fim da faixa (agora)"
-                  >
-                    {fmtDateTime(rangeMax)}
-                  </span>
+                  <EdgeStamp ms={rangeMax} title="Fim da faixa (agora)" align="left" />
                   <button
                     type="button"
                     className="pinbtn"
