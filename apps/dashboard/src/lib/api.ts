@@ -1,6 +1,7 @@
 import type {
   AuditLogEntry,
   DeviceBlockInfo,
+  E2eeKeyBackup,
   KeyDirectoryEntry,
   LoginResponse,
   Operation,
@@ -172,6 +173,11 @@ export const api = {
     }),
   operationKeys: (operationId: string) =>
     request<KeyDirectoryEntry[]>(`/operations/${operationId}/keys`),
+  // Fase 5e-3 — backup da chave E2EE cifrado no cliente (o servidor guarda opaco).
+  putE2eeBackup: (blob: E2eeKeyBackup) =>
+    request<void>('/auth/e2ee-backup', { method: 'PUT', body: JSON.stringify(blob) }),
+  getE2eeBackup: () => request<E2eeKeyBackup>('/auth/e2ee-backup'),
+  deleteE2eeBackup: () => request<void>('/auth/e2ee-backup', { method: 'DELETE' }),
   latestPositions: (operationId: string) =>
     request<LatestPosition[]>(`/operations/${operationId}/positions/latest`),
   // Histórico da operação (trilha). Vem ordenado do mais recente para o mais antigo.

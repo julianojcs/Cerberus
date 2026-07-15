@@ -1,10 +1,17 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { api, type Settings } from '@/lib/api';
 import { getUser } from '@/lib/auth';
-import { Settings as SettingsIcon, Key, X } from 'lucide-react';
-import { keyState, rotateKey } from '@/lib/e2ee';
+import { Settings as SettingsIcon, Key, X, Download, Upload, Cloud } from 'lucide-react';
+import {
+  keyState,
+  rotateKey,
+  exportBlob,
+  importBlob,
+  isCloudBackupEnabled,
+  setCloudBackup,
+} from '@/lib/e2ee';
 import { Toggle } from './Toggle';
 
 /**
@@ -29,6 +36,11 @@ export function SettingsModal({
   const [rotatePass, setRotatePass] = useState('');
   const [rotating, setRotating] = useState(false);
   const [rotateMsg, setRotateMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  // Fase 5e-3 — portabilidade da chave: export/import (arquivo) + cópia na nuvem (opt-in).
+  const [cloudOn, setCloudOn] = useState(me ? isCloudBackupEnabled(me.id) : false);
+  const [cloudBusy, setCloudBusy] = useState(false);
+  const [portMsg, setPortMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const importRef = useRef<HTMLInputElement>(null);
   const [minRoutePoints, setMinRoutePoints] = useState(String(initial.minRoutePoints));
   const [connectRoutes, setConnectRoutes] = useState(initial.connectRoutes);
   const [maxGapMinutes, setMaxGapMinutes] = useState(String(initial.maxGapMinutes));
@@ -85,6 +97,58 @@ export function SettingsModal({
     }
   }
 
+  // Exporta o blob CIFRADO (a secreta em claro nunca sai) para um arquivo .txt.
+  function doExport() {
+    if (!me) return;
+    setPortMsg(null);
+    const blob = exportBlob(me.id);
+    if (!blob) return setPortMsg({ ok: false, text: 'Nenhuma chave neste dispositivo para exportar.' });
+    const url = URL.createObjectURL(new Blob([blob], { type: 'application/json' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `cerberus-e2ee-${me.username}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    setPortMsg({ ok: true, text: 'Chave exportada (cifrada). Guarde o arquivo e a senha em local seguro.' });
+  }
+
+  async function doImport(file: File) {
+    if (!me) return;
+    setPortMsg(null);
+    const text = await file.text();
+    if (!importBlob(me.id, text)) {
+      return setPortMsg({ ok: false, text: 'Arquivo inválido — não é uma chave do Cerberus.' });
+    }
+    setPortMsg({
+      ok: true,
+      text: 'Chave importada. Recarregue a página e desbloqueie com a senha dela.',
+    });
+  }
+
+  async function toggleCloud(on: boolean) {
+    if (!me || cloudBusy) return;
+    setCloudBusy(true);
+    setPortMsg(null);
+    try {
+      const ok = await setCloudBackup(me.id, on);
+      if (on && !ok) {
+        setPortMsg({ ok: false, text: 'Não foi possível subir a cópia (há chave neste dispositivo?).' });
+        return;
+      }
+      setCloudOn(on);
+      setPortMsg({
+        ok: true,
+        text: on
+          ? 'Cópia na nuvem ligada — o blob cifrado sobe a cada troca de chave.'
+          : 'Cópia na nuvem desligada e removida do servidor.',
+      });
+    } finally {
+      setCloudBusy(false);
+    }
+  }
+
   // `colorScheme: 'dark'` faz o navegador desenhar as setinhas do spinner claras
   // sobre fundo escuro (em vez do quadradinho branco padrão).
   const numStyle = (ok: boolean): React.CSSProperties => ({
@@ -106,6 +170,15 @@ export function SettingsModal({
     border: '1px solid var(--border)',
     background: 'transparent',
     color: 'var(--text, #e6edf3)',
+  };
+  const portBtn: React.CSSProperties = {
+    ...ghostBtn,
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: 6,
+    padding: '8px 12px',
+    fontSize: 13,
   };
 
   return (
@@ -307,6 +380,72 @@ export function SettingsModal({
               {rotateMsg.text}
             </div>
           )}
+
+          {/* Fase 5e-3 — portabilidade: mover a chave entre dispositivos. Sempre o blob
+              CIFRADO pela senha; a chave em claro nunca sai do navegador. */}
+          <div style={{ marginTop: 14, display: 'grid', gap: 8 }}>
+            <div className="muted" style={{ fontSize: 12 }}>
+              Portabilidade da chave — o que sai é sempre o blob <strong>cifrado</strong> pela sua
+              senha; a chave em claro nunca deixa este dispositivo.
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                onClick={doExport}
+                disabled={!canRotate}
+                style={{ ...portBtn, cursor: canRotate ? 'pointer' : 'not-allowed', opacity: canRotate ? 1 : 0.5 }}
+              >
+                <Download size={14} aria-hidden /> Exportar
+              </button>
+              <button
+                type="button"
+                onClick={() => importRef.current?.click()}
+                style={portBtn}
+              >
+                <Upload size={14} aria-hidden /> Importar
+              </button>
+              <input
+                ref={importRef}
+                type="file"
+                accept=".txt,.json,application/json"
+                style={{ display: 'none' }}
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) void doImport(f);
+                  e.target.value = '';
+                }}
+              />
+            </div>
+            <label
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                fontSize: 12,
+                color: 'var(--text)',
+                cursor: canRotate && !cloudBusy ? 'pointer' : 'not-allowed',
+                opacity: canRotate ? 1 : 0.5,
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={cloudOn}
+                disabled={!canRotate || cloudBusy}
+                onChange={(e) => void toggleCloud(e.target.checked)}
+                style={{ accentColor: 'var(--accent)' }}
+              />
+              <Cloud size={14} aria-hidden /> Manter cópia na nuvem (recupera em outros dispositivos)
+            </label>
+            <div className="muted" style={{ fontSize: 11 }}>
+              A cópia na nuvem é o mesmo blob cifrado — o servidor nunca vê sua chave. Só é tão forte
+              quanto sua senha; use uma senha forte.
+            </div>
+            {portMsg && (
+              <div style={{ fontSize: 12, color: portMsg.ok ? '#3fb950' : '#c1121f' }}>
+                {portMsg.text}
+              </div>
+            )}
+          </div>
         </div>
 
         {!isAdmin && (

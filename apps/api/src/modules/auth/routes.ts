@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import bcrypt from 'bcryptjs';
 import {
+  e2eeKeyBackupSchema,
   loginRequestSchema,
   publicKeyRegistrationSchema,
   Role,
@@ -114,6 +115,36 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       { new: true },
     );
     return reply.send({ publicKey: user?.publicKey });
+  });
+
+  /**
+   * Backup da chave E2EE cifrado NO CLIENTE (Fase 5e-3). O cliente sobe o BLOB já
+   * cifrado pela passphrase (AES-GCM); o servidor guarda opaco — nunca vê a chave nem
+   * a senha. Escopo estrito ao próprio portador (`claims.sub`): não há acesso cruzado.
+   */
+  app.put('/auth/e2ee-backup', { onRequest: [app.authenticate] }, async (request, reply) => {
+    const body = e2eeKeyBackupSchema.safeParse(request.body);
+    if (!body.success) return reply.code(400).send({ error: 'Backup de chave inválido' });
+    const claims = request.user as AuthClaims;
+    await User.updateOne(
+      { _id: claims.sub },
+      { $set: { e2eeBackup: { ...body.data, updatedAt: new Date() } } },
+    );
+    return reply.code(204).send();
+  });
+
+  app.get('/auth/e2ee-backup', { onRequest: [app.authenticate] }, async (request, reply) => {
+    const claims = request.user as AuthClaims;
+    const u = await User.findById(claims.sub).select('e2eeBackup').lean();
+    const b = u?.e2eeBackup;
+    if (!b?.ct) return reply.code(404).send({ error: 'Sem backup de chave na nuvem' });
+    return reply.send({ v: b.v, salt: b.salt, iv: b.iv, ct: b.ct });
+  });
+
+  app.delete('/auth/e2ee-backup', { onRequest: [app.authenticate] }, async (request, reply) => {
+    const claims = request.user as AuthClaims;
+    await User.updateOne({ _id: claims.sub }, { $unset: { e2eeBackup: 1 } });
+    return reply.code(204).send();
   });
 
   /**
