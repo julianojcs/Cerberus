@@ -15,7 +15,6 @@ import {
   Eye,
   Star,
   Lock,
-  Camera,
   Settings as SettingsIcon,
 } from 'lucide-react';
 import Link from 'next/link';
@@ -64,6 +63,8 @@ import { MediaViewer } from '@/components/MediaViewer';
 import { ResizableSidebar } from '@/components/ResizableSidebar';
 import { ColorPalettePicker } from '@/components/ColorPalettePicker';
 import { SettingsModal } from '@/components/SettingsModal';
+import { NotificationCenter, type NotifItem } from '@/components/NotificationCenter';
+import { UserMenu } from '@/components/UserMenu';
 import { PeriodRange } from '@/components/PeriodRange';
 import { alertBorderFocus, routeBearingAt, type AlertFocus } from '@/lib/geo';
 import { resolveColor } from '@/lib/tailwind-colors';
@@ -75,19 +76,15 @@ const HISTORY_LIMIT = 5000;
 /** Máximo de pontos por trilha ao vivo (limita memória/render num turno longo). */
 const MAX_LIVE_TRAIL = 2000;
 const HOUR_MS = 60 * 60 * 1000;
-/** Botão do stepper (± quantidade) no cabeçalho do card de mensagens. */
-const stepBtnStyle: React.CSSProperties = {
-  width: 22,
-  height: 22,
-  borderRadius: 6,
-  border: '1px solid var(--border)',
-  background: 'transparent',
-  color: 'var(--text)',
-  cursor: 'pointer',
-  fontSize: 14,
-  lineHeight: 1,
-  padding: 0,
-};
+
+/**
+ * Card de agente no sidebar. Com sinal = tem posição (do mapa). Sem sinal = designado
+ * à operação (no diretório de chaves) mas ainda não transmitiu — aparece como
+ * "aguardando sinal" para o operador ver quem DEVERIA estar na operação.
+ */
+type AgentCard =
+  | (AgentPoint & { hasSignal: true })
+  | { agentId: string; hasSignal: false };
 
 /** Mensagem de texto/broadcast já decifrada para exibição (`text: null` = falha). */
 interface DecryptedMessage {
@@ -171,6 +168,44 @@ function fmtDateTime(ms: number): string {
   }).format(new Date(ms));
 }
 
+/** Data e hora em partes (para os badges das extremidades em DUAS linhas). */
+function fmtDateParts(ms: number): { date: string; time: string } {
+  const d = new Date(ms);
+  return {
+    date: new Intl.DateTimeFormat('pt-BR', {
+      timeZone: 'America/Sao_Paulo',
+      day: '2-digit',
+      month: '2-digit',
+    }).format(d),
+    time: new Intl.DateTimeFormat('pt-BR', {
+      timeZone: 'America/Sao_Paulo',
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(d),
+  };
+}
+
+/** Badge de extremidade: data em cima, hora embaixo. */
+function EdgeStamp({ ms, title, align }: { ms: number; title: string; align: 'left' | 'right' }) {
+  const { date, time } = fmtDateParts(ms);
+  return (
+    <span
+      style={{
+        fontSize: 11,
+        whiteSpace: 'nowrap',
+        fontVariantNumeric: 'tabular-nums',
+        minWidth: 44,
+        textAlign: align,
+        lineHeight: 1.15,
+      }}
+      title={title}
+    >
+      <span style={{ display: 'block' }}>{date}</span>
+      <span style={{ display: 'block' }}>{time}</span>
+    </span>
+  );
+}
+
 export default function LiveOperationPage() {
   const router = useRouter();
   const params = useParams<{ id: string }>();
@@ -221,11 +256,30 @@ export default function LiveOperationPage() {
   // Sinal para o mapa enquadrar (fitBounds) todas as rotas plotadas.
   const [fitNonce, setFitNonce] = useState(0);
   const [firstTs, setFirstTs] = useState<number | null>(null);
-  // "Agora" congelado na montagem — teto do período ajustável.
-  const [nowTs] = useState(() => Date.now());
-  // Período ajustável (início/fim em ms). Padrão: últimas 24 h COM dados.
+  // "Agora" — teto do período; avança para acompanhar o horário atual. Inicia em 0
+  // (estável no SSR) e recebe o Date.now() real no mount (evita mismatch de hidratação:
+  // Date.now() no init difere entre servidor e cliente).
+  const [nowTs, setNowTs] = useState(0);
+  // Ponta direita "ao vivo": segue o "agora" até o operador arrastá-la para trás.
+  const [liveEnd, setLiveEnd] = useState(true);
+  const liveEndRef = useRef(true);
+  liveEndRef.current = liveEnd;
+  const windowInitRef = useRef(false); // só define o período padrão UMA vez
+  // Período ajustável (início/fim em ms). Padrão: últimas 24 h ATÉ agora.
   const [windowStartMs, setWindowStartMs] = useState(0);
   const [windowEndMs, setWindowEndMs] = useState(0);
+  // "Agora" avança a cada 15s (teto do período acompanha o horário atual); se a ponta
+  // direita está "ao vivo", ela segue junto — assim posições recém-chegadas entram no
+  // período e o card do agente fica selecionável sem precisar recarregar.
+  useEffect(() => {
+    setNowTs(Date.now()); // valor real só no cliente (SSR fica com 0)
+    const id = setInterval(() => {
+      const now = Date.now();
+      setNowTs(now);
+      if (liveEndRef.current) setWindowEndMs(now);
+    }, 15_000);
+    return () => clearInterval(id);
+  }, []);
   // Rotas selecionadas para plotagem (id da rota) e agente com a lista expandida.
   const [selectedRouteIds, setSelectedRouteIds] = useState<Set<string>>(new Set());
   const [expandedAgent, setExpandedAgent] = useState<string | null>(null);
@@ -235,7 +289,6 @@ export default function LiveOperationPage() {
     minRoutePoints: 5,
     connectRoutes: false,
     maxGapMinutes: 5,
-    sidebarMessageCount: 5,
   });
   const [settingsOpen, setSettingsOpen] = useState(false);
   // Persiste alterações de Configurações feitas pelo menu de efeitos. Aplica local
@@ -493,41 +546,44 @@ export default function LiveOperationPage() {
       });
 
     // Monta as rotas por agente a partir do histórico (segmentadas nos gaps de
-    // transmissão) para a lista/seleção de rotas. A "trilha ao vivo" (semeada com
-    // este mesmo histórico e também segmentada nos gaps) cresce em tempo real no mapa.
-    api
-      .positionHistory(operationId, HISTORY_LIMIT)
-      .then((positions: LatestPosition[]) => {
-        const agentIds = new Set<string>();
-        let earliest = Infinity;
-        let latest = -Infinity;
-        for (const p of positions) {
-          if (p.lat == null || p.lng == null) continue;
-          agentIds.add(p.agentId);
-          const cap = +new Date(p.capturedAt);
-          if (cap < earliest) earliest = cap;
-          if (cap > latest) latest = cap;
-        }
-        setRawPositions(positions);
-        setAgentColorTokens(assignAgentColors([...agentIds]));
-        if (Number.isFinite(earliest)) {
-          setFirstTs(earliest);
-          // Período padrão: últimas 24 h ATÉ a última transmissão (não "agora"),
-          // assim sempre cai sobre dados reais mesmo que o agente esteja offline há
-          // horas. As duas pontas podem ser ajustadas na barra.
-          const end = Number.isFinite(latest) ? latest : nowTs;
-          setWindowEndMs(end);
-          setWindowStartMs(Math.max(earliest, end - 24 * HOUR_MS));
-        }
-      })
-      .catch(() => {
-        /* sem histórico ainda */
-      });
+    // transmissão) para a lista/seleção de rotas. Re-buscado no polling — assim as
+    // posições que um agente transmite AO VIVO viram rotas selecionáveis sem recarregar.
+    const loadHistory = () => {
+      api
+        .positionHistory(operationId, HISTORY_LIMIT)
+        .then((positions: LatestPosition[]) => {
+          const agentIds = new Set<string>();
+          let earliest = Infinity;
+          for (const p of positions) {
+            if (p.lat == null || p.lng == null) continue;
+            agentIds.add(p.agentId);
+            const cap = +new Date(p.capturedAt);
+            if (cap < earliest) earliest = cap;
+          }
+          setRawPositions(positions);
+          setAgentColorTokens(assignAgentColors([...agentIds]));
+          if (Number.isFinite(earliest)) setFirstTs(earliest);
+          // Período padrão (definido UMA vez): últimas 24 h ATÉ agora. A ponta direita
+          // fica "ao vivo" e o tick acima a mantém no horário atual.
+          if (!windowInitRef.current) {
+            windowInitRef.current = true;
+            const now = Date.now();
+            setWindowEndMs(now);
+            setWindowStartMs(
+              Math.max(Number.isFinite(earliest) ? earliest : -Infinity, now - 24 * HOUR_MS),
+            );
+          }
+        })
+        .catch(() => {
+          /* sem histórico ainda */
+        });
+    };
 
-    // Overlays (mensagens/mídia + geofences + alertas): polling leve a cada 15s (o
-    // painel não assina o canal de broadcast). `refreshMessages` decifra o histórico.
+    // Overlays (mensagens/mídia + geofences + alertas + histórico): polling a cada 15s
+    // (o painel não assina o canal de broadcast). `refreshMessages` decifra o histórico.
     const loadOverlays = () => {
       refreshMessages();
+      loadHistory();
       api
         .geofences(operationId)
         .then(setGeofences)
@@ -610,7 +666,18 @@ export default function LiveOperationPage() {
     };
   }, [operationId, router, refreshMessages]);
 
-  const agentList = useMemo(() => Object.values(agents), [agents]);
+  // Lista do sidebar: agentes com posição + agentes designados (diretório de chaves)
+  // que ainda não transmitiram (aparecem como "aguardando sinal", não selecionáveis).
+  const agentList = useMemo<AgentCard[]>(() => {
+    const byId = new Map<string, AgentCard>();
+    for (const a of Object.values(agents)) byId.set(a.agentId, { ...a, hasSignal: true });
+    for (const e of keyDirectory) {
+      if (e.role === 'agente' && e.agentId && !byId.has(e.agentId)) {
+        byId.set(e.agentId, { agentId: e.agentId, hasSignal: false });
+      }
+    }
+    return [...byId.values()];
+  }, [agents, keyDirectory]);
 
   // Cor efetiva (hex) por agente: override do admin quando houver, senão o token
   // auto-atribuído — resolvida para hex (usada no marcador, na rota e no card).
@@ -1154,21 +1221,26 @@ export default function LiveOperationPage() {
     );
   }, [chatMsgs, mediaMsgs]);
 
-  // Atalho no card p/ mudar a quantidade — persiste nas Configurações do sistema.
-  async function changeSidebarCount(delta: number) {
-    // Fallback 5: a API deployada pode ainda não devolver o campo (pré-deploy).
-    const cur = settings.sidebarMessageCount ?? 5;
-    const next = Math.min(50, Math.max(1, cur + delta));
-    if (next === cur) return;
-    setSettings((s) => ({ ...s, sidebarMessageCount: next }));
-    try {
-      const saved = await api.patchSettings({ sidebarMessageCount: next });
-      // Mantém o valor pedido se a API (pré-deploy) ainda não ecoar o campo.
-      setSettings({ ...saved, sidebarMessageCount: saved.sidebarMessageCount ?? next });
-    } catch {
-      /* mantém o valor otimista */
-    }
-  }
+  // Feed da central de notificações: avatar do remetente + título na COR DA TRILHA do
+  // agente + prévia, agrupado por Equipe (mensagens sem equipe → "Direto").
+  const notifItems = useMemo<NotifItem[]>(
+    () =>
+      cardMsgs.map((m) => {
+        const isBroadcast = m.type === 'broadcast';
+        const teamName = m.teamId ? teams.find((t) => t.id === m.teamId)?.name : undefined;
+        return {
+          id: m.id,
+          senderName: isBroadcast ? 'Central' : (memberNames[m.senderId] ?? m.senderId),
+          // Cor da trilha do agente; Central/broadcast (sem trilha) usa o vermelho institucional.
+          color: isBroadcast ? 'var(--accent)' : (agentColors[m.senderId] ?? 'var(--accent)'),
+          isMedia: m.type === 'media',
+          preview: m.type === 'media' ? (m.caption || 'Foto') : (m.text ?? 'cifrada'),
+          capturedAt: m.capturedAt,
+          group: teamName ? `Equipe ${teamName}` : 'Direto',
+        };
+      }),
+    [cardMsgs, teams, agentColors, memberNames],
+  );
 
   async function handleRecompute() {
     setRecomputing(true);
@@ -1230,6 +1302,15 @@ export default function LiveOperationPage() {
           <span className="badge" style={{ color: connected ? 'var(--ok)' : 'var(--muted)' }}>
             {connected ? '● barramento conectado' : '○ aguardando telemetria'}
           </span>
+          <NotificationCenter
+            items={notifItems}
+            storageKey={`cerberus_notif_seen:${operationId}`}
+            onOpen={(id) => {
+              const m = cardMsgs.find((x) => x.id === id);
+              if (m) openInChat(m);
+            }}
+          />
+          <UserMenu onSettings={() => setSettingsOpen(true)} />
         </div>
       </div>
 
@@ -1286,160 +1367,6 @@ export default function LiveOperationPage() {
               </div>
             )}
           </div>
-
-          {cardMsgs.length > 0 && (
-            <div className="card" style={{ padding: 12, marginBottom: 16 }}>
-              <div
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  gap: 8,
-                }}
-              >
-                <strong style={{ fontSize: 14 }}>Mensagens (E2EE) ({cardMsgs.length})</strong>
-                {/* Atalho: quantidade exibida (persiste nas Configurações). */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                  <button
-                    type="button"
-                    onClick={() => void changeSidebarCount(-1)}
-                    title="Menos mensagens"
-                    style={stepBtnStyle}
-                  >
-                    −
-                  </button>
-                  <span
-                    className="muted"
-                    style={{ fontSize: 12, minWidth: 16, textAlign: 'center' }}
-                    title="Mensagens exibidas no card"
-                  >
-                    {settings.sidebarMessageCount ?? 5}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => void changeSidebarCount(1)}
-                    title="Mais mensagens"
-                    style={stepBtnStyle}
-                  >
-                    +
-                  </button>
-                </div>
-              </div>
-              <p className="muted" style={{ fontSize: 12, margin: '4px 0 8px' }}>
-                Clique para abrir no Chat. Decifradas neste dispositivo.
-              </p>
-              <div
-                className="thinscroll"
-                style={{ display: 'grid', gap: 6, maxHeight: 320, overflowY: 'auto' }}
-              >
-                {cardMsgs.slice(0, settings.sidebarMessageCount ?? 5).map((m) => {
-                  const isBroadcast = m.type === 'broadcast';
-                  const who = nameFor(m.senderId, m.type);
-                  const when = new Date(m.capturedAt).toLocaleString('pt-BR', {
-                    day: '2-digit',
-                    month: '2-digit',
-                    hour: '2-digit',
-                    minute: '2-digit',
-                  });
-                  return (
-                    <button
-                      type="button"
-                      key={m.id}
-                      onClick={() => openInChat(m)}
-                      title="Abrir no Chat"
-                      style={{
-                        display: 'block',
-                        width: '100%',
-                        textAlign: 'left',
-                        cursor: 'pointer',
-                        color: 'inherit',
-                        background: 'var(--panel-2, #1c2733)',
-                        border: `1px solid ${isBroadcast ? 'var(--accent, #c1121f)' : 'var(--border)'}`,
-                        borderRadius: 8,
-                        padding: '6px 8px',
-                      }}
-                    >
-                      <div
-                        style={{
-                          display: 'flex',
-                          justifyContent: 'space-between',
-                          gap: 8,
-                          fontSize: 11,
-                          color: 'var(--muted, #8b9aa8)',
-                          marginBottom: 2,
-                        }}
-                      >
-                        <span
-                          style={{
-                            fontWeight: 700,
-                            color: isBroadcast ? 'var(--accent, #c1121f)' : 'var(--text, #e6edf3)',
-                          }}
-                        >
-                          {who}
-                        </span>
-                        <span>{when}</span>
-                      </div>
-                      {m.mediaRef ? (
-                        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                          {m.crypto ? (
-                            <AuthImage
-                              path={api.mediaPath(operationId, m.mediaRef)}
-                              mediaKey={m.crypto}
-                              mime={m.mime}
-                              alt={m.caption ?? 'foto'}
-                              style={{
-                                width: 40,
-                                height: 40,
-                                borderRadius: 6,
-                                objectFit: 'cover',
-                                flexShrink: 0,
-                                background: 'var(--border)',
-                              }}
-                            />
-                          ) : (
-                            <Lock size={14} aria-hidden style={{ flexShrink: 0 }} />
-                          )}
-                          <span style={{ fontSize: 13, color: 'var(--text, #e6edf3)' }}>
-                            {m.caption || (
-                              <span
-                                className="muted"
-                                style={{
-                                  fontStyle: 'italic',
-                                  display: 'inline-flex',
-                                  alignItems: 'center',
-                                  gap: 4,
-                                }}
-                              >
-                                <Camera size={13} aria-hidden /> Foto
-                              </span>
-                            )}
-                          </span>
-                        </div>
-                      ) : (
-                        <div
-                          style={{ fontSize: 13, color: 'var(--text, #e6edf3)', lineHeight: 1.35 }}
-                        >
-                          {m.text ?? (
-                            <span
-                              className="muted"
-                              style={{
-                                fontStyle: 'italic',
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                gap: 4,
-                              }}
-                            >
-                              <Lock size={13} aria-hidden /> não foi possível decifrar
-                            </span>
-                          )}
-                        </div>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          )}
 
           {mediaMsgs.length > 0 && (
             <div className="card" style={{ padding: 12, marginBottom: 16 }}>
@@ -1905,6 +1832,7 @@ export default function LiveOperationPage() {
                     marginBottom: expanded ? 0 : 10,
                     borderLeft: `3px solid ${color}`,
                     boxShadow: anySel ? `0 0 0 1px ${color}` : undefined,
+                    opacity: a.hasSignal ? 1 : 0.6, // designado mas sem sinal ainda
                   }}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -1956,13 +1884,24 @@ export default function LiveOperationPage() {
                       </span>
                     </button>
                   </div>
-                  <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>
-                    {a.lat.toFixed(5)}, {a.lng.toFixed(5)}
-                  </div>
-                  <div className="muted" style={{ fontSize: 13 }}>
-                    bateria: {a.battery != null ? Math.round(a.battery * 100) + '%' : '—'} ·{' '}
-                    {a.activity ?? '—'}
-                  </div>
+                  {a.hasSignal ? (
+                    <>
+                      <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>
+                        {a.lat.toFixed(5)}, {a.lng.toFixed(5)}
+                      </div>
+                      <div className="muted" style={{ fontSize: 13 }}>
+                        bateria: {a.battery != null ? Math.round(a.battery * 100) + '%' : '—'} ·{' '}
+                        {a.activity ?? '—'}
+                      </div>
+                    </>
+                  ) : (
+                    <div
+                      className="muted"
+                      style={{ fontSize: 13, marginTop: 6, fontStyle: 'italic' }}
+                    >
+                      aguardando sinal…
+                    </div>
+                  )}
                 </div>
                 {expanded && (
                   <div
@@ -2198,39 +2137,21 @@ export default function LiveOperationPage() {
                   <span className="muted" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
                     Período
                   </span>
-                  <span
-                    style={{
-                      fontSize: 11,
-                      whiteSpace: 'nowrap',
-                      fontVariantNumeric: 'tabular-nums',
-                      minWidth: 78,
-                      textAlign: 'right',
-                    }}
-                    title="Início do período"
-                  >
-                    {fmtDateTime(windowStartMs)}
-                  </span>
+                  <EdgeStamp ms={rangeMin} title="Início da faixa disponível" align="right" />
                   <PeriodRange
                     min={rangeMin}
                     max={rangeMax}
                     start={windowStartMs}
                     end={windowEndMs}
+                    format={fmtDateTime}
                     onChange={(s, e) => {
                       setWindowStartMs(s);
                       setWindowEndMs(e);
+                      // Ponta direita colada no extremo (≈agora) ⇒ volta a seguir o "agora".
+                      setLiveEnd(e >= nowTs - 60_000);
                     }}
                   />
-                  <span
-                    style={{
-                      fontSize: 11,
-                      whiteSpace: 'nowrap',
-                      fontVariantNumeric: 'tabular-nums',
-                      minWidth: 78,
-                    }}
-                    title="Fim do período"
-                  >
-                    {fmtDateTime(windowEndMs)}
-                  </span>
+                  <EdgeStamp ms={rangeMax} title="Fim da faixa (agora)" align="left" />
                   <button
                     type="button"
                     className="pinbtn"

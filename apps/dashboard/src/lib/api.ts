@@ -304,8 +304,6 @@ export interface Settings {
   connectRoutes: boolean;
   /** Intervalo (min) sem transmissão que quebra a rota em segmentos. */
   maxGapMinutes: number;
-  /** Nº de mensagens exibidas no card "Mensagens" da barra lateral. */
-  sidebarMessageCount: number;
 }
 
 /** Forma de uma zona. Sem `shape` ⇒ círculo (retrocompat). */

@@ -61,7 +61,6 @@ export default function AdminMapPage() {
     minRoutePoints: 5,
     connectRoutes: false,
     maxGapMinutes: 5,
-    sidebarMessageCount: 5,
   });
 
   // Equipes (Fase 2a): filtro + cor por equipe.

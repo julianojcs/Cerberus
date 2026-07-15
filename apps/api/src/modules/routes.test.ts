@@ -1418,19 +1418,18 @@ describe('configurações do sistema', () => {
       minRoutePoints: 5,
       connectRoutes: false,
       maxGapMinutes: 5,
-      sidebarMessageCount: 5,
     });
   });
 
-  it('admin altera a quantidade de mensagens do card (PATCH) e persiste', async () => {
+  it('admin altera o intervalo que quebra a rota (PATCH) e persiste', async () => {
     const res = await app.inject({
       method: 'PATCH',
       url: '/settings',
       headers: { authorization: `Bearer ${token}` },
-      payload: { sidebarMessageCount: 12 },
+      payload: { maxGapMinutes: 12 },
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ sidebarMessageCount: 12 });
+    expect(res.json()).toMatchObject({ maxGapMinutes: 12 });
   });
 
   it('GET /settings sem token → 401', async () => {

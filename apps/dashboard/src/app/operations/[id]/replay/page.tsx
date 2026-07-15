@@ -8,7 +8,7 @@ import { getToken } from '@/lib/auth';
 import { LiveMap, type AgentPoint, type AgentTrails } from '@/components/LiveMap';
 import { Toggle } from '@/components/Toggle';
 import { resolveColor } from '@/lib/tailwind-colors';
-import { splitSegments } from '@/lib/routes';
+import { assignAgentColors, splitSegments } from '@/lib/routes';
 
 const SPEEDS = [10, 60, 300];
 const TICK_MS = 200; // intervalo real entre passos da reprodução
@@ -86,6 +86,24 @@ export default function ReplayPage() {
     return [+new Date(history[0].capturedAt), +new Date(history[history.length - 1].capturedAt)];
   }, [history]);
 
+  // Cores por agente — MESMA paleta do "Ao vivo": token auto-atribuído + os overrides
+  // que o operador escolheu no painel (localStorage, por operação). Assim as rotas do
+  // replay ficam na cor configurada de cada agente, não todas vermelhas.
+  const agentColors = useMemo(() => {
+    const ids = [...new Set(history.map((p) => p.agentId))];
+    const tokens = assignAgentColors(ids);
+    let overrides: Record<string, string> = {};
+    try {
+      const raw = localStorage.getItem(`cerberus_agent_colors:${operationId}`);
+      if (raw) overrides = JSON.parse(raw) as Record<string, string>;
+    } catch {
+      /* preferência corrompida — ignora */
+    }
+    const out: Record<string, string> = {};
+    for (const id of ids) out[id] = resolveColor(overrides[id] ?? tokens[id]);
+    return out;
+  }, [history, operationId]);
+
   // Loop de reprodução: avança `speed * TICK_MS` ms de dados a cada TICK_MS reais.
   useEffect(() => {
     if (!playing || history.length === 0) return;
@@ -159,6 +177,7 @@ export default function ReplayPage() {
           agents={agents}
           trails={trails}
           showTrails
+          agentColors={agentColors}
           geofences={geoCircles}
           showGeofences={showZones}
         />
