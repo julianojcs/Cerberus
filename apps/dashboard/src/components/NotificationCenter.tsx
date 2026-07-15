@@ -120,20 +120,36 @@ export function NotificationCenter({
               position: 'absolute',
               top: -5,
               right: -5,
-              minWidth: 18,
-              height: 18,
-              padding: '0 4px',
-              borderRadius: 9,
-              background: 'var(--accent)',
-              color: '#fff',
-              fontSize: 10,
-              fontWeight: 700,
               display: 'grid',
               placeItems: 'center',
-              boxShadow: '0 0 0 2px var(--bg)',
             }}
           >
-            {unread > 9 ? '9+' : unread}
+            {/* Anel do "ping" — expande e some ATRÁS do badge. */}
+            <span
+              className="notif-badge-ping"
+              aria-hidden
+              style={{ position: 'absolute', inset: 0, borderRadius: 9, background: 'var(--accent)' }}
+            />
+            {/* Badge sólido com o número (na frente), com fade sutil (estilo jmr26). */}
+            <span
+              className="notif-badge-pulse"
+              style={{
+                position: 'relative',
+                minWidth: 18,
+                height: 18,
+                padding: '0 4px',
+                borderRadius: 9,
+                background: 'var(--accent)',
+                color: '#fff',
+                fontSize: 10,
+                fontWeight: 700,
+                display: 'grid',
+                placeItems: 'center',
+                boxShadow: '0 0 0 2px var(--bg)',
+              }}
+            >
+              {unread > 9 ? '9+' : unread}
+            </span>
           </span>
         )}
       </button>

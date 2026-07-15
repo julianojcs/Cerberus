@@ -88,6 +88,42 @@
   background: #c1121f;
 }
 
+/* Badge de não-lidas (central de notificações): fade de opacidade, idêntico ao
+   `animate-pulse` do Tailwind usado no jmr26 (1 → 0.5 → 1). */
+@keyframes notif-badge-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+.notif-badge-pulse {
+  animation: notif-badge-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+/* "Ping": anel do tom do accent que expande e some atrás do badge (notificação nova). */
+@keyframes notif-badge-ping {
+  0% {
+    transform: scale(1);
+    opacity: 0.7;
+  }
+  75%,
+  100% {
+    transform: scale(2.1);
+    opacity: 0;
+  }
+}
+.notif-badge-ping {
+  animation: notif-badge-ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .notif-badge-pulse,
+  .notif-badge-ping {
+    animation: none;
+  }
+}
+
 html,
 body {
   margin: 0;
