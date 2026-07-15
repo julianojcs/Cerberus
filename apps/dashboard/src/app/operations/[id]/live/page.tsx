@@ -75,6 +75,15 @@ const HISTORY_LIMIT = 5000;
 /** Máximo de pontos por trilha ao vivo (limita memória/render num turno longo). */
 const MAX_LIVE_TRAIL = 2000;
 const HOUR_MS = 60 * 60 * 1000;
+
+/**
+ * Card de agente no sidebar. Com sinal = tem posição (do mapa). Sem sinal = designado
+ * à operação (no diretório de chaves) mas ainda não transmitiu — aparece como
+ * "aguardando sinal" para o operador ver quem DEVERIA estar na operação.
+ */
+type AgentCard =
+  | (AgentPoint & { hasSignal: true })
+  | { agentId: string; hasSignal: false };
 /** Botão do stepper (± quantidade) no cabeçalho do card de mensagens. */
 const stepBtnStyle: React.CSSProperties = {
   width: 22,
@@ -221,11 +230,27 @@ export default function LiveOperationPage() {
   // Sinal para o mapa enquadrar (fitBounds) todas as rotas plotadas.
   const [fitNonce, setFitNonce] = useState(0);
   const [firstTs, setFirstTs] = useState<number | null>(null);
-  // "Agora" congelado na montagem — teto do período ajustável.
-  const [nowTs] = useState(() => Date.now());
-  // Período ajustável (início/fim em ms). Padrão: últimas 24 h COM dados.
+  // "Agora" — teto do período; avança periodicamente para acompanhar o horário atual.
+  const [nowTs, setNowTs] = useState(() => Date.now());
+  // Ponta direita "ao vivo": segue o "agora" até o operador arrastá-la para trás.
+  const [liveEnd, setLiveEnd] = useState(true);
+  const liveEndRef = useRef(true);
+  liveEndRef.current = liveEnd;
+  const windowInitRef = useRef(false); // só define o período padrão UMA vez
+  // Período ajustável (início/fim em ms). Padrão: últimas 24 h ATÉ agora.
   const [windowStartMs, setWindowStartMs] = useState(0);
   const [windowEndMs, setWindowEndMs] = useState(0);
+  // "Agora" avança a cada 15s (teto do período acompanha o horário atual); se a ponta
+  // direita está "ao vivo", ela segue junto — assim posições recém-chegadas entram no
+  // período e o card do agente fica selecionável sem precisar recarregar.
+  useEffect(() => {
+    const id = setInterval(() => {
+      const now = Date.now();
+      setNowTs(now);
+      if (liveEndRef.current) setWindowEndMs(now);
+    }, 15_000);
+    return () => clearInterval(id);
+  }, []);
   // Rotas selecionadas para plotagem (id da rota) e agente com a lista expandida.
   const [selectedRouteIds, setSelectedRouteIds] = useState<Set<string>>(new Set());
   const [expandedAgent, setExpandedAgent] = useState<string | null>(null);
@@ -493,41 +518,44 @@ export default function LiveOperationPage() {
       });
 
     // Monta as rotas por agente a partir do histórico (segmentadas nos gaps de
-    // transmissão) para a lista/seleção de rotas. A "trilha ao vivo" (semeada com
-    // este mesmo histórico e também segmentada nos gaps) cresce em tempo real no mapa.
-    api
-      .positionHistory(operationId, HISTORY_LIMIT)
-      .then((positions: LatestPosition[]) => {
-        const agentIds = new Set<string>();
-        let earliest = Infinity;
-        let latest = -Infinity;
-        for (const p of positions) {
-          if (p.lat == null || p.lng == null) continue;
-          agentIds.add(p.agentId);
-          const cap = +new Date(p.capturedAt);
-          if (cap < earliest) earliest = cap;
-          if (cap > latest) latest = cap;
-        }
-        setRawPositions(positions);
-        setAgentColorTokens(assignAgentColors([...agentIds]));
-        if (Number.isFinite(earliest)) {
-          setFirstTs(earliest);
-          // Período padrão: últimas 24 h ATÉ a última transmissão (não "agora"),
-          // assim sempre cai sobre dados reais mesmo que o agente esteja offline há
-          // horas. As duas pontas podem ser ajustadas na barra.
-          const end = Number.isFinite(latest) ? latest : nowTs;
-          setWindowEndMs(end);
-          setWindowStartMs(Math.max(earliest, end - 24 * HOUR_MS));
-        }
-      })
-      .catch(() => {
-        /* sem histórico ainda */
-      });
+    // transmissão) para a lista/seleção de rotas. Re-buscado no polling — assim as
+    // posições que um agente transmite AO VIVO viram rotas selecionáveis sem recarregar.
+    const loadHistory = () => {
+      api
+        .positionHistory(operationId, HISTORY_LIMIT)
+        .then((positions: LatestPosition[]) => {
+          const agentIds = new Set<string>();
+          let earliest = Infinity;
+          for (const p of positions) {
+            if (p.lat == null || p.lng == null) continue;
+            agentIds.add(p.agentId);
+            const cap = +new Date(p.capturedAt);
+            if (cap < earliest) earliest = cap;
+          }
+          setRawPositions(positions);
+          setAgentColorTokens(assignAgentColors([...agentIds]));
+          if (Number.isFinite(earliest)) setFirstTs(earliest);
+          // Período padrão (definido UMA vez): últimas 24 h ATÉ agora. A ponta direita
+          // fica "ao vivo" e o tick acima a mantém no horário atual.
+          if (!windowInitRef.current) {
+            windowInitRef.current = true;
+            const now = Date.now();
+            setWindowEndMs(now);
+            setWindowStartMs(
+              Math.max(Number.isFinite(earliest) ? earliest : -Infinity, now - 24 * HOUR_MS),
+            );
+          }
+        })
+        .catch(() => {
+          /* sem histórico ainda */
+        });
+    };
 
-    // Overlays (mensagens/mídia + geofences + alertas): polling leve a cada 15s (o
-    // painel não assina o canal de broadcast). `refreshMessages` decifra o histórico.
+    // Overlays (mensagens/mídia + geofences + alertas + histórico): polling a cada 15s
+    // (o painel não assina o canal de broadcast). `refreshMessages` decifra o histórico.
     const loadOverlays = () => {
       refreshMessages();
+      loadHistory();
       api
         .geofences(operationId)
         .then(setGeofences)
@@ -610,7 +638,18 @@ export default function LiveOperationPage() {
     };
   }, [operationId, router, refreshMessages]);
 
-  const agentList = useMemo(() => Object.values(agents), [agents]);
+  // Lista do sidebar: agentes com posição + agentes designados (diretório de chaves)
+  // que ainda não transmitiram (aparecem como "aguardando sinal", não selecionáveis).
+  const agentList = useMemo<AgentCard[]>(() => {
+    const byId = new Map<string, AgentCard>();
+    for (const a of Object.values(agents)) byId.set(a.agentId, { ...a, hasSignal: true });
+    for (const e of keyDirectory) {
+      if (e.role === 'agente' && e.agentId && !byId.has(e.agentId)) {
+        byId.set(e.agentId, { agentId: e.agentId, hasSignal: false });
+      }
+    }
+    return [...byId.values()];
+  }, [agents, keyDirectory]);
 
   // Cor efetiva (hex) por agente: override do admin quando houver, senão o token
   // auto-atribuído — resolvida para hex (usada no marcador, na rota e no card).
@@ -1905,6 +1944,7 @@ export default function LiveOperationPage() {
                     marginBottom: expanded ? 0 : 10,
                     borderLeft: `3px solid ${color}`,
                     boxShadow: anySel ? `0 0 0 1px ${color}` : undefined,
+                    opacity: a.hasSignal ? 1 : 0.6, // designado mas sem sinal ainda
                   }}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -1956,13 +1996,24 @@ export default function LiveOperationPage() {
                       </span>
                     </button>
                   </div>
-                  <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>
-                    {a.lat.toFixed(5)}, {a.lng.toFixed(5)}
-                  </div>
-                  <div className="muted" style={{ fontSize: 13 }}>
-                    bateria: {a.battery != null ? Math.round(a.battery * 100) + '%' : '—'} ·{' '}
-                    {a.activity ?? '—'}
-                  </div>
+                  {a.hasSignal ? (
+                    <>
+                      <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>
+                        {a.lat.toFixed(5)}, {a.lng.toFixed(5)}
+                      </div>
+                      <div className="muted" style={{ fontSize: 13 }}>
+                        bateria: {a.battery != null ? Math.round(a.battery * 100) + '%' : '—'} ·{' '}
+                        {a.activity ?? '—'}
+                      </div>
+                    </>
+                  ) : (
+                    <div
+                      className="muted"
+                      style={{ fontSize: 13, marginTop: 6, fontStyle: 'italic' }}
+                    >
+                      aguardando sinal…
+                    </div>
+                  )}
                 </div>
                 {expanded && (
                   <div
@@ -2198,39 +2249,19 @@ export default function LiveOperationPage() {
                   <span className="muted" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
                     Período
                   </span>
-                  <span
-                    style={{
-                      fontSize: 11,
-                      whiteSpace: 'nowrap',
-                      fontVariantNumeric: 'tabular-nums',
-                      minWidth: 78,
-                      textAlign: 'right',
-                    }}
-                    title="Início do período"
-                  >
-                    {fmtDateTime(windowStartMs)}
-                  </span>
                   <PeriodRange
                     min={rangeMin}
                     max={rangeMax}
                     start={windowStartMs}
                     end={windowEndMs}
+                    format={fmtDateTime}
                     onChange={(s, e) => {
                       setWindowStartMs(s);
                       setWindowEndMs(e);
+                      // Ponta direita colada no extremo (≈agora) ⇒ volta a seguir o "agora".
+                      setLiveEnd(e >= nowTs - 60_000);
                     }}
                   />
-                  <span
-                    style={{
-                      fontSize: 11,
-                      whiteSpace: 'nowrap',
-                      fontVariantNumeric: 'tabular-nums',
-                      minWidth: 78,
-                    }}
-                    title="Fim do período"
-                  >
-                    {fmtDateTime(windowEndMs)}
-                  </span>
                   <button
                     type="button"
                     className="pinbtn"

@@ -64,3 +64,5 @@ mongo-data/
 
 # Playwright MCP (inspeção manual)
 .playwright-mcp/
+
+.vercel
