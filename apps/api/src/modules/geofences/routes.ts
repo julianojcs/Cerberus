@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { Types } from 'mongoose';
 import { GeofenceSeverity, GeofenceShape, GeofenceTrigger, Role } from '@cerberus/shared';
 import { Alert, Geofence, GeofenceMembership, Position, Team } from '../../models/index.js';
-import { detectGeofenceEvents, type GeofenceLike } from './detect.js';
+import { detectGeofenceEvents, isInside, type GeofenceLike } from './detect.js';
 import { assertOperationScope } from '../scope.js';
 
 // Cor = token de familia da paleta Tailwind (o dashboard restringe as opcoes).
@@ -127,6 +127,35 @@ export async function geofenceRoutes(app: FastifyInstance): Promise<void> {
         triggerOn: body.data.triggerOn ?? GeofenceTrigger.BOTH,
         severity: body.data.severity ?? GeofenceSeverity.MEDIUM,
       });
+
+      // Semeia o pertencimento p/ agentes JÁ dentro no instante da criação. Sem isto,
+      // desenhar uma zona em volta de um agente parado geraria um `enter` FALSO na
+      // próxima posição ao vivo (a zona "apareceu" em torno dele — não houve cruzamento).
+      // Só cruzamentos reais (fora→dentro DEPOIS da criação) devem alertar.
+      const gLike = g.toObject() as unknown as GeofenceLike;
+      const latest = await Position.aggregate([
+        { $match: { operationId: id } },
+        { $sort: { capturedAt: -1 } },
+        { $group: { _id: '$agentId', doc: { $first: '$$ROOT' } } },
+        { $replaceRoot: { newRoot: '$doc' } },
+      ]);
+      const memberships: Record<string, unknown>[] = [];
+      for (const p of latest) {
+        const coords = (p.location as { coordinates?: number[] } | undefined)?.coordinates;
+        const [lng, lat] = coords ?? [];
+        if (lng == null || lat == null) continue;
+        if (isInside({ lng, lat }, gLike)) {
+          memberships.push({
+            operationId: id,
+            agentId: p.agentId,
+            geofenceId: String(g._id),
+            inside: true,
+            updatedAt: new Date(),
+          });
+        }
+      }
+      if (memberships.length > 0) await GeofenceMembership.insertMany(memberships);
+
       return reply.code(201).send(serializeGeofence(g.toObject()));
     },
   );

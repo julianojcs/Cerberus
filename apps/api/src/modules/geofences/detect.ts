@@ -113,7 +113,7 @@ function pointInPolygon(p: GeoPoint, vertices: number[][]): boolean {
 }
 
 /** Testa se o ponto está dentro da zona, despachando pela forma (círculo é o padrão). */
-function isInside(current: GeoPoint, g: GeofenceLike): boolean {
+export function isInside(current: GeoPoint, g: GeofenceLike): boolean {
   const shape = g.shape ?? 'circle';
   if (shape === 'polygon') {
     return Array.isArray(g.vertices) && g.vertices.length >= 3

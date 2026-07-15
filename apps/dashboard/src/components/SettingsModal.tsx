@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { api, type Settings } from '@/lib/api';
 import { getUser } from '@/lib/auth';
+import { Settings as SettingsIcon, Key, X } from 'lucide-react';
 import { keyState, rotateKey } from '@/lib/e2ee';
 import { Toggle } from './Toggle';
 
@@ -134,9 +135,16 @@ export function SettingsModal({
             marginBottom: 4,
           }}
         >
-          <strong style={{ fontSize: 16 }}>⚙ Configurações</strong>
-          <button type="button" onClick={onClose} className="badge" style={ghostBtn}>
-            Fechar ✕
+          <strong style={{ fontSize: 16, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <SettingsIcon size={17} aria-hidden /> Configurações
+          </strong>
+          <button
+            type="button"
+            onClick={onClose}
+            className="badge"
+            style={{ ...ghostBtn, display: 'inline-flex', alignItems: 'center', gap: 6 }}
+          >
+            Fechar <X size={14} aria-hidden />
           </button>
         </div>
         <p className="muted" style={{ fontSize: 12, margin: '0 0 16px' }}>
@@ -244,7 +252,9 @@ export function SettingsModal({
         </div>
 
         <div style={{ borderTop: '1px solid var(--border)', margin: '16px 0 12px', paddingTop: 14 }}>
-          <div style={{ fontSize: 14 }}>🔑 Chave E2EE</div>
+          <div style={{ fontSize: 14, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <Key size={15} aria-hidden /> Chave E2EE
+          </div>
           <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
             Rotaciona sua chave (gera um par novo). A anterior é preservada localmente para decifrar
             mensagens antigas; a nova passa a selar os envios. Informe a senha da chave para confirmar.
