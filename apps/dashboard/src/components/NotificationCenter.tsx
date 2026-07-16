@@ -1,11 +1,21 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { Bell, CheckCheck, ChevronDown, ChevronRight, Image as ImageIcon } from 'lucide-react';
+import {
+  ArrowRightFromLine,
+  ArrowRightToLine,
+  Bell,
+  CheckCheck,
+  ChevronDown,
+  ChevronRight,
+  Image as ImageIcon,
+  type LucideIcon,
+} from 'lucide-react';
 import { Avatar } from './Avatar';
 import { Button } from './ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
 import { ScrollArea } from './ui/scroll-area';
+import { Tooltip } from './ui/tooltip';
 import { cn } from '@/lib/utils';
 
 /**
@@ -21,6 +31,12 @@ export interface NotifItem {
   preview: string;
   capturedAt: string; // ISO
   group: string; // "Equipe Alfa" | "Direto"
+  /** Alertas de zona: direção da transição → escolhe a seta (entrada/saída). */
+  direction?: 'enter' | 'exit';
+  /** Alertas de zona: cor da severidade → mostra um ponto ao lado do nome. */
+  severityColor?: string;
+  /** Alertas de zona: tooltip do ponto de severidade (ex.: "Severidade: Alta"). */
+  severityTitle?: string;
 }
 
 /** Tempo relativo curto em pt-BR (sem lib): "agora", "há 5 min", "há 2 h", "há 3 d". */
@@ -43,39 +59,60 @@ export function NotificationCenter({
   items,
   onOpen,
   storageKey,
+  icon: Icon = Bell,
+  title = 'Notificações',
+  emptyLabel = 'Nenhuma mensagem.',
+  itemHint = 'Abrir',
 }: {
   items: NotifItem[];
   onOpen: (id: string) => void;
-  /** Chave de "visto até" por operação (localStorage). */
+  /** Chave dos ids lidos por operação (localStorage). */
   storageKey: string;
+  /** Ícone do gatilho (sino) e do estado vazio. Default: Bell. */
+  icon?: LucideIcon;
+  /** Rótulo do cabeçalho + tooltip/aria-label do botão. */
+  title?: string;
+  /** Texto do estado vazio. */
+  emptyLabel?: string;
+  /** Tooltip de cada item (ex.: "Abrir no Chat" | "Ver no mapa"). */
+  itemHint?: string;
 }) {
   const [open, setOpen] = useState(false);
-  const [seenTs, setSeenTs] = useState(0);
+  // Ids já lidos (persistidos). Modelo POR-ITEM (não "visto até"): clicar numa
+  // notificação marca AQUELA como lida e o contador cai; itens novos entram como não-lidos.
+  const [seenIds, setSeenIds] = useState<Set<string>>(new Set());
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [nowMs, setNowMs] = useState(0);
 
-  // "Visto até" e "agora" só no cliente (evita mismatch de hidratação).
+  // Lê os ids lidos e o "agora" só no cliente (evita mismatch de hidratação).
   useEffect(() => {
-    setSeenTs(Number(localStorage.getItem(storageKey)) || 0);
+    try {
+      const raw = localStorage.getItem(storageKey);
+      const parsed = raw ? JSON.parse(raw) : [];
+      setSeenIds(new Set(Array.isArray(parsed) ? (parsed as string[]) : []));
+    } catch {
+      setSeenIds(new Set());
+    }
     setNowMs(Date.now());
     const id = setInterval(() => setNowMs(Date.now()), 30_000);
     return () => clearInterval(id);
   }, [storageKey]);
 
-  const unread = useMemo(
-    () => items.filter((m) => +new Date(m.capturedAt) > seenTs).length,
-    [items, seenTs],
-  );
+  const unread = useMemo(() => items.filter((m) => !seenIds.has(m.id)).length, [items, seenIds]);
 
-  function markAllRead() {
-    const latest = items.reduce((mx, m) => Math.max(mx, +new Date(m.capturedAt)), Date.now());
-    setSeenTs(latest);
+  // Persiste, podando para os ids ainda presentes no feed (mantém o storage limitado).
+  function persistSeen(next: Set<string>) {
+    const present = new Set(items.map((m) => m.id));
+    const pruned = new Set([...next].filter((id) => present.has(id)));
+    setSeenIds(pruned);
     try {
-      localStorage.setItem(storageKey, String(latest));
+      localStorage.setItem(storageKey, JSON.stringify([...pruned]));
     } catch {
       /* ignora */
     }
   }
+  const markRead = (id: string) => persistSeen(new Set(seenIds).add(id));
+  const markAllRead = () => persistSeen(new Set(items.map((m) => m.id)));
 
   // Agrupa por "group" preservando a ordem (itens já vêm mais recentes primeiro).
   const groups = useMemo(() => {
@@ -86,37 +123,38 @@ export function NotificationCenter({
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-label="Notificações"
-          title="Mensagens (E2EE)"
-          className="relative border border-solid border-border rounded-lg"
-        >
-          <Bell size={18} aria-hidden />
-          {unread > 0 && (
-            <span className="pointer-events-none absolute -top-[5px] -right-[5px] grid place-items-center">
-              {/* Anel do "ping" — expande e some ATRÁS do badge. */}
-              <span
-                aria-hidden
-                className="notif-badge-ping absolute inset-0 rounded-[9px] bg-accent"
-              />
-              {/* Badge sólido com o número (na frente), com fade sutil (estilo jmr26). */}
-              <span className="notif-badge-pulse relative grid h-[18px] min-w-[18px] place-items-center rounded-[9px] bg-accent px-1 text-[10px] font-bold text-white shadow-[0_0_0_2px_var(--bg)]">
-                {unread > 9 ? '9+' : unread}
+      <Tooltip content={title}>
+        <PopoverTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label={title}
+            className="relative border border-solid border-border rounded-lg"
+          >
+            <Icon size={18} aria-hidden />
+            {unread > 0 && (
+              <span className="pointer-events-none absolute -top-[5px] -right-[5px] grid place-items-center">
+                {/* Anel do "ping" — expande e some ATRÁS do badge. */}
+                <span
+                  aria-hidden
+                  className="notif-badge-ping absolute inset-0 rounded-[9px] bg-accent"
+                />
+                {/* Badge sólido com o número (na frente), com fade sutil (estilo jmr26). */}
+                <span className="notif-badge-pulse relative grid h-[18px] min-w-[18px] place-items-center rounded-[9px] bg-accent px-1 text-[10px] font-bold text-white shadow-[0_0_0_2px_var(--bg)]">
+                  {unread > 9 ? '9+' : unread}
+                </span>
               </span>
-            </span>
-          )}
-        </Button>
-      </PopoverTrigger>
+            )}
+          </Button>
+        </PopoverTrigger>
+      </Tooltip>
 
       <PopoverContent align="end" className="w-[340px] max-w-[92vw] overflow-hidden p-0">
         <div
           className="flex items-center justify-between px-3.5 py-2.5"
           style={{ borderBottom: '1px solid var(--border)' }}
         >
-          <strong className="text-sm">Notificações</strong>
+          <strong className="text-sm">{title}</strong>
           {unread > 0 && (
             <button
               type="button"
@@ -132,13 +170,13 @@ export function NotificationCenter({
         <ScrollArea className="max-h-[360px]">
           {items.length === 0 ? (
             <div className="px-6 py-6 text-center text-muted">
-              <Bell size={26} aria-hidden className="mx-auto mb-1.5 block opacity-50" />
-              <div className="text-[13px]">Nenhuma mensagem.</div>
+              <Icon size={26} aria-hidden className="mx-auto mb-1.5 block opacity-50" />
+              <div className="text-[13px]">{emptyLabel}</div>
             </div>
           ) : (
             groups.map(([label, msgs]) => {
               const isCollapsed = collapsed[label] ?? false;
-              const groupUnread = msgs.filter((m) => +new Date(m.capturedAt) > seenTs).length;
+              const groupUnread = msgs.filter((m) => !seenIds.has(m.id)).length;
               return (
                 <div key={label}>
                   <button
@@ -163,48 +201,87 @@ export function NotificationCenter({
                   </button>
                   {!isCollapsed &&
                     msgs.map((m) => {
-                      const isUnread = +new Date(m.capturedAt) > seenTs;
+                      const isUnread = !seenIds.has(m.id);
                       return (
-                        <button
-                          type="button"
+                        // Um único tooltip por linha (dica + severidade). Aninhar outro
+                        // tooltip no ponto de severidade faria os dois abrirem juntos.
+                        <Tooltip
                           key={m.id}
-                          onClick={() => {
-                            onOpen(m.id);
-                            setOpen(false);
-                          }}
-                          title="Abrir no Chat"
-                          className={cn(
-                            'flex w-full cursor-pointer items-start gap-2.5 px-3.5 py-2.5 text-left text-text hover:bg-panel-2',
-                            isUnread && 'bg-[rgba(193,18,31,0.08)]',
-                          )}
-                          style={rowBorder}
+                          content={
+                            <>
+                              {itemHint}
+                              {m.severityTitle && (
+                                <span className="block text-muted">{m.severityTitle}</span>
+                              )}
+                            </>
+                          }
                         >
-                          <Avatar name={m.senderName} color={m.color} size={30} />
-                          <div className="min-w-0 flex-1">
-                            <div className="flex min-w-0 items-center gap-1.5">
-                              <span
-                                className={cn(
-                                  'min-w-0 truncate text-[13px] text-text',
-                                  isUnread ? 'font-bold' : 'font-semibold',
+                          <button
+                            type="button"
+                            onClick={() => {
+                              markRead(m.id);
+                              onOpen(m.id);
+                              setOpen(false);
+                            }}
+                            className={cn(
+                              // fundo explícito nos DOIS estados — sem ele o <button> cai no
+                              // fundo branco padrão do navegador (não há preflight; ver #120).
+                              'flex w-full cursor-pointer items-start gap-2.5 px-3.5 py-2.5 text-left text-text',
+                              isUnread
+                                ? 'bg-[rgba(193,18,31,0.12)] hover:bg-[rgba(193,18,31,0.18)]'
+                                : 'bg-[rgba(255,255,255,0.055)] hover:bg-[rgba(255,255,255,0.10)]',
+                            )}
+                            style={rowBorder}
+                          >
+                            <Avatar name={m.senderName} color={m.color} size={30} />
+                            <div className="min-w-0 flex-1">
+                              <div className="flex min-w-0 items-center gap-1.5">
+                                <span
+                                  className={cn(
+                                    'min-w-0 truncate text-[13px] text-text',
+                                    isUnread ? 'font-bold' : 'font-semibold',
+                                  )}
+                                >
+                                  {m.senderName}
+                                </span>
+                                {m.severityColor && (
+                                  <span
+                                    role="img"
+                                    aria-label={m.severityTitle}
+                                    className="h-2 w-2 shrink-0 rounded-full"
+                                    style={{ background: m.severityColor }}
+                                  />
                                 )}
-                              >
-                                {m.senderName}
-                              </span>
-                              {isUnread && (
-                                <span className="h-[7px] w-[7px] shrink-0 rounded-full bg-accent" />
-                              )}
-                              <span className="ml-auto shrink-0 text-[10px] text-muted">
-                                {ago(m.capturedAt, nowMs || +new Date(m.capturedAt))}
-                              </span>
+                                {isUnread && (
+                                  <span className="h-[7px] w-[7px] shrink-0 rounded-full bg-accent" />
+                                )}
+                                <span className="ml-auto shrink-0 text-[10px] text-muted">
+                                  {ago(m.capturedAt, nowMs || +new Date(m.capturedAt))}
+                                </span>
+                              </div>
+                              <div className="mt-0.5 flex items-center gap-1 truncate text-xs text-muted">
+                                {m.direction === 'exit' ? (
+                                  <ArrowRightFromLine
+                                    size={12}
+                                    aria-hidden
+                                    className="shrink-0"
+                                    style={{ color: '#e3b341' }}
+                                  />
+                                ) : m.direction === 'enter' ? (
+                                  <ArrowRightToLine
+                                    size={12}
+                                    aria-hidden
+                                    className="shrink-0"
+                                    style={{ color: 'var(--ok)' }}
+                                  />
+                                ) : m.isMedia ? (
+                                  <ImageIcon size={12} aria-hidden className="shrink-0" />
+                                ) : null}
+                                {m.preview}
+                              </div>
                             </div>
-                            <div className="mt-0.5 flex items-center gap-1 truncate text-xs text-muted">
-                              {m.isMedia && (
-                                <ImageIcon size={12} aria-hidden className="shrink-0" />
-                              )}
-                              {m.preview}
-                            </div>
-                          </div>
-                        </button>
+                          </button>
+                        </Tooltip>
                       );
                     })}
                 </div>
