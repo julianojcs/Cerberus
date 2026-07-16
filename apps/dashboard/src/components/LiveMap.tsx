@@ -131,6 +131,38 @@ function row(label: string, value: string): string {
   );
 }
 
+// Dimensões APROXIMADAS dos balões (o conteúdo é fixo) — bastam para escolher a âncora
+// antes de renderizar. O teto de `max-height` no CSS cobre qualquer erro de estimativa.
+const INFO_POPUP_W = 235;
+const INFO_POPUP_H = 265;
+const HOVER_CARD_W = 195;
+const HOVER_CARD_H = 60;
+
+/**
+ * Escolhe a âncora do balão. A automática do maplibre é ingênua: ela olha se o PONTO
+ * está perto da borda, não se o BALÃO cabe — por isso ele ancorava "abaixo" e vazava
+ * para fora do mapa.
+ *
+ * Ordem: abaixo do ponto; se não couber, LATERAL DIREITA centralizada; depois esquerda;
+ * e acima como último recurso. (`anchor` nomeia a borda do balão que encosta no ponto:
+ * 'top' = balão abaixo; 'left' = balão à direita, centralizado na vertical.)
+ */
+function pickAnchor(
+  map: MlMap,
+  lngLat: maplibregl.LngLat,
+  w: number,
+  h: number,
+): maplibregl.PositionAnchor {
+  const p = map.project(lngLat);
+  const c = map.getContainer();
+  const pad = 16;
+  if (p.y + h + pad <= c.clientHeight) return 'top';
+  const fitsVerticallyCentered = p.y - h / 2 >= 0 && p.y + h / 2 <= c.clientHeight;
+  if (fitsVerticallyCentered && p.x + w + pad <= c.clientWidth) return 'left';
+  if (fitsVerticallyCentered && p.x - w - pad >= 0) return 'right';
+  return p.y - h - pad >= 0 ? 'bottom' : 'top';
+}
+
 /** Identidade do agente exibida no card de hover do marcador. */
 export interface AgentIdentity {
   name: string;
@@ -559,6 +591,11 @@ export function LiveMap({
   const identityRef = useRef(agentIdentity);
   identityRef.current = agentIdentity;
   const hoverPopupRef = useRef<maplibregl.Popup | null>(null);
+  // Balão de informações: instância única + de qual agente é + o HTML de cada um
+  // (o listener de clique é registrado uma vez, então precisa ler tudo via ref).
+  const infoPopupRef = useRef<maplibregl.Popup | null>(null);
+  const infoAgentRef = useRef<string | null>(null);
+  const infoHtmlRef = useRef<Record<string, string>>({});
   const fittedRef = useRef(false);
   const styleReadyRef = useRef(false);
 
@@ -747,7 +784,6 @@ export function LiveMap({
         marker = new maplibregl.Marker({ element: el })
           .setLngLat([point.lng, point.lat])
           .addTo(map);
-        marker.setPopup(new maplibregl.Popup({ offset: 12 }));
         markersRef.current[agentId] = marker;
 
         // Hover: card com avatar + nome + @usuário (espelha o card do chat). Um único
@@ -759,11 +795,15 @@ export function LiveMap({
           const mk = markersRef.current[agentId];
           if (!m || !mk) return;
           const ident = identityRef.current?.[agentId];
-          hoverPopupRef.current ??= new maplibregl.Popup({
+          // Recriado a cada hover: a âncora do Popup é fixada na construção, e ela
+          // depende de onde o marcador está AGORA na tela.
+          hoverPopupRef.current?.remove();
+          hoverPopupRef.current = new maplibregl.Popup({
             closeButton: false,
             closeOnClick: false,
             offset: 16,
             className: 'agent-hover',
+            anchor: pickAnchor(m, mk.getLngLat(), HOVER_CARD_W, HOVER_CARD_H),
           });
           hoverPopupRef.current
             .setLngLat(mk.getLngLat())
@@ -782,7 +822,33 @@ export function LiveMap({
         };
         el.addEventListener('mouseenter', showHoverCard);
         el.addEventListener('mouseleave', hideHoverCard);
-        el.addEventListener('click', hideHoverCard);
+
+        // Clique: abre/fecha o balão de informações. NÃO usamos `marker.setPopup` porque
+        // a âncora é fixada na construção do Popup — e ela precisa ser recalculada a cada
+        // abertura, conforme a sobra de espaço em torno do marcador naquele momento.
+        el.addEventListener('click', () => {
+          hideHoverCard();
+          const m = mapRef.current;
+          const mk = markersRef.current[agentId];
+          if (!m || !mk) return;
+          const wasOpen = infoAgentRef.current === agentId;
+          infoPopupRef.current?.remove();
+          if (wasOpen) {
+            infoAgentRef.current = null; // segundo clique fecha
+            return;
+          }
+          infoAgentRef.current = agentId;
+          infoPopupRef.current = new maplibregl.Popup({
+            offset: 14,
+            anchor: pickAnchor(m, mk.getLngLat(), INFO_POPUP_W, INFO_POPUP_H),
+          })
+            .setLngLat(mk.getLngLat())
+            .setHTML(infoHtmlRef.current[agentId] ?? '')
+            .addTo(m);
+          infoPopupRef.current.on('close', () => {
+            if (infoAgentRef.current === agentId) infoAgentRef.current = null;
+          });
+        });
       }
       // Forma do marcador conforme o estado; só redesenha quando o estado muda
       // (o efeito re-roda a cada tique de `nowMs` para o sinal poder envelhecer).
@@ -798,7 +864,13 @@ export function LiveMap({
         el.dataset.state = stateKey;
       }
       marker.setLngLat([point.lng, point.lat]);
-      marker.getPopup()?.setHTML(popupHtml(point, fresh, nowMs));
+      // Guarda o HTML de cada agente (o clique lê daqui) e atualiza ao vivo o balão que
+      // estiver aberto — a telemetria continua chegando enquanto ele está na tela.
+      infoHtmlRef.current[agentId] = popupHtml(point, fresh, nowMs);
+      if (infoAgentRef.current === agentId) {
+        infoPopupRef.current?.setLngLat([point.lng, point.lat]);
+        infoPopupRef.current?.setHTML(infoHtmlRef.current[agentId]);
+      }
     }
 
     // Enquadra a primeira posição recebida.

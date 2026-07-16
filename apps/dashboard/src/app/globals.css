@@ -175,31 +175,38 @@
 }
 
 /* Popup do agente no mapa. O maplibre traz um popup CLARO e o texto herda o tema
-   escuro da página — a combinação dava texto escuro sobre fundo escuro. Fixamos fundo
-   E cor aqui, sem depender de herança nem de `opacity` (ver ui-contrast.md). */
-.maplibregl-popup-content {
+   escuro da página — a combinação dava texto claro sobre fundo branco. Fixamos fundo
+   E cor aqui, sem depender de herança nem de `opacity` (ver ui-contrast.md).
+
+   ESPECIFICIDADE: o `maplibre-gl.css` é importado dentro do LiveMap (componente), então
+   no bundle ele vem DEPOIS deste arquivo — com especificidade igual, o `background:#fff`
+   da lib venceria. Por isso qualificamos com `.maplibregl-popup` (0,2,0 > 0,1,0). */
+.maplibregl-popup .maplibregl-popup-content {
   background: var(--panel);
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 10px 12px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  /* Teto de altura: mesmo com a âncora escolhida, um balão alto não pode vazar do mapa. */
+  max-height: 60vh;
+  overflow-y: auto;
 }
 /* A "seta" do balão é um triângulo de bordas: só o lado virado ao marcador recebe cor. */
-.maplibregl-popup-anchor-top .maplibregl-popup-tip,
-.maplibregl-popup-anchor-top-left .maplibregl-popup-tip,
-.maplibregl-popup-anchor-top-right .maplibregl-popup-tip {
+.maplibregl-popup.maplibregl-popup-anchor-top .maplibregl-popup-tip,
+.maplibregl-popup.maplibregl-popup-anchor-top-left .maplibregl-popup-tip,
+.maplibregl-popup.maplibregl-popup-anchor-top-right .maplibregl-popup-tip {
   border-bottom-color: var(--panel);
 }
-.maplibregl-popup-anchor-bottom .maplibregl-popup-tip,
-.maplibregl-popup-anchor-bottom-left .maplibregl-popup-tip,
-.maplibregl-popup-anchor-bottom-right .maplibregl-popup-tip {
+.maplibregl-popup.maplibregl-popup-anchor-bottom .maplibregl-popup-tip,
+.maplibregl-popup.maplibregl-popup-anchor-bottom-left .maplibregl-popup-tip,
+.maplibregl-popup.maplibregl-popup-anchor-bottom-right .maplibregl-popup-tip {
   border-top-color: var(--panel);
 }
-.maplibregl-popup-anchor-left .maplibregl-popup-tip {
+.maplibregl-popup.maplibregl-popup-anchor-left .maplibregl-popup-tip {
   border-right-color: var(--panel);
 }
-.maplibregl-popup-anchor-right .maplibregl-popup-tip {
+.maplibregl-popup.maplibregl-popup-anchor-right .maplibregl-popup-tip {
   border-left-color: var(--panel);
 }
 /* Card de hover do agente: puramente informativo. Sem `pointer-events` ele roubaria o
@@ -207,12 +214,12 @@
 .agent-hover {
   pointer-events: none;
 }
-.maplibregl-popup-close-button {
+.maplibregl-popup .maplibregl-popup-close-button {
   color: var(--muted);
   font-size: 16px;
   padding: 0 6px;
 }
-.maplibregl-popup-close-button:hover {
+.maplibregl-popup .maplibregl-popup-close-button:hover {
   background: transparent;
   color: var(--text);
 }
