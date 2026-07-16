@@ -25,6 +25,20 @@ export function agentInboxTopic(operationId: string, agentId: string): string {
   return `${TOPIC_ROOT}/${operationId}/agente/${agentId}/inbox`;
 }
 
+/** `operacao/{operationId}/agente/{agentId}/status` — presença do agente. */
+export function agentStatusTopic(operationId: string, agentId: string): string {
+  return `${TOPIC_ROOT}/${operationId}/agente/${agentId}/status`;
+}
+
+/**
+ * Presença publicada no canal `status` (retida): `online: true` ao conectar e
+ * `online: false` na saída limpa ou pelo LWT (o broker publica se o app sumir).
+ * Sem `agentId` no corpo — a identidade vem do tópico.
+ */
+export interface AgentStatus {
+  online: boolean;
+}
+
 /** `operacao/{operationId}/broadcast` — central → todos os agentes da operação. */
 export function operationBroadcastTopic(operationId: string): string {
   return `${TOPIC_ROOT}/${operationId}/broadcast`;

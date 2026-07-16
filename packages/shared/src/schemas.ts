@@ -42,6 +42,23 @@ export const positionSampleSchema = z.object({
 });
 export type PositionSample = z.infer<typeof positionSampleSchema>;
 
+/**
+ * Presença do agente no canal `status` (`operacao/{op}/agente/{id}/status`).
+ *
+ * Publicado com `retain` na conexão (`online: true`) e, na saída limpa, com
+ * `online: false`. Se o app morrer sem se despedir (rede caiu, processo morto), o
+ * BROKER publica `online: false` sozinho, via LWT (Last Will and Testament) — ver
+ * docs/decisions/adr-0004-presenca-do-agente-mqtt-lwt.md.
+ *
+ * Sem `agentId` no corpo de propósito: a identidade vem do TÓPICO, nunca do payload
+ * (ver .claude/rules/mqtt-multitenant.md). O payload do LWT é fixado no CONNECT, por
+ * isso também não carrega timestamp — o instante é o da recepção.
+ */
+export const agentStatusSchema = z.object({
+  online: z.boolean(),
+});
+export type AgentStatus = z.infer<typeof agentStatusSchema>;
+
 /** Documento de posição persistido (inclui identificadores e GeoJSON). */
 export const positionRecordSchema = positionSampleSchema.extend({
   operationId: z.string(),

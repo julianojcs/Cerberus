@@ -215,6 +215,9 @@ export default function LiveOperationPage() {
   const colorsKey = `cerberus_agent_colors:${operationId}`;
 
   const [agents, setAgents] = useState<Record<string, AgentPoint>>({});
+  /** Presença por agente vinda do canal `status` (retido + LWT). Sem entrada ⇒
+   * desconhecida, e o mapa cai no proxy de frescor do sinal. */
+  const [presence, setPresence] = useState<Record<string, boolean>>({});
   const [connected, setConnected] = useState(false);
   // Chat (Fase 3a): aba Mapa|Chat + buffer de mensagens ao vivo (equipe/DM) do MQTT.
   const [mainTab, setMainTab] = useState<'map' | 'chat' | 'gallery' | 'docs'>('map');
@@ -665,6 +668,10 @@ export default function LiveOperationPage() {
       getToken() ?? undefined,
       setConnected,
       (m: IncomingMessage) => setIncomingChat((prev) => [...prev, m].slice(-300)),
+      // Presença por agente (canal `status`, retido + LWT) — sinal explícito de
+      // "conectado", independente da taxa do GPS (que hiberna a cada 5 min).
+      (agentId: string, online: boolean) =>
+        setPresence((prev) => (prev[agentId] === online ? prev : { ...prev, [agentId]: online })),
     );
 
     return () => {
@@ -2215,6 +2222,7 @@ export default function LiveOperationPage() {
               </button>
               <LiveMap
                 agents={agents}
+                presence={presence}
                 routes={plottedRoutes}
                 trails={liveTrailsForMap}
                 showTrails={showLiveTrail}
