@@ -95,6 +95,7 @@ function serialize(doc: Record<string, unknown>) {
     lng: loc?.coordinates?.[0],
     lat: loc?.coordinates?.[1],
     accuracy: doc.accuracy,
+    altitude: doc.altitude,
     speed: doc.speed,
     heading: doc.heading,
     battery: doc.battery,

@@ -11,6 +11,10 @@ export interface AgentPoint {
   heading?: number | null;
   battery?: number;
   activity?: string;
+  /** Precisão do fix (m), altitude (m) e velocidade (m/s) — vêm do GPS do aparelho. */
+  accuracy?: number;
+  altitude?: number;
+  speed?: number | null;
   /** ISO da captura — define se o agente está "conectado" (sinal fresco). */
   capturedAt?: string;
   /** Operação de origem (usado só no mapa global do SA — aparece no popup). */
@@ -89,6 +93,93 @@ function esc(s: string): string {
   return s.replace(
     /[&<>"]/g,
     (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] as string,
+  );
+}
+
+/** Rótulo pt-BR do `activity` do GPS (ver ActivityType em @cerberus/shared). */
+const ACTIVITY_LABEL: Record<string, string> = {
+  still: 'parado',
+  on_foot: 'a pé',
+  walking: 'caminhando',
+  running: 'correndo',
+  in_vehicle: 'em veículo',
+  on_bicycle: 'de bicicleta',
+  unknown: 'desconhecida',
+};
+
+/** Tempo relativo curto em pt-BR ("agora", "há 5 min", "há 2 h", "há 3 d"). */
+function agoLabel(iso: string | undefined, nowMs: number): string {
+  if (!iso) return '—';
+  const min = Math.floor(Math.max(0, nowMs - +new Date(iso)) / 60_000);
+  if (min < 1) return 'agora';
+  if (min < 60) return `há ${min} min`;
+  const h = Math.floor(min / 60);
+  if (h < 24) return `há ${h} h`;
+  return `há ${Math.floor(h / 24)} d`;
+}
+
+/**
+ * Linha "rótulo → valor" do popup. Cores EXPLÍCITAS (rótulo em `--muted`, valor em
+ * `--text`): usar `opacity` sobre a cor herdada dava rótulo ilegível no fundo escuro.
+ */
+function row(label: string, value: string): string {
+  return (
+    `<div style="display:flex;gap:12px;justify-content:space-between;line-height:1.7">` +
+    `<span style="color:var(--muted)">${label}</span>` +
+    `<span style="color:var(--text);font-weight:600">${value}</span></div>`
+  );
+}
+
+/**
+ * Popup do agente: tudo o que o aparelho manda numa amostra de posição (o dashboard
+ * já recebia, só não exibia) + o estado da conexão. Agrupado em Agente / Aparelho /
+ * Conexão. `speed` vem em m/s (e negativa quando o GPS não sabe) → km/h.
+ */
+function popupHtml(p: AgentPoint, online: boolean, nowMs: number): string {
+  const sep = `<div style="height:1px;background:var(--border);margin:8px 0"></div>`;
+  const head = (t: string): string =>
+    `<div style="font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:3px">${t}</div>`;
+  const num = (v: number | null | undefined, f: (n: number) => string): string =>
+    v == null ? '—' : f(v);
+
+  return (
+    `<div style="min-width:190px;font-size:12px;color:var(--text)">` +
+    `<div style="font-size:14px;font-weight:700;color:var(--text)">${esc(p.agentId)}</div>` +
+    (p.operationName ? `<div style="color:var(--muted)">${esc(p.operationName)}</div>` : '') +
+    sep +
+    head('Aparelho') +
+    row(
+      'Bateria',
+      num(p.battery, (b) => `${Math.round(b * 100)}%`),
+    ) +
+    row('Atividade', ACTIVITY_LABEL[p.activity ?? 'unknown'] ?? esc(p.activity ?? '—')) +
+    row(
+      'Velocidade',
+      p.speed != null && p.speed >= 0 ? `${(p.speed * 3.6).toFixed(1)} km/h` : '—',
+    ) +
+    row(
+      'Rumo',
+      num(p.heading, (h) => `${Math.round(h)}°`),
+    ) +
+    row(
+      'Altitude',
+      num(p.altitude, (a) => `${Math.round(a)} m`),
+    ) +
+    row(
+      'Precisão',
+      num(p.accuracy, (a) => `±${Math.round(a)} m`),
+    ) +
+    sep +
+    head('Conexão') +
+    // Tons CLAROS: o 700 dos marcadores é escuro demais sobre o `--panel` do popup.
+    row(
+      'Estado',
+      online
+        ? `<span style="color:var(--ok)">conectado</span>`
+        : `<span style="color:#f87171">sem sinal</span>`,
+    ) +
+    row('Última posição', agoLabel(p.capturedAt, nowMs)) +
+    `</div>`
   );
 }
 
@@ -600,7 +691,8 @@ export function LiveMap({
       let marker = markersRef.current[agentId];
       if (!marker) {
         const el = document.createElement('div');
-        el.title = agentId;
+        // Sem `title`: o hint nativo do navegador está fora do padrão da UI — quem dá
+        // a informação é o popup no clique (e o cursor de mão sinaliza que é clicável).
         el.className = 'agent-marker';
         marker = new maplibregl.Marker({ element: el })
           .setLngLat([point.lng, point.lat])
@@ -622,16 +714,7 @@ export function LiveMap({
         el.dataset.state = stateKey;
       }
       marker.setLngLat([point.lng, point.lat]);
-      marker
-        .getPopup()
-        ?.setHTML(
-          `<strong>${esc(agentId)}</strong>` +
-            (point.operationName
-              ? `<br/><span style="opacity:.75">${esc(point.operationName)}</span>`
-              : '') +
-            `<br/>bat: ${point.battery != null ? Math.round(point.battery * 100) + '%' : '—'}` +
-            (point.activity ? `<br/>${esc(point.activity)}` : ''),
-        );
+      marker.getPopup()?.setHTML(popupHtml(point, fresh, nowMs));
     }
 
     // Enquadra a primeira posição recebida.

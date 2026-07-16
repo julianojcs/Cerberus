@@ -55,6 +55,7 @@ export interface LatestPosition {
   lng: number;
   lat: number;
   accuracy?: number;
+  altitude?: number;
   speed?: number;
   heading?: number;
   battery?: number;
@@ -144,8 +145,7 @@ export const api = {
     request<Operation>(`/operations/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteOperation: (id: string) => request<void>(`/operations/${id}`, { method: 'DELETE' }),
   // Membros (usuários) no escopo da operação — popula o multiselect de agentes.
-  operationMembers: (opId: string) =>
-    request<OperationMember[]>(`/operations/${opId}/members`),
+  operationMembers: (opId: string) => request<OperationMember[]>(`/operations/${opId}/members`),
 
   // --- Equipes (Fase 2a) ---
   teams: () => request<TeamInfo[]>('/teams'),
@@ -153,7 +153,8 @@ export const api = {
   createTeam: (
     opId: string,
     data: { name: string; color?: string; agentIds?: string[]; leadId?: string },
-  ) => request<TeamInfo>(`/operations/${opId}/teams`, { method: 'POST', body: JSON.stringify(data) }),
+  ) =>
+    request<TeamInfo>(`/operations/${opId}/teams`, { method: 'POST', body: JSON.stringify(data) }),
   updateTeam: (
     opId: string,
     tid: string,
@@ -243,11 +244,7 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(data),
     }),
-  patchGeofence: (
-    operationId: string,
-    gid: string,
-    data: GeofenceInput,
-  ) =>
+  patchGeofence: (operationId: string, gid: string, data: GeofenceInput) =>
     request<Geofence>(`/operations/${operationId}/geofences/${gid}`, {
       method: 'PATCH',
       body: JSON.stringify(data),

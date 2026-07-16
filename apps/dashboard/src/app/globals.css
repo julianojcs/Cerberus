@@ -163,13 +163,53 @@
   animation: agent-pulse 1.8s ease-in-out infinite;
 }
 
-/* Legibilidade sobre o mapa. Os marcadores usam o tom 900 (escuro) da família do
+/* Legibilidade sobre o mapa. Os marcadores usam o tom 700 (escuro) da família do
    agente, então o halo é CLARO — separa o ícone das feições escuras do mapa (vias,
    parques). Um halo escuro, como antes, sumiria contra um ícone escuro. */
 .agent-marker {
   display: grid;
   place-items: center;
+  /* Clicável (abre o popup com os dados do agente) — o cursor de mão sinaliza isso. */
+  cursor: pointer;
   filter: drop-shadow(0 0 2px rgba(255, 255, 255, 0.95)) drop-shadow(0 1px 1px rgba(0, 0, 0, 0.35));
+}
+
+/* Popup do agente no mapa. O maplibre traz um popup CLARO e o texto herda o tema
+   escuro da página — a combinação dava texto escuro sobre fundo escuro. Fixamos fundo
+   E cor aqui, sem depender de herança nem de `opacity` (ver ui-contrast.md). */
+.maplibregl-popup-content {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+/* A "seta" do balão é um triângulo de bordas: só o lado virado ao marcador recebe cor. */
+.maplibregl-popup-anchor-top .maplibregl-popup-tip,
+.maplibregl-popup-anchor-top-left .maplibregl-popup-tip,
+.maplibregl-popup-anchor-top-right .maplibregl-popup-tip {
+  border-bottom-color: var(--panel);
+}
+.maplibregl-popup-anchor-bottom .maplibregl-popup-tip,
+.maplibregl-popup-anchor-bottom-left .maplibregl-popup-tip,
+.maplibregl-popup-anchor-bottom-right .maplibregl-popup-tip {
+  border-top-color: var(--panel);
+}
+.maplibregl-popup-anchor-left .maplibregl-popup-tip {
+  border-right-color: var(--panel);
+}
+.maplibregl-popup-anchor-right .maplibregl-popup-tip {
+  border-left-color: var(--panel);
+}
+.maplibregl-popup-close-button {
+  color: var(--muted);
+  font-size: 16px;
+  padding: 0 6px;
+}
+.maplibregl-popup-close-button:hover {
+  background: transparent;
+  color: var(--text);
 }
 
 /* Parado: pin PREENCHIDO vindo do arquivo reutilizável (public/svg). Usa MÁSCARA para

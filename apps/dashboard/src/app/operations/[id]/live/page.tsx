@@ -603,6 +603,9 @@ export default function LiveOperationPage() {
               heading: p.heading,
               battery: p.battery,
               activity: p.activity,
+              accuracy: p.accuracy,
+              altitude: p.altitude,
+              speed: p.speed,
               capturedAt: p.capturedAt, // sinal fresco ⇒ marcador "conectado"
             };
           }
@@ -710,6 +713,9 @@ export default function LiveOperationPage() {
             heading: pos.heading,
             battery: pos.battery,
             activity: pos.activity,
+            accuracy: pos.accuracy,
+            altitude: pos.altitude,
+            speed: pos.speed,
             capturedAt: pos.capturedAt, // sinal fresco ⇒ marcador "conectado"
           },
         }));
