@@ -4,6 +4,28 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import maplibregl, { type Map as MlMap, type Marker, type GeoJSONSource } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { initialsOf } from './Avatar';
+import { bearingDeg } from '@/lib/geo';
+
+/**
+ * Rumo do DESLOCAMENTO pelos dois últimos pontos da trilha do agente. É mais confiável
+ * que o `heading` do GPS, que fica velho/ruidoso em baixa velocidade e não bate com a
+ * trilha desenhada. Devolve null se não houver movimento medível (pontos coincidentes)
+ * — aí o chamador cai no heading do GPS.
+ */
+function trailBearing(segments: [number, number][][] | undefined): number | null {
+  if (!segments) return null;
+  for (let i = segments.length - 1; i >= 0; i--) {
+    const seg = segments[i];
+    if (!seg || seg.length < 2) continue;
+    const to = seg[seg.length - 1];
+    // Recua até achar um ponto DIFERENTE do último (GPS parado repete a coordenada).
+    for (let j = seg.length - 2; j >= 0; j--) {
+      const from = seg[j];
+      if (from && to && (from[0] !== to[0] || from[1] !== to[1])) return bearingDeg(from, to);
+    }
+  }
+  return null;
+}
 
 export interface AgentPoint {
   agentId: string;
@@ -934,9 +956,11 @@ export function LiveMap({
       const mode = agentMode(point.activity);
       // Presença explícita (status MQTT + LWT) manda; sem ela, cai no proxy de frescor.
       const fresh = presence?.[agentId] ?? isFresh(point, nowMs);
-      const stateKey = `${mode}|${fresh}|${strong}|${Math.round(point.heading ?? 0)}`;
+      // Direção da seta = rumo da TRILHA (o do GPS não bate); GPS só como fallback.
+      const heading = trailBearing(trailsRef.current[agentId]) ?? point.heading ?? 0;
+      const stateKey = `${mode}|${fresh}|${strong}|${Math.round(heading)}`;
       if (el.dataset.state !== stateKey) {
-        el.innerHTML = markerHtml(mode, fresh, strong, point.heading);
+        el.innerHTML = markerHtml(mode, fresh, strong, heading);
         el.dataset.state = stateKey;
       }
       marker.setLngLat([point.lng, point.lat]);
