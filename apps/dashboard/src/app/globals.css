@@ -172,20 +172,22 @@
   filter: drop-shadow(0 0 2px rgba(255, 255, 255, 0.95)) drop-shadow(0 1px 1px rgba(0, 0, 0, 0.35));
 }
 
-/* Parado: pin vindo do arquivo reutilizável (public/svg). Usa MÁSCARA para herdar a
-   cor do agente — um <img> não seria recolorível. Trocar o ícone = trocar o arquivo. */
+/* Parado: pin PREENCHIDO vindo do arquivo reutilizável (public/svg). Usa MÁSCARA para
+   herdar a cor do agente — um <img> não seria recolorível. Trocar o ícone = trocar o
+   arquivo. Preenchido (e não contornado) porque um traço fino sumia no mapa e obrigava
+   a um tom extremo, que apagava o matiz da família. */
 .agent-pin,
 .agent-pin-off {
   width: 32px;
   height: 32px;
 }
 .agent-pin {
-  -webkit-mask: url('/svg/map-pin.svg') center / contain no-repeat;
-  mask: url('/svg/map-pin.svg') center / contain no-repeat;
+  -webkit-mask: url('/svg/map-pin-filled.svg') center / contain no-repeat;
+  mask: url('/svg/map-pin-filled.svg') center / contain no-repeat;
 }
 .agent-pin-off {
-  -webkit-mask: url('/svg/map-pin-off.svg') center / contain no-repeat;
-  mask: url('/svg/map-pin-off.svg') center / contain no-repeat;
+  -webkit-mask: url('/svg/map-pin-off-filled.svg') center / contain no-repeat;
+  mask: url('/svg/map-pin-off-filled.svg') center / contain no-repeat;
 }
 
 /* Deslocamento de carro: círculo colorido + seta branca girada pelo rumo. */

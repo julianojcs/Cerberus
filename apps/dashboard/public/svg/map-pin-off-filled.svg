@@ -1,0 +1,14 @@
+<!-- Variante "sem sinal" do pin preenchido (nossa, não do lucide): mesma gota sólida,
+     cortada por uma barra diagonal. Como isto vira MÁSCARA CSS, só o alfa importa:
+     - a `<mask>` interna abre o miolo E um vão em volta da barra (preto = transparente);
+     - a barra visível é redesenhada por cima, dentro desse vão, ficando destacada da gota.
+     Resultado: gota na cor do agente, riscada — o "off" lê mesmo à distância. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+  <mask id="pin-off-cut">
+    <rect width="24" height="24" fill="#fff"/>
+    <circle cx="12" cy="10" r="3" fill="#000"/>
+    <line x1="2" y1="2" x2="22" y2="22" stroke="#000" stroke-width="5" stroke-linecap="round"/>
+  </mask>
+  <path fill="currentColor" mask="url(#pin-off-cut)" d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0Z"/>
+  <line x1="2.6" y1="2.6" x2="21.4" y2="21.4" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>
+</svg>
