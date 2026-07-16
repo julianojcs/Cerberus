@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import maplibregl, { type Map as MlMap, type Marker, type GeoJSONSource } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
@@ -11,8 +11,73 @@ export interface AgentPoint {
   heading?: number | null;
   battery?: number;
   activity?: string;
+  /** ISO da captura — define se o agente está "conectado" (sinal fresco). */
+  capturedAt?: string;
   /** Operação de origem (usado só no mapa global do SA — aparece no popup). */
   operationName?: string;
+}
+
+/** Modo de locomoção derivado do `activity` do GPS (bicicleta conta como "a pé"). */
+type AgentMode = 'still' | 'foot' | 'car';
+function agentMode(activity?: string): AgentMode {
+  switch (activity) {
+    case 'in_vehicle':
+      return 'car';
+    case 'on_foot':
+    case 'walking':
+    case 'running':
+    case 'on_bicycle':
+      return 'foot';
+    default:
+      return 'still'; // still | unknown | ausente
+  }
+}
+
+/**
+ * Sinal fresco ⇒ agente "conectado" (transmitindo). O limiar TEM que respeitar a
+ * hibernação do GPS no mobile, senão um agente parado e conectado parece desconectado:
+ * - parado: o app hiberna o GPS e só faz um heartbeat a cada 5 min (`heartbeatInterval: 300`);
+ * - em deslocamento: as amostras dependem de andar 10 m (`distanceFilter: 10`) e podem
+ *   pausar (carro no semáforo) até o `stopTimeout` (5 min) religar o heartbeat.
+ * Logo o único piso GARANTIDO de vida é o heartbeat — toleramos 1 perdido.
+ */
+const HEARTBEAT_MS = 5 * 60_000; // apps/mobile/src/services/geolocation.ts
+const FRESH_MS = 2 * HEARTBEAT_MS + 60_000; // 11 min
+function isFresh(p: AgentPoint, nowMs: number): boolean {
+  return p.capturedAt != null && nowMs - +new Date(p.capturedAt) < FRESH_MS;
+}
+
+/**
+ * HTML do marcador conforme o estado do agente:
+ * - parado: map-pin (conectado, pulsando) ou map-pin-off (desconectado, estático);
+ * - carro: puck com a seta `navigation` girada pelo rumo, pulsando;
+ * - a pé: bullet com halo desfocado pulsando.
+ */
+function markerHtml(
+  mode: AgentMode,
+  fresh: boolean,
+  color: string,
+  heading?: number | null,
+): string {
+  if (mode === 'car') {
+    return (
+      `<span class="agent-puck agent-pulse" style="background:${color}">` +
+      `<svg viewBox="0 0 24 24" width="15" height="15" fill="#fff" stroke="#fff" stroke-width="1.5" ` +
+      `stroke-linejoin="round" style="transform:rotate(${Math.round(heading ?? 0)}deg)">` +
+      `<polygon points="3 11 22 2 13 21 11 13 3 11"/></svg></span>`
+    );
+  }
+  if (mode === 'foot') {
+    return (
+      `<span class="agent-foot">` +
+      `<span class="agent-halo" style="background:${color}"></span>` +
+      `<span class="agent-bullet" style="background:${color}"></span></span>`
+    );
+  }
+  // Parado — pin de public/svg, recolorido por máscara: conectado pulsa (map-pin),
+  // desconectado fica estático e riscado (map-pin-off).
+  const pin = fresh ? 'agent-pin agent-pulse' : 'agent-pin-off';
+  return `<span class="${pin}" style="background:${color}"></span>`;
 }
 
 /** Escapa texto interpolado no HTML do popup (nomes de operação/agente). */
@@ -94,6 +159,7 @@ function syncRoutes(map: MlMap, routes: PlottedRoute[]): void {
 function toFeatureCollection(
   trails: AgentTrails,
   colors?: Record<string, string>,
+  moving?: Record<string, boolean>,
 ): GeoJSON.FeatureCollection {
   const features: GeoJSON.Feature[] = [];
   for (const [agentId, segments] of Object.entries(trails)) {
@@ -102,7 +168,8 @@ function toFeatureCollection(
       if (seg.length >= 2) {
         features.push({
           type: 'Feature',
-          properties: { agentId, color },
+          // `moving` engrossa a trilha do agente em deslocamento (line-width por dado).
+          properties: { agentId, color, moving: moving?.[agentId] ?? false },
           geometry: { type: 'LineString', coordinates: seg },
         });
       }
@@ -111,9 +178,14 @@ function toFeatureCollection(
   return { type: 'FeatureCollection', features };
 }
 
-function syncTrails(map: MlMap, trails: AgentTrails, colors?: Record<string, string>): void {
+function syncTrails(
+  map: MlMap,
+  trails: AgentTrails,
+  colors?: Record<string, string>,
+  moving?: Record<string, boolean>,
+): void {
   const source = map.getSource('trails') as GeoJSONSource | undefined;
-  source?.setData(toFeatureCollection(trails, colors));
+  source?.setData(toFeatureCollection(trails, colors, moving));
 }
 
 /**
@@ -138,7 +210,12 @@ const EARTH_R_M = 6371000;
 const M_PER_DEG_LAT_R = 110540;
 
 /** Anel poligonal aproximando um círculo de `radiusMeters` (MapLibre não tem círculo em metros). */
-export function circleRing(lng: number, lat: number, radiusMeters: number, points = 64): number[][] {
+export function circleRing(
+  lng: number,
+  lat: number,
+  radiusMeters: number,
+  points = 64,
+): number[][] {
   const latR = (radiusMeters / EARTH_R_M) * (180 / Math.PI);
   const lngR = latR / Math.cos((lat * Math.PI) / 180);
   const ring: number[][] = [];
@@ -185,7 +262,13 @@ function ringFor(g: GeofenceCircle): number[][] {
     ring.push(ring[0]);
     return ring;
   }
-  if (g.shape === 'rectangle' && g.lng != null && g.lat != null && g.widthMeters && g.heightMeters) {
+  if (
+    g.shape === 'rectangle' &&
+    g.lng != null &&
+    g.lat != null &&
+    g.widthMeters &&
+    g.heightMeters
+  ) {
     return rectangleRing(g.lng, g.lat, g.widthMeters, g.heightMeters, g.rotationDeg ?? 0);
   }
   return circleRing(g.lng ?? 0, g.lat ?? 0, g.radiusMeters ?? 0);
@@ -313,10 +396,34 @@ export function LiveMap({
   const focusMarkerRef = useRef<Marker | null>(null);
   const editGeoRef = useRef<EditGeofence | null>(editGeofence);
   editGeoRef.current = editGeofence;
-  const editCbRef = useRef({ move: onGeofenceMove, resize: onGeofenceResize, reshape: onGeofenceReshape });
-  editCbRef.current = { move: onGeofenceMove, resize: onGeofenceResize, reshape: onGeofenceReshape };
+  const editCbRef = useRef({
+    move: onGeofenceMove,
+    resize: onGeofenceResize,
+    reshape: onGeofenceReshape,
+  });
+  editCbRef.current = {
+    move: onGeofenceMove,
+    resize: onGeofenceResize,
+    reshape: onGeofenceReshape,
+  };
   const fittedRef = useRef(false);
   const styleReadyRef = useRef(false);
+
+  // "Agora" em tiques: deixa o sinal do agente ENVELHECER (parado conectado →
+  // desconectado) sem depender da chegada de novos dados. 0 no SSR (sem mismatch).
+  const [nowMs, setNowMs] = useState(0);
+  useEffect(() => {
+    setNowMs(Date.now());
+    const id = setInterval(() => setNowMs(Date.now()), 15_000);
+    return () => clearInterval(id);
+  }, []);
+
+  // Agentes em deslocamento AGORA — engrossa a trilha (line-width por dado).
+  const movingById = useMemo(() => {
+    const out: Record<string, boolean> = {};
+    for (const [id, p] of Object.entries(agents)) out[id] = agentMode(p.activity) !== 'still';
+    return out;
+  }, [agents]);
   // Mantém a trilha/visibilidade correntes acessíveis ao handler de 'load'
   // (evita closure obsoleto na inicialização assíncrona do estilo).
   const trailsRef = useRef<AgentTrails>(trails);
@@ -394,7 +501,12 @@ export function LiveMap({
           'line-cap': 'round',
           visibility: showTrailsRef.current ? 'visible' : 'none',
         },
-        paint: { 'line-color': ['get', 'color'], 'line-width': 3, 'line-opacity': 0.7 },
+        paint: {
+          'line-color': ['get', 'color'],
+          // Trilha mais larga enquanto o agente está em deslocamento.
+          'line-width': ['case', ['boolean', ['get', 'moving'], false], 6, 3],
+          'line-opacity': 0.7,
+        },
       });
       // Rotas selecionadas por agente (por cima das trilhas), cor dirigida por dado.
       map.addSource('agent-routes', { type: 'geojson', data: routesFC(routesRef.current, false) });
@@ -477,18 +589,23 @@ export function LiveMap({
       if (!marker) {
         const el = document.createElement('div');
         el.title = agentId;
-        el.style.cssText =
-          'width:18px;height:18px;border-radius:50%;border:2px solid #fff;transition:background .2s;';
+        el.className = 'agent-marker';
         marker = new maplibregl.Marker({ element: el })
           .setLngLat([point.lng, point.lat])
           .addTo(map);
         marker.setPopup(new maplibregl.Popup({ offset: 12 }));
         markersRef.current[agentId] = marker;
       }
-      // Aplica a cor do agente (mantém consistência com o card e a rota no mapa).
+      // Forma do marcador conforme o estado; só redesenha quando o estado muda
+      // (o efeito re-roda a cada tique de `nowMs` para o sinal poder envelhecer).
       const el = marker.getElement();
-      el.style.background = color;
-      el.style.boxShadow = `0 0 8px ${color}`;
+      const mode = agentMode(point.activity);
+      const fresh = isFresh(point, nowMs);
+      const stateKey = `${mode}|${fresh}|${color}|${Math.round(point.heading ?? 0)}`;
+      if (el.dataset.state !== stateKey) {
+        el.innerHTML = markerHtml(mode, fresh, color, point.heading);
+        el.dataset.state = stateKey;
+      }
       marker.setLngLat([point.lng, point.lat]);
       marker
         .getPopup()
@@ -508,14 +625,15 @@ export function LiveMap({
       map.easeTo({ center: [first.lng, first.lat], zoom: 15 });
       fittedRef.current = true;
     }
-  }, [agents, agentColors]);
+  }, [agents, agentColors, nowMs]);
 
-  // Redesenha a trilha quando novas posições chegam.
+  // Redesenha a trilha quando novas posições chegam (ou quando o deslocamento muda,
+  // que altera a largura do traçado).
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !styleReadyRef.current) return;
-    syncTrails(map, trails, agentColorsRef.current);
-  }, [trails]);
+    syncTrails(map, trails, agentColorsRef.current, movingById);
+  }, [trails, movingById]);
 
   // Redesenha as rotas selecionadas (cores por agente) quando a seleção muda.
   useEffect(() => {

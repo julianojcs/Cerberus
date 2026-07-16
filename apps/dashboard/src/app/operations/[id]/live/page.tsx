@@ -541,6 +541,7 @@ export default function LiveOperationPage() {
               heading: p.heading,
               battery: p.battery,
               activity: p.activity,
+              capturedAt: p.capturedAt, // sinal fresco ⇒ marcador "conectado"
             };
           }
           return next;
@@ -647,6 +648,7 @@ export default function LiveOperationPage() {
             heading: pos.heading,
             battery: pos.battery,
             activity: pos.activity,
+            capturedAt: pos.capturedAt, // sinal fresco ⇒ marcador "conectado"
           },
         }));
         // Estende a trilha ao vivo do agente (limita o comprimento). Guarda o

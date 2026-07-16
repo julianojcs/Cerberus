@@ -145,6 +145,100 @@
   }
 }
 
+/* ——— Marcador do agente no mapa ———
+   Estado dirige a forma: parado = crosshair (pulsa só se conectado); de carro = puck
+   com seta (estilo Google Maps); a pé = bullet com halo desfocado. */
+@keyframes agent-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.12);
+    opacity: 0.72;
+  }
+}
+.agent-pulse {
+  animation: agent-pulse 1.8s ease-in-out infinite;
+}
+
+/* Legibilidade sobre qualquer fundo do mapa. */
+.agent-marker {
+  display: grid;
+  place-items: center;
+  filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.85));
+}
+
+/* Parado: pin vindo do arquivo reutilizável (public/svg). Usa MÁSCARA para herdar a
+   cor do agente — um <img> não seria recolorível. Trocar o ícone = trocar o arquivo. */
+.agent-pin,
+.agent-pin-off {
+  width: 26px;
+  height: 26px;
+}
+.agent-pin {
+  -webkit-mask: url('/svg/map-pin.svg') center / contain no-repeat;
+  mask: url('/svg/map-pin.svg') center / contain no-repeat;
+}
+.agent-pin-off {
+  -webkit-mask: url('/svg/map-pin-off.svg') center / contain no-repeat;
+  mask: url('/svg/map-pin-off.svg') center / contain no-repeat;
+}
+
+/* Deslocamento de carro: círculo colorido + seta branca girada pelo rumo. */
+.agent-puck {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+}
+
+/* A pé: bullet atual + halo desfocado pulsando na margem. */
+.agent-foot {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+}
+.agent-foot .agent-bullet {
+  position: relative;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  box-sizing: border-box;
+}
+.agent-foot .agent-halo {
+  position: absolute;
+  inset: -7px;
+  border-radius: 50%;
+  filter: blur(5px);
+  animation: agent-halo 1.8s ease-in-out infinite;
+}
+@keyframes agent-halo {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.5;
+  }
+  50% {
+    transform: scale(1.7);
+    opacity: 0.12;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-pulse,
+  .agent-foot .agent-halo {
+    animation: none;
+  }
+}
+
 html,
 body {
   margin: 0;
