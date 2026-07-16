@@ -239,7 +239,8 @@ export default function LiveOperationPage() {
   const [liveTrails, setLiveTrails] = useState<
     Record<string, { lng: number; lat: number; capturedAt: string }[]>
   >({});
-  const [showLiveTrail, setShowLiveTrail] = useState(true);
+  // Padrão DESLIGADO: o mapa abre limpo — o operador liga as camadas que quiser.
+  const [showLiveTrail, setShowLiveTrail] = useState(false);
   // Efeito "Sentido das trilhas" (setas no mapa) — controlado pelo menu de efeitos.
   const [showTrailDirection, setShowTrailDirection] = useState(false);
   // Ligar/desligar a trilha ao vivo. Ao DESLIGAR, também desliga o "Sentido das
@@ -251,7 +252,8 @@ export default function LiveOperationPage() {
   // Sentido efetivo: só vale com a trilha ao vivo ligada (defesa contra estado órfão).
   const trailDirectionOn = showLiveTrail && showTrailDirection;
   // Exibir fotos (pins de mídia geolocalizada) no mapa — menu de efeitos.
-  const [showMedia, setShowMedia] = useState(true);
+  // Padrão DESLIGADO (o mapa abre limpo); só "Exibir zonas" nasce ligado.
+  const [showMedia, setShowMedia] = useState(false);
   const seededTrailRef = useRef(false);
   // Seleção inicial das rotas: marca todos os agentes por padrão na 1ª carga (uma vez).
   const seededSelectionRef = useRef(false);
