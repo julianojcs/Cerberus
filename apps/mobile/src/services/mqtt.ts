@@ -27,6 +27,25 @@ export function setCommandHandler(h: CommandHandler | null): void {
   commandHandler = h;
 }
 
+/**
+ * Fast Refresh (DEV): ao salvar um arquivo, o Metro re-executa este módulo e o `client`
+ * acima volta a `null` — mas o SOCKET do cliente anterior continua vivo e reconectando
+ * sozinho (`reconnectPeriod`). Com o `clientId` estável (ADR-0004), o zumbi e o novo
+ * passam a se derrubar mutuamente para sempre: o broker responde `reasonCode 142`
+ * ("Session taken over") a cada rodada, e o barramento pisca sem parar.
+ *
+ * Antes do id estável isso passava batido (ids diferentes = zumbis coexistiam). Encerrar
+ * o cliente ANTES da troca do módulo mata o zumbi na origem.
+ *
+ * Só afeta desenvolvimento: em build de release não há Fast Refresh, então não há dois
+ * contextos JS — e o id estável segue sendo o correto para o LWT.
+ */
+const hot = (module as unknown as { hot?: { dispose(cb: () => void): void } }).hot;
+hot?.dispose(() => {
+  client?.end(true);
+  client = null;
+});
+
 /** Escopo da mensagem recebida (deriva do tópico/payload). */
 export type MessageScope = 'central' | 'equipe' | 'dm';
 
