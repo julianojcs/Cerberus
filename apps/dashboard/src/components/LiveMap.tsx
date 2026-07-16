@@ -240,10 +240,25 @@ function batteryIcon(level: number | undefined): string {
  * já recebia, só não exibia) + o estado da conexão. Agrupado em Agente / Aparelho /
  * Conexão. `speed` vem em m/s (e negativa quando o GPS não sabe) → km/h.
  */
-function popupHtml(p: AgentPoint, online: boolean, nowMs: number): string {
+function popupHtml(p: AgentPoint, online: boolean, nowMs: number, refreshing = false): string {
   const sep = `<div style="height:1px;background:var(--border);margin:8px 0"></div>`;
-  const head = (t: string): string =>
-    `<div style="font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:3px">${t}</div>`;
+  const head = (t: string, action = ''): string =>
+    `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:3px">` +
+    `<span style="font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)">${t}</span>` +
+    `${action}</div>`;
+  // Só faz sentido pedir dados a quem está conectado — desconectado, o botão some.
+  // `data-refresh` é lido por delegação no elemento do popup (o innerHTML é reescrito
+  // a cada atualização de telemetria, o que mataria um listener preso ao botão).
+  const refreshBtn = online
+    ? `<button type="button" data-refresh aria-label="Atualizar dados do agente" ` +
+      `${refreshing ? 'disabled class="agent-refreshing"' : ''} ` +
+      `style="display:grid;place-items:center;width:22px;height:22px;padding:0;border:1px solid var(--border);` +
+      `border-radius:6px;background:transparent;color:var(--muted);cursor:pointer">` +
+      `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" ` +
+      `stroke-linecap="round" stroke-linejoin="round">` +
+      `<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/>` +
+      `<path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg></button>`
+    : '';
   const num = (v: number | null | undefined, f: (n: number) => string): string =>
     v == null ? '—' : f(v);
 
@@ -259,7 +274,7 @@ function popupHtml(p: AgentPoint, online: boolean, nowMs: number): string {
     batteryIcon(p.battery) +
     `</div>` +
     sep +
-    head('Aparelho') +
+    head('Aparelho', refreshBtn) +
     row(
       'Bateria',
       num(p.battery, (b) => `${Math.round(b * 100)}%`),
@@ -538,6 +553,7 @@ export function LiveMap({
   presence,
   agentColorsStrong,
   agentIdentity,
+  onRefreshAgent,
   trails = {},
   showTrails = true,
   showTrailDirection = false,
@@ -563,6 +579,8 @@ export function LiveMap({
   agentColorsStrong?: Record<string, string>;
   /** Nome + @usuario por agente — card de hover do marcador. */
   agentIdentity?: Record<string, AgentIdentity>;
+  /** Botao "atualizar" do balao: pede fix ao agente + re-sincroniza com o servidor. */
+  onRefreshAgent?: (agentId: string) => void;
   trails?: AgentTrails;
   showTrails?: boolean;
   /** Efeito "Sentido das trilhas": setas ao longo das trilhas e rotas. */
@@ -628,12 +646,16 @@ export function LiveMap({
   // eles congelariam a identidade da primeira renderizacao.
   const identityRef = useRef(agentIdentity);
   identityRef.current = agentIdentity;
+  const onRefreshRef = useRef(onRefreshAgent);
+  onRefreshRef.current = onRefreshAgent;
   const hoverPopupRef = useRef<maplibregl.Popup | null>(null);
   // Balão de informações: instância única + de qual agente é + o HTML de cada um
   // (o listener de clique é registrado uma vez, então precisa ler tudo via ref).
   const infoPopupRef = useRef<maplibregl.Popup | null>(null);
   const infoAgentRef = useRef<string | null>(null);
   const infoHtmlRef = useRef<Record<string, string>>({});
+  /** agentId → instante do pedido de fix. Enquanto existe, o botão gira. */
+  const refreshingRef = useRef<Record<string, number>>({});
   const fittedRef = useRef(false);
   const styleReadyRef = useRef(false);
 
@@ -891,6 +913,19 @@ export function LiveMap({
           infoPopupRef.current.on('close', () => {
             if (infoAgentRef.current === agentId) infoAgentRef.current = null;
           });
+          // Delegacao: o listener fica no ELEMENTO do popup, nao no botao — o innerHTML
+          // e reescrito a cada telemetria nova e levaria junto um listener no botao.
+          infoPopupRef.current.getElement()?.addEventListener('click', (ev) => {
+            const btn = (ev.target as HTMLElement)?.closest('[data-refresh]');
+            if (btn instanceof HTMLButtonElement && !btn.disabled) {
+              ev.stopPropagation();
+              refreshingRef.current[agentId] = Date.now();
+              // Feedback na hora, sem esperar o próximo ciclo de render do balão.
+              btn.disabled = true;
+              btn.classList.add('agent-refreshing');
+              onRefreshRef.current?.(agentId);
+            }
+          });
         });
       }
       // Forma do marcador conforme o estado; só redesenha quando o estado muda
@@ -909,7 +944,21 @@ export function LiveMap({
       marker.setLngLat([point.lng, point.lat]);
       // Guarda o HTML de cada agente (o clique lê daqui) e atualiza ao vivo o balão que
       // estiver aberto — a telemetria continua chegando enquanto ele está na tela.
-      infoHtmlRef.current[agentId] = popupHtml(point, fresh, nowMs);
+      // Para de girar quando o agente RESPONDEU (posição mais nova que o pedido) ou
+      // quando o pedido envelheceu — senão o botão giraria para sempre.
+      const askedAt = refreshingRef.current[agentId];
+      if (
+        askedAt != null &&
+        (+new Date(point.capturedAt ?? 0) > askedAt || nowMs - askedAt > 20_000)
+      ) {
+        delete refreshingRef.current[agentId];
+      }
+      infoHtmlRef.current[agentId] = popupHtml(
+        point,
+        fresh,
+        nowMs,
+        refreshingRef.current[agentId] != null,
+      );
       if (infoAgentRef.current === agentId) {
         infoPopupRef.current?.setLngLat([point.lng, point.lat]);
         infoPopupRef.current?.setHTML(infoHtmlRef.current[agentId]);

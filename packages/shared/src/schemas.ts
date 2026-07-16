@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
   ActivityType,
+  AgentCommandType,
   DevicePlatform,
   MessageType,
   OperationStatus,
@@ -41,6 +42,16 @@ export const positionSampleSchema = z.object({
   capturedAt: z.string().datetime(),
 });
 export type PositionSample = z.infer<typeof positionSampleSchema>;
+
+/**
+ * Comando da central para um agente (canal `comando`). Payload mínimo e em claro: é
+ * CONTROLE, não conteúdo — nada aqui é sensível. O alvo vem do TÓPICO, nunca do corpo
+ * (ver .claude/rules/mqtt-multitenant.md).
+ */
+export const agentCommandSchema = z.object({
+  type: z.enum(enumValues(AgentCommandType)),
+});
+export type AgentCommand = z.infer<typeof agentCommandSchema>;
 
 /**
  * Presença do agente no canal `status` (`operacao/{op}/agente/{id}/status`).

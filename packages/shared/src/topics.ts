@@ -17,6 +17,8 @@ export const AgentChannel = {
   STATUS: 'status',
   /** Caixa de entrada do agente (DM da central → agente). */
   INBOX: 'inbox',
+  /** Comando da central → agente (controle; ver AgentCommandType). */
+  COMANDO: 'comando',
 } as const;
 export type AgentChannel = (typeof AgentChannel)[keyof typeof AgentChannel];
 
@@ -38,6 +40,15 @@ export function agentStatusTopic(operationId: string, agentId: string): string {
 /** `operacao/{operationId}/agente/{agentId}/inbox` — DM da central para um agente. */
 export function agentInboxTopic(operationId: string, agentId: string): string {
   return `${TOPIC_ROOT}/${operationId}/agente/${agentId}/${AgentChannel.INBOX}`;
+}
+
+/**
+ * `operacao/{operationId}/agente/{agentId}/comando` — central → UM agente (controle).
+ * Fica no subtópico do próprio agente, então respeita o menor privilégio: o agente já
+ * assina `operacao/{opId}/agente/{agentId}/#` e não precisa de acesso novo.
+ */
+export function agentCommandTopic(operationId: string, agentId: string): string {
+  return `${TOPIC_ROOT}/${operationId}/agente/${agentId}/${AgentChannel.COMANDO}`;
 }
 
 /** `operacao/{operationId}/broadcast` — central → todos os agentes da operação. */

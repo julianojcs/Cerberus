@@ -24,6 +24,7 @@ Todos os tópicos derivam de `packages/shared/src/topics.ts`. **Nunca** montar s
 | Agente publica posição | `agentPositionTopic(opId, agentId)` | `operacao/{opId}/agente/{agentId}/posicao` |
 | Agente publica mensagem | `agentMessageTopic(opId, agentId)` | `operacao/{opId}/agente/{agentId}/mensagem` |
 | Agente publica presença | `agentStatusTopic(opId, agentId)` | `operacao/{opId}/agente/{agentId}/status` |
+| Central comanda UM agente | `agentCommandTopic(opId, agentId)` | `operacao/{opId}/agente/{agentId}/comando` |
 | Central → agentes da operação | `operationBroadcastTopic(opId)` | `operacao/{opId}/broadcast` |
 | Dashboard assina a operação | `operationWildcardTopic(opId)` | `operacao/{opId}/#` |
 | Ponte da API assina tudo | `bridgeIngestTopic()` | `operacao/+/agente/+/#` |
@@ -52,6 +53,25 @@ significa queda. Ver [ADR-0004](../../docs/decisions/adr-0004-presenca-do-agente
   da sessão zumbi na reconexão, com o testamento dela saindo ANTES do novo `{online:true}`.
   Um id rotativo inverte a ordem e retém um `offline` falso.
 - **A ponte da API ignora `status`** de propósito (presença é efêmera, mobile↔dashboard).
+
+## Canal `comando` — controle da central para UM agente
+
+Comando é **controle**, não conteúdo: **não** é E2EE, **não** vira chat e **não** entra no
+histórico de mensagens. Não confundir com `inbox` (DM cifrada da central para o agente).
+
+- **Payload:** `agentCommandSchema` → `{ "type": AgentCommandType }`. Em claro (nada aqui
+  é sensível). O ALVO vem do tópico, nunca do corpo.
+- **Quem publica é a API**, nunca o dashboard: ela valida `assertOperationScope` antes de
+  qualquer coisa entrar no barramento (mesmo padrão do broadcast). O dashboard chama
+  `POST /operations/:id/agents/:agentId/command`.
+- **Fire-and-forget:** o `202` diz que o comando foi EMITIDO, não que o agente respondeu.
+  A resposta chega depois, como dado normal no canal próprio (ex.: `request_fix` →
+  uma posição em `posicao`).
+- **Menor privilégio preservado:** o tópico fica no subtópico do próprio agente, que ele
+  já assina — nenhum acesso novo.
+- Comandos vivem em `AgentCommandType` (shared). Hoje: `request_fix` — pede posição
+  fresca, porque o GPS hiberna com o agente parado e o Doze do Android pode adiar o
+  heartbeat por dezenas de minutos.
 
 ## Regras obrigatórias
 

@@ -776,6 +776,50 @@ export default function LiveOperationPage() {
     return out;
   }, [agentColorTokens, agentColorOverrides]);
 
+  /**
+   * Botão "atualizar" do balão do agente. Faz as DUAS coisas:
+   * 1. pede um fix fresco AO AGENTE (canal `comando`) — o GPS hiberna parado e o Doze
+   *    pode adiar o heartbeat, então só re-buscar do servidor traria o mesmo dado velho;
+   * 2. re-sincroniza com o servidor, cobrindo uma posição que o dashboard tenha perdido
+   *    (ex.: mensagem MQTT durante uma reconexão).
+   * A resposta do agente não é síncrona: chega depois como posição normal, pelo MQTT.
+   */
+  const refreshAgent = useCallback(
+    (agentId: string) => {
+      // NÃO engolir a falha: sem isto, um 403/503/rota-ausente fica indistinguível de
+      // "o comando saiu, o agente é que não respondeu" — e o operador só vê nada mudar.
+      void api.requestAgentFix(operationId, agentId).catch((err: unknown) => {
+        console.warn('[cerberus] falha ao pedir posição ao agente:', err);
+      });
+      void api
+        .latestPositions(operationId)
+        .then((positions: LatestPosition[]) => {
+          setAgents((prev) => {
+            const next = { ...prev };
+            for (const p of positions) {
+              next[p.agentId] = {
+                agentId: p.agentId,
+                lat: p.lat,
+                lng: p.lng,
+                heading: p.heading,
+                battery: p.battery,
+                activity: p.activity,
+                accuracy: p.accuracy,
+                altitude: p.altitude,
+                speed: p.speed,
+                capturedAt: p.capturedAt,
+              };
+            }
+            return next;
+          });
+        })
+        .catch((err: unknown) => {
+          console.warn('[cerberus] falha ao re-sincronizar posições:', err);
+        });
+    },
+    [operationId],
+  );
+
   // Identidade por agente para o card de hover no mapa (avatar + nome + @usuário),
   // espelhando o card do chat. Sem foto no sistema ainda → o avatar usa as INICIAIS.
   const agentIdentity = useMemo(() => {
@@ -2321,6 +2365,7 @@ export default function LiveOperationPage() {
                 presence={presence}
                 agentColorsStrong={agentColorsStrong}
                 agentIdentity={agentIdentity}
+                onRefreshAgent={refreshAgent}
                 routes={plottedRoutes}
                 trails={liveTrailsForMap}
                 showTrails={showLiveTrail}

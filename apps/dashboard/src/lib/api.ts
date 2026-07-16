@@ -179,6 +179,17 @@ export const api = {
     request<void>('/auth/e2ee-backup', { method: 'PUT', body: JSON.stringify(blob) }),
   getE2eeBackup: () => request<E2eeKeyBackup>('/auth/e2ee-backup'),
   deleteE2eeBackup: () => request<void>('/auth/e2ee-backup', { method: 'DELETE' }),
+  /**
+   * Pede ao AGENTE uma posição fresca (canal `comando`). Fire-and-forget: o 202 diz que
+   * o comando foi emitido no barramento, não que o agente respondeu — a resposta chega
+   * depois como uma posição normal, pelo MQTT. Necessário porque o GPS hiberna com o
+   * agente parado e o Doze pode adiar o heartbeat por dezenas de minutos.
+   */
+  requestAgentFix: (operationId: string, agentId: string) =>
+    request<{ sent: boolean }>(`/operations/${operationId}/agents/${agentId}/command`, {
+      method: 'POST',
+      body: JSON.stringify({ type: 'request_fix' }),
+    }),
   latestPositions: (operationId: string) =>
     request<LatestPosition[]>(`/operations/${operationId}/positions/latest`),
   // Histórico da operação (trilha). Vem ordenado do mais recente para o mais antigo.

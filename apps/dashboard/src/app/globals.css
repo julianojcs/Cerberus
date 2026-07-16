@@ -214,6 +214,26 @@
 .agent-hover {
   pointer-events: none;
 }
+
+/* Botão "atualizar" do balão em voo. O comando é assíncrono (o agente responde quando
+   consegue um fix), então sem este retorno o clique parece não ter feito nada. */
+@keyframes agent-refresh-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.agent-refreshing {
+  opacity: 0.6;
+  cursor: default;
+}
+.agent-refreshing svg {
+  animation: agent-refresh-spin 1s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .agent-refreshing svg {
+    animation: none;
+  }
+}
 .maplibregl-popup .maplibregl-popup-close-button {
   color: var(--muted);
   font-size: 16px;

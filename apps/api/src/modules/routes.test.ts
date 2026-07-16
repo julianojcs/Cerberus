@@ -154,6 +154,38 @@ describe('rotas escopadas por operação', () => {
     expect(body[0]).toMatchObject({ agentId: 'AG-0456', lng: -43.9386, lat: -19.9319 });
   });
 
+  it('admin emite comando request_fix ao agente → 202', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/agents/AG-0456/command`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { type: 'request_fix' },
+    });
+    // 202 = comando EMITIDO no barramento (fire-and-forget); a resposta do agente chega
+    // depois, como posição normal. 503 quando o mock de MQTT está desconectado.
+    expect([202, 503]).toContain(res.statusCode);
+  });
+
+  it('rejeita comando desconhecido (400)', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/agents/AG-0456/command`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { type: 'formatar_o_telefone' },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('agente (não-admin) não emite comando (403)', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/operations/${operationId}/agents/AG-0456/command`,
+      headers: { authorization: `Bearer ${agentToken}` },
+      payload: { type: 'request_fix' },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
   it('consulta de proximidade 2dsphere retorna o ponto', async () => {
     const res = await app.inject({
       method: 'GET',
@@ -1079,7 +1111,13 @@ describe('geofencing + alertas', () => {
       method: 'POST',
       url: `/operations/${operationId}/geofences`,
       headers: { authorization: `Bearer ${token}` },
-      payload: { name: 'ZonaEnvolvente', lng: center.lng, lat: center.lat, radiusMeters: 150, color: 'teal' },
+      payload: {
+        name: 'ZonaEnvolvente',
+        lng: center.lng,
+        lat: center.lat,
+        radiusMeters: 150,
+        color: 'teal',
+      },
     });
     expect(create.statusCode).toBe(201);
     const gid = create.json().id as string;
@@ -1572,7 +1610,12 @@ describe('hierarquia de usuários (RBAC)', () => {
         payload,
       });
     adminTargetId = (
-      await mk({ username: 'admin_target', name: 'Admin Alvo', password: 'cerberus123', role: 'admin' })
+      await mk({
+        username: 'admin_target',
+        name: 'Admin Alvo',
+        password: 'cerberus123',
+        role: 'admin',
+      })
     ).json().id;
     agHierId = (
       await mk({
@@ -1593,7 +1636,12 @@ describe('hierarquia de usuários (RBAC)', () => {
       })
     ).json().id;
     selfAdminId = (
-      await mk({ username: 'admin_self', name: 'Admin Self', password: 'cerberus123', role: 'admin' })
+      await mk({
+        username: 'admin_self',
+        name: 'Admin Self',
+        password: 'cerberus123',
+        role: 'admin',
+      })
     ).json().id;
     selfAdminToken = (
       await app.inject({
@@ -1870,7 +1918,11 @@ describe('sessões e dispositivos (1b)', () => {
       headers: { authorization: `Bearer ${token}` },
     });
     expect(sess.statusCode).toBe(200);
-    const legacy = app.jwt.sign({ sub: '000000000000000000000001', role: 'agente', operationIds: [] });
+    const legacy = app.jwt.sign({
+      sub: '000000000000000000000001',
+      role: 'agente',
+      operationIds: [],
+    });
     expect((await me(legacy)).statusCode).toBe(200); // sem sid → fail-open
   });
 
@@ -1954,7 +2006,9 @@ describe('sessões e dispositivos (1b)', () => {
       url: '/devices/blocked',
       headers: { authorization: `Bearer ${saToken}` },
     });
-    expect((blocked.json() as Array<{ deviceId: string }>).map((d) => d.deviceId)).toContain('DEV-X');
+    expect((blocked.json() as Array<{ deviceId: string }>).map((d) => d.deviceId)).toContain(
+      'DEV-X',
+    );
   });
 
   it('self-block do SA é bloqueado (403)', async () => {
@@ -2308,9 +2362,9 @@ describe('mensageria de equipe/DM (Fase 2b)', () => {
     });
     expect(res.statusCode).toBe(200);
     const arr = res.json() as Array<{ senderId: string; ciphertext?: string }>;
-    expect(arr.some((m) => m.senderId === 'AG-0456' && m.ciphertext === 'ct-do-agente-para-central')).toBe(
-      true,
-    );
+    expect(
+      arr.some((m) => m.senderId === 'AG-0456' && m.ciphertext === 'ct-do-agente-para-central'),
+    ).toBe(true);
   });
 });
 
@@ -2485,7 +2539,12 @@ describe('rotação de chave E2EE (Fase 5e-2)', () => {
       headers: { authorization: `Bearer ${token}` },
     });
     const admin = (
-      res.json() as Array<{ role: string; publicKey: string; keyHistory?: string[]; revoked?: boolean }>
+      res.json() as Array<{
+        role: string;
+        publicKey: string;
+        keyHistory?: string[];
+        revoked?: boolean;
+      }>
     ).find((e) => e.role === 'admin');
     expect(admin?.publicKey).toBe(k2.publicKey);
     expect(admin?.keyHistory).toContain(k1.publicKey);
@@ -2575,7 +2634,12 @@ describe('backup de chave E2EE na nuvem (Fase 5e-3)', () => {
   });
 
   it('isolamento: o backup de um usuário não vaza para outro (escopo por token)', async () => {
-    await app.inject({ method: 'PUT', url: '/auth/e2ee-backup', headers: auth(token), payload: blob });
+    await app.inject({
+      method: 'PUT',
+      url: '/auth/e2ee-backup',
+      headers: auth(token),
+      payload: blob,
+    });
     // o agente (outro usuário) vê o SEU backup (404, não tem) — nunca o do admin.
     expect(
       (await app.inject({ method: 'GET', url: '/auth/e2ee-backup', headers: auth(agentToken) }))
@@ -2583,7 +2647,8 @@ describe('backup de chave E2EE na nuvem (Fase 5e-3)', () => {
     ).toBe(404);
     // o admin continua vendo o dele.
     expect(
-      (await app.inject({ method: 'GET', url: '/auth/e2ee-backup', headers: auth(token) })).statusCode,
+      (await app.inject({ method: 'GET', url: '/auth/e2ee-backup', headers: auth(token) }))
+        .statusCode,
     ).toBe(200);
     await app.inject({ method: 'DELETE', url: '/auth/e2ee-backup', headers: auth(token) });
   });
