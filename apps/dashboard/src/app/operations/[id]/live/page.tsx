@@ -69,6 +69,7 @@ import { ColorPalettePicker } from '@/components/ColorPalettePicker';
 import { SettingsModal } from '@/components/SettingsModal';
 import { NotificationCenter, type NotifItem } from '@/components/NotificationCenter';
 import { Tooltip } from '@/components/ui/tooltip';
+import { toast } from '@/components/ui/sonner';
 import { UserMenu } from '@/components/UserMenu';
 import { PeriodRange } from '@/components/PeriodRange';
 import { alertBorderFocus, routeBearingAt, type AlertFocus } from '@/lib/geo';
@@ -786,11 +787,22 @@ export default function LiveOperationPage() {
    */
   const refreshAgent = useCallback(
     (agentId: string) => {
-      // NÃO engolir a falha: sem isto, um 403/503/rota-ausente fica indistinguível de
-      // "o comando saiu, o agente é que não respondeu" — e o operador só vê nada mudar.
-      void api.requestAgentFix(operationId, agentId).catch((err: unknown) => {
-        console.warn('[cerberus] falha ao pedir posição ao agente:', err);
-      });
+      // O retorno vai para o OPERADOR, não para o console: uma falha (403/503/rota
+      // ausente) era indistinguível de "o comando saiu e o agente não respondeu".
+      void api
+        .requestAgentFix(operationId, agentId)
+        .then(() => {
+          // 202 = comando EMITIDO. A resposta é assíncrona (o agente manda a posição
+          // quando conseguir um fix) — o texto deixa isso explícito.
+          toast.success('Posição solicitada ao agente', {
+            description: 'O card atualiza sozinho assim que o aparelho responder.',
+          });
+        })
+        .catch((err: unknown) => {
+          toast.error('Não foi possível solicitar a posição', {
+            description: err instanceof Error ? err.message : 'Falha no barramento.',
+          });
+        });
       void api
         .latestPositions(operationId)
         .then((positions: LatestPosition[]) => {
@@ -814,7 +826,9 @@ export default function LiveOperationPage() {
           });
         })
         .catch((err: unknown) => {
-          console.warn('[cerberus] falha ao re-sincronizar posições:', err);
+          toast.error('Falha ao re-sincronizar as posições', {
+            description: err instanceof Error ? err.message : undefined,
+          });
         });
     },
     [operationId],
