@@ -15,6 +15,7 @@ import { Avatar } from './Avatar';
 import { Button } from './ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
 import { ScrollArea } from './ui/scroll-area';
+import { Tooltip } from './ui/tooltip';
 import { cn } from '@/lib/utils';
 
 /**
@@ -122,30 +123,31 @@ export function NotificationCenter({
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-label={title}
-          title={title}
-          className="relative border border-solid border-border rounded-lg"
-        >
-          <Icon size={18} aria-hidden />
-          {unread > 0 && (
-            <span className="pointer-events-none absolute -top-[5px] -right-[5px] grid place-items-center">
-              {/* Anel do "ping" — expande e some ATRÁS do badge. */}
-              <span
-                aria-hidden
-                className="notif-badge-ping absolute inset-0 rounded-[9px] bg-accent"
-              />
-              {/* Badge sólido com o número (na frente), com fade sutil (estilo jmr26). */}
-              <span className="notif-badge-pulse relative grid h-[18px] min-w-[18px] place-items-center rounded-[9px] bg-accent px-1 text-[10px] font-bold text-white shadow-[0_0_0_2px_var(--bg)]">
-                {unread > 9 ? '9+' : unread}
+      <Tooltip content={title}>
+        <PopoverTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label={title}
+            className="relative border border-solid border-border rounded-lg"
+          >
+            <Icon size={18} aria-hidden />
+            {unread > 0 && (
+              <span className="pointer-events-none absolute -top-[5px] -right-[5px] grid place-items-center">
+                {/* Anel do "ping" — expande e some ATRÁS do badge. */}
+                <span
+                  aria-hidden
+                  className="notif-badge-ping absolute inset-0 rounded-[9px] bg-accent"
+                />
+                {/* Badge sólido com o número (na frente), com fade sutil (estilo jmr26). */}
+                <span className="notif-badge-pulse relative grid h-[18px] min-w-[18px] place-items-center rounded-[9px] bg-accent px-1 text-[10px] font-bold text-white shadow-[0_0_0_2px_var(--bg)]">
+                  {unread > 9 ? '9+' : unread}
+                </span>
               </span>
-            </span>
-          )}
-        </Button>
-      </PopoverTrigger>
+            )}
+          </Button>
+        </PopoverTrigger>
+      </Tooltip>
 
       <PopoverContent align="end" className="w-[340px] max-w-[92vw] overflow-hidden p-0">
         <div
@@ -201,69 +203,85 @@ export function NotificationCenter({
                     msgs.map((m) => {
                       const isUnread = !seenIds.has(m.id);
                       return (
-                        <button
-                          type="button"
+                        // Um único tooltip por linha (dica + severidade). Aninhar outro
+                        // tooltip no ponto de severidade faria os dois abrirem juntos.
+                        <Tooltip
                           key={m.id}
-                          onClick={() => {
-                            markRead(m.id);
-                            onOpen(m.id);
-                            setOpen(false);
-                          }}
-                          title={itemHint}
-                          className={cn(
-                            'flex w-full cursor-pointer items-start gap-2.5 px-3.5 py-2.5 text-left text-text hover:bg-panel-2',
-                            isUnread && 'bg-[rgba(193,18,31,0.08)]',
-                          )}
-                          style={rowBorder}
+                          content={
+                            <>
+                              {itemHint}
+                              {m.severityTitle && (
+                                <span className="block text-muted">{m.severityTitle}</span>
+                              )}
+                            </>
+                          }
                         >
-                          <Avatar name={m.senderName} color={m.color} size={30} />
-                          <div className="min-w-0 flex-1">
-                            <div className="flex min-w-0 items-center gap-1.5">
-                              <span
-                                className={cn(
-                                  'min-w-0 truncate text-[13px] text-text',
-                                  isUnread ? 'font-bold' : 'font-semibold',
-                                )}
-                              >
-                                {m.senderName}
-                              </span>
-                              {m.severityColor && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              markRead(m.id);
+                              onOpen(m.id);
+                              setOpen(false);
+                            }}
+                            className={cn(
+                              // fundo explícito nos DOIS estados — sem ele o <button> cai no
+                              // fundo branco padrão do navegador (não há preflight; ver #120).
+                              'flex w-full cursor-pointer items-start gap-2.5 px-3.5 py-2.5 text-left text-text',
+                              isUnread
+                                ? 'bg-[rgba(193,18,31,0.12)] hover:bg-[rgba(193,18,31,0.18)]'
+                                : 'bg-[rgba(255,255,255,0.055)] hover:bg-[rgba(255,255,255,0.10)]',
+                            )}
+                            style={rowBorder}
+                          >
+                            <Avatar name={m.senderName} color={m.color} size={30} />
+                            <div className="min-w-0 flex-1">
+                              <div className="flex min-w-0 items-center gap-1.5">
                                 <span
-                                  title={m.severityTitle}
-                                  aria-label={m.severityTitle}
-                                  className="h-2 w-2 shrink-0 rounded-full"
-                                  style={{ background: m.severityColor }}
-                                />
-                              )}
-                              {isUnread && (
-                                <span className="h-[7px] w-[7px] shrink-0 rounded-full bg-accent" />
-                              )}
-                              <span className="ml-auto shrink-0 text-[10px] text-muted">
-                                {ago(m.capturedAt, nowMs || +new Date(m.capturedAt))}
-                              </span>
+                                  className={cn(
+                                    'min-w-0 truncate text-[13px] text-text',
+                                    isUnread ? 'font-bold' : 'font-semibold',
+                                  )}
+                                >
+                                  {m.senderName}
+                                </span>
+                                {m.severityColor && (
+                                  <span
+                                    role="img"
+                                    aria-label={m.severityTitle}
+                                    className="h-2 w-2 shrink-0 rounded-full"
+                                    style={{ background: m.severityColor }}
+                                  />
+                                )}
+                                {isUnread && (
+                                  <span className="h-[7px] w-[7px] shrink-0 rounded-full bg-accent" />
+                                )}
+                                <span className="ml-auto shrink-0 text-[10px] text-muted">
+                                  {ago(m.capturedAt, nowMs || +new Date(m.capturedAt))}
+                                </span>
+                              </div>
+                              <div className="mt-0.5 flex items-center gap-1 truncate text-xs text-muted">
+                                {m.direction === 'exit' ? (
+                                  <ArrowRightFromLine
+                                    size={12}
+                                    aria-hidden
+                                    className="shrink-0"
+                                    style={{ color: '#e3b341' }}
+                                  />
+                                ) : m.direction === 'enter' ? (
+                                  <ArrowRightToLine
+                                    size={12}
+                                    aria-hidden
+                                    className="shrink-0"
+                                    style={{ color: 'var(--ok)' }}
+                                  />
+                                ) : m.isMedia ? (
+                                  <ImageIcon size={12} aria-hidden className="shrink-0" />
+                                ) : null}
+                                {m.preview}
+                              </div>
                             </div>
-                            <div className="mt-0.5 flex items-center gap-1 truncate text-xs text-muted">
-                              {m.direction === 'exit' ? (
-                                <ArrowRightFromLine
-                                  size={12}
-                                  aria-hidden
-                                  className="shrink-0"
-                                  style={{ color: '#e3b341' }}
-                                />
-                              ) : m.direction === 'enter' ? (
-                                <ArrowRightToLine
-                                  size={12}
-                                  aria-hidden
-                                  className="shrink-0"
-                                  style={{ color: 'var(--ok)' }}
-                                />
-                              ) : m.isMedia ? (
-                                <ImageIcon size={12} aria-hidden className="shrink-0" />
-                              ) : null}
-                              {m.preview}
-                            </div>
-                          </div>
-                        </button>
+                          </button>
+                        </Tooltip>
                       );
                     })}
                 </div>

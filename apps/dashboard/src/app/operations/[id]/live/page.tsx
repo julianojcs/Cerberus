@@ -11,7 +11,7 @@ import {
   File as FileIcon,
   Columns2,
   PanelTop,
- // Pin,
+  // Pin,
   Eye,
   Star,
   Lock,
@@ -67,6 +67,7 @@ import { ResizableSidebar } from '@/components/ResizableSidebar';
 import { ColorPalettePicker } from '@/components/ColorPalettePicker';
 import { SettingsModal } from '@/components/SettingsModal';
 import { NotificationCenter, type NotifItem } from '@/components/NotificationCenter';
+import { Tooltip } from '@/components/ui/tooltip';
 import { UserMenu } from '@/components/UserMenu';
 import { PeriodRange } from '@/components/PeriodRange';
 import { alertBorderFocus, routeBearingAt, type AlertFocus } from '@/lib/geo';
@@ -85,9 +86,7 @@ const HOUR_MS = 60 * 60 * 1000;
  * à operação (no diretório de chaves) mas ainda não transmitiu — aparece como
  * "aguardando sinal" para o operador ver quem DEVERIA estar na operação.
  */
-type AgentCard =
-  | (AgentPoint & { hasSignal: true })
-  | { agentId: string; hasSignal: false };
+type AgentCard = (AgentPoint & { hasSignal: true }) | { agentId: string; hasSignal: false };
 
 /** Mensagem de texto/broadcast já decifrada para exibição (`text: null` = falha). */
 interface DecryptedMessage {
@@ -311,7 +310,10 @@ export default function LiveOperationPage() {
         .then((saved) => setSettings((s) => ({ ...s, ...saved })))
         .catch(() => {
           // Sem permissão / falha — recarrega o estado real do servidor.
-          api.settings().then(setSettings).catch(() => {});
+          api
+            .settings()
+            .then(setSettings)
+            .catch(() => {});
         });
     }, 500);
   }, []);
@@ -910,7 +912,17 @@ export default function LiveOperationPage() {
             color: resolveColor(gfColor),
           };
     return [...base, preview];
-  }, [geofences, pendingCenter, gfShape, gfRadius, gfWidth, gfHeight, gfRotation, gfColor, editGeo]);
+  }, [
+    geofences,
+    pendingCenter,
+    gfShape,
+    gfRadius,
+    gfWidth,
+    gfHeight,
+    gfRotation,
+    gfColor,
+    editGeo,
+  ]);
 
   async function sendBroadcast() {
     const text = broadcastText.trim();
@@ -971,7 +983,13 @@ export default function LiveOperationPage() {
       const w = Number(gfWidth);
       const h = Number(gfHeight);
       if (!Number.isFinite(w) || w < 1 || !Number.isFinite(h) || h < 1) return;
-      data = { ...commonBase, shape: 'rectangle' as const, widthMeters: w, heightMeters: h, rotationDeg: Number(gfRotation) || 0 };
+      data = {
+        ...commonBase,
+        shape: 'rectangle' as const,
+        widthMeters: w,
+        heightMeters: h,
+        rotationDeg: Number(gfRotation) || 0,
+      };
     } else {
       const radius = Number(gfRadius);
       if (!Number.isFinite(radius) || radius < 1) return;
@@ -1068,7 +1086,13 @@ export default function LiveOperationPage() {
       if (!g || g.shape === 'polygon') return g;
       const closed =
         g.shape === 'rectangle'
-          ? rectangleRing(g.lng, g.lat, g.widthMeters ?? 100, g.heightMeters ?? 100, g.rotationDeg ?? 0)
+          ? rectangleRing(
+              g.lng,
+              g.lat,
+              g.widthMeters ?? 100,
+              g.heightMeters ?? 100,
+              g.rotationDeg ?? 0,
+            )
           : circleRing(g.lng, g.lat, g.radiusMeters || 100, 16);
       // Anel fechado (último = primeiro) → vértices abertos.
       const vertices = closed.slice(0, -1).map((p): [number, number] => [p[0] ?? 0, p[1] ?? 0]);
@@ -1159,7 +1183,8 @@ export default function LiveOperationPage() {
       form.append('ciphertext', envelope);
       form.append('file', new Blob([blobBuf], { type: 'application/octet-stream' }), 'doc.bin');
       const resp = await api.uploadMedia(operationId, form);
-      if (resp.mediaRef) void putCachedCiphertext(api.mediaPath(operationId, resp.mediaRef), cipher);
+      if (resp.mediaRef)
+        void putCachedCiphertext(api.mediaPath(operationId, resp.mediaRef), cipher);
       refreshMessages();
     } catch {
       /* upload falhou */
@@ -1219,9 +1244,7 @@ export default function LiveOperationPage() {
       crypto: m.crypto,
       caption: m.caption,
     }));
-    return [...texts, ...media].sort(
-      (a, b) => +new Date(b.capturedAt) - +new Date(a.capturedAt),
-    );
+    return [...texts, ...media].sort((a, b) => +new Date(b.capturedAt) - +new Date(a.capturedAt));
   }, [chatMsgs, mediaMsgs]);
 
   // Feed da central de notificações: avatar do remetente + título na COR DA TRILHA do
@@ -1237,7 +1260,7 @@ export default function LiveOperationPage() {
           // Cor da trilha do agente; Central/broadcast (sem trilha) usa o vermelho institucional.
           color: isBroadcast ? 'var(--accent)' : (agentColors[m.senderId] ?? 'var(--accent)'),
           isMedia: m.type === 'media',
-          preview: m.type === 'media' ? (m.caption || 'Foto') : (m.text ?? 'cifrada'),
+          preview: m.type === 'media' ? m.caption || 'Foto' : (m.text ?? 'cifrada'),
           capturedAt: m.capturedAt,
           group: teamName ? `Equipe ${teamName}` : 'Direto',
         };
@@ -1330,18 +1353,19 @@ export default function LiveOperationPage() {
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
           {/* Status do barramento MQTT: ícone com tooltip (azul = conectado; branco-fumaça = desconectado). */}
-          <span
-            role="img"
-            title={connected ? 'Barramento conectado' : 'Barramento desconectado'}
-            aria-label={connected ? 'Barramento conectado' : 'Barramento desconectado'}
-            style={{ display: 'inline-flex', alignItems: 'center' }}
-          >
-            {connected ? (
-              <GlobeLock size={20} aria-hidden style={{ color: 'var(--accent-2)' }} />
-            ) : (
-              <GlobeOff size={20} aria-hidden style={{ color: 'whitesmoke' }} />
-            )}
-          </span>
+          <Tooltip content={connected ? 'Barramento conectado' : 'Barramento desconectado'}>
+            <span
+              role="img"
+              aria-label={connected ? 'Barramento conectado' : 'Barramento desconectado'}
+              style={{ display: 'inline-flex', alignItems: 'center' }}
+            >
+              {connected ? (
+                <GlobeLock size={20} aria-hidden style={{ color: 'var(--accent-2)' }} />
+              ) : (
+                <GlobeOff size={20} aria-hidden style={{ color: 'whitesmoke' }} />
+              )}
+            </span>
+          </Tooltip>
           <NotificationCenter
             items={alertItems}
             icon={Bell}
@@ -1662,7 +1686,9 @@ export default function LiveOperationPage() {
                         type="number"
                         value={editGeo.heightMeters ?? ''}
                         onChange={(e) =>
-                          setEditGeo((g) => (g ? { ...g, heightMeters: Number(e.target.value) } : g))
+                          setEditGeo((g) =>
+                            g ? { ...g, heightMeters: Number(e.target.value) } : g,
+                          )
                         }
                         placeholder="Altura (m)"
                         style={gfInputStyle}
@@ -1680,9 +1706,9 @@ export default function LiveOperationPage() {
                   </>
                 ) : editGeo.shape === 'polygon' ? (
                   <div className="muted" style={{ fontSize: 12 }}>
-                    Arraste os <strong>vértices</strong> ({editGeo.vertices?.length ?? 0}). Clique num
-                    ponto <strong>+</strong> na aresta para adicionar; <strong>duplo-clique</strong>{' '}
-                    num vértice para remover (mín. 3).
+                    Arraste os <strong>vértices</strong> ({editGeo.vertices?.length ?? 0}). Clique
+                    num ponto <strong>+</strong> na aresta para adicionar;{' '}
+                    <strong>duplo-clique</strong> num vértice para remover (mín. 3).
                   </div>
                 ) : (
                   <div className="muted" style={{ fontSize: 12 }}>
@@ -2052,238 +2078,247 @@ export default function LiveOperationPage() {
               }}
               onMouseLeave={() => setBarHover(false)}
             >
-          {/* Barra de período (topo do mapa): DOIS controles (início e fim) definem o
+              {/* Barra de período (topo do mapa): DOIS controles (início e fim) definem o
               intervalo das rotas plotadas. Fica OCULTA e DESCE do topo quando o cursor
               passa na faixa superior; o "pin" a mantém fixa. O wrapper com overflow
               hidden faz a barra deslizar de cima para baixo. Padrão: últimas 24 h. */}
-          {firstTs != null && (
-            <>
-              {/* Alça sutil quando oculta — indica a área para revelar. */}
-              <div
-                style={{
-                  position: 'absolute',
-                  top: 6,
-                  left: '50%',
-                  transform: 'translateX(-50%)',
-                  zIndex: 5,
-                  width: 56,
-                  height: 5,
-                  borderRadius: 3,
-                  background: 'rgba(255,255,255,0.28)',
-                  pointerEvents: 'none',
-                  opacity: barPinned || barHover ? 0 : 1,
-                  transition: 'opacity 0.2s ease',
-                }}
-              />
-              <div
-                style={{
-                  position: 'absolute',
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  zIndex: 5,
-                  // Recorta só o topo (para a barra deslizar de cima); o espaço
-                  // extra embaixo evita cortar a SOMBRA da barra na base.
-                  overflow: 'hidden',
-                  paddingTop: 10,
-                  paddingBottom: 44,
-                  pointerEvents: 'none',
-                }}
-              >
-                <div
-                  style={{
-                    margin: '0 10px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 12,
-                    background: 'rgba(20,27,36,0.92)',
-                    border: '1px solid var(--border)',
-                    borderRadius: 10,
-                    padding: '8px 14px',
-                    boxShadow: '0 6px 16px rgba(0,0,0,.45)',
-                    transform: barPinned || barHover ? 'translateY(0)' : 'translateY(-180%)',
-                    opacity: barPinned || barHover ? 1 : 0,
-                    // "Bounce down": desce com leve overshoot (easing back) e mais devagar.
-                    transition:
-                      'transform 0.5s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.28s ease',
-                    pointerEvents: barPinned || barHover ? 'auto' : 'none',
-                  }}
-                >
-                  <span className="muted" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
-                    Período
-                  </span>
-                  <EdgeStamp ms={rangeMin} title="Início da faixa disponível" align="right" />
-                  <PeriodRange
-                    min={rangeMin}
-                    max={rangeMax}
-                    start={windowStartMs}
-                    end={windowEndMs}
-                    format={fmtDateTime}
-                    onChange={(s, e) => {
-                      setWindowStartMs(s);
-                      setWindowEndMs(e);
-                      // Ponta direita colada no extremo (≈agora) ⇒ volta a seguir o "agora".
-                      setLiveEnd(e >= nowTs - 60_000);
+              {firstTs != null && (
+                <>
+                  {/* Alça sutil quando oculta — indica a área para revelar. */}
+                  <div
+                    style={{
+                      position: 'absolute',
+                      top: 6,
+                      left: '50%',
+                      transform: 'translateX(-50%)',
+                      zIndex: 5,
+                      width: 56,
+                      height: 5,
+                      borderRadius: 3,
+                      background: 'rgba(255,255,255,0.28)',
+                      pointerEvents: 'none',
+                      opacity: barPinned || barHover ? 0 : 1,
+                      transition: 'opacity 0.2s ease',
                     }}
                   />
-                  <EdgeStamp ms={rangeMax} title="Fim da faixa (agora)" align="left" />
-                  <button
-                    type="button"
-                    className="pinbtn"
-                    onClick={() => {
-                      const v = !barPinned;
-                      setBarPinned(v);
-                      localStorage.setItem('cerberus_period_pinned', v ? '1' : '0');
+                  <div
+                    style={{
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      zIndex: 5,
+                      // Recorta só o topo (para a barra deslizar de cima); o espaço
+                      // extra embaixo evita cortar a SOMBRA da barra na base.
+                      overflow: 'hidden',
+                      paddingTop: 10,
+                      paddingBottom: 44,
+                      pointerEvents: 'none',
                     }}
-                    title={barPinned ? 'Desafixar a barra de período' : 'Fixar a barra de período'}
-                    aria-pressed={barPinned}
-                    style={{ flexShrink: 0, cursor: 'pointer', display: 'grid', placeItems: 'center' }}
                   >
-                    📌
-                  </button>
-                </div>
-              </div>
-            </>
-          )}
-          {/* Botão: enquadra o mapa em TODAS as rotas plotadas (fit bounds). O
+                    <div
+                      style={{
+                        margin: '0 10px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 12,
+                        background: 'rgba(20,27,36,0.92)',
+                        border: '1px solid var(--border)',
+                        borderRadius: 10,
+                        padding: '8px 14px',
+                        boxShadow: '0 6px 16px rgba(0,0,0,.45)',
+                        transform: barPinned || barHover ? 'translateY(0)' : 'translateY(-180%)',
+                        opacity: barPinned || barHover ? 1 : 0,
+                        // "Bounce down": desce com leve overshoot (easing back) e mais devagar.
+                        transition:
+                          'transform 0.5s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.28s ease',
+                        pointerEvents: barPinned || barHover ? 'auto' : 'none',
+                      }}
+                    >
+                      <span className="muted" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
+                        Período
+                      </span>
+                      <EdgeStamp ms={rangeMin} title="Início da faixa disponível" align="right" />
+                      <PeriodRange
+                        min={rangeMin}
+                        max={rangeMax}
+                        start={windowStartMs}
+                        end={windowEndMs}
+                        format={fmtDateTime}
+                        onChange={(s, e) => {
+                          setWindowStartMs(s);
+                          setWindowEndMs(e);
+                          // Ponta direita colada no extremo (≈agora) ⇒ volta a seguir o "agora".
+                          setLiveEnd(e >= nowTs - 60_000);
+                        }}
+                      />
+                      <EdgeStamp ms={rangeMax} title="Fim da faixa (agora)" align="left" />
+                      <button
+                        type="button"
+                        className="pinbtn"
+                        onClick={() => {
+                          const v = !barPinned;
+                          setBarPinned(v);
+                          localStorage.setItem('cerberus_period_pinned', v ? '1' : '0');
+                        }}
+                        title={
+                          barPinned ? 'Desafixar a barra de período' : 'Fixar a barra de período'
+                        }
+                        aria-pressed={barPinned}
+                        style={{
+                          flexShrink: 0,
+                          cursor: 'pointer',
+                          display: 'grid',
+                          placeItems: 'center',
+                        }}
+                      >
+                        📌
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
+              {/* Botão: enquadra o mapa em TODAS as rotas plotadas (fit bounds). O
               rótulo só aparece no hover (em repouso mostra só o ícone). */}
-          <button
-            type="button"
-            className="maplabelbtn"
-            onClick={() => setFitNonce((n) => n + 1)}
-            disabled={plottedRoutes.length === 0}
-            title={
-              plottedRoutes.length === 0
-                ? 'Selecione rotas para enquadrar'
-                : 'Enquadrar todas as rotas visíveis'
-            }
-            style={{
-              position: 'absolute',
-              bottom: 12,
-              left: 12,
-              zIndex: 5,
-              display: 'flex',
-              alignItems: 'center',
-              padding: '6px 10px',
-              borderRadius: 8,
-              border: '1px solid var(--border)',
-              background: 'rgba(20,27,36,0.92)',
-              color: 'var(--text)',
-              boxShadow: '0 2px 12px rgba(0,0,0,.4)',
-              cursor: plottedRoutes.length === 0 ? 'not-allowed' : 'pointer',
-              opacity: plottedRoutes.length === 0 ? 0.5 : 1,
-              fontSize: 13,
-            }}
-          >
-            <span>⤢</span>
-            <span className="maplabel">Enquadrar rotas</span>
-          </button>
-          <LiveMap
-            agents={agents}
-            routes={plottedRoutes}
-            trails={liveTrailsForMap}
-            showTrails={showLiveTrail}
-            showTrailDirection={trailDirectionOn}
-            agentColors={agentColors}
-            fitNonce={fitNonce}
-            mediaMarkers={showMedia ? mediaMarkers : []}
-            onMediaClick={(id) => {
-              const i = mediaMsgs.findIndex((m) => m.id === id);
-              if (i >= 0) setLightboxIndex(i);
-            }}
-            geofences={displayGeofences}
-            showGeofences={showZones}
-            onMapClick={(lng, lat) => {
-              if (placing) setPendingCenter({ lng, lat });
-            }}
-            editGeofence={editGeo}
-            onGeofenceMove={(lng, lat) => setEditGeo((e) => (e ? { ...e, lng, lat } : e))}
-            onGeofenceResize={(radiusMeters) => setEditGeo((e) => (e ? { ...e, radiusMeters } : e))}
-            onGeofenceReshape={(vertices) => setEditGeo((e) => (e ? { ...e, vertices } : e))}
-            focus={alertFocus}
-          />
-          <MapEffectsMenu
-            controls={[
-              { kind: 'section', id: 'sec-layers', label: 'Camadas' },
-              {
-                kind: 'toggle',
-                id: 'live-trail',
-                label: 'Trilha ao vivo',
-                title: 'Desenha o caminho do agente ao vivo, conforme ele se desloca',
-                checked: showLiveTrail,
-                onChange: setLiveTrail,
-              },
-              {
-                kind: 'toggle',
-                id: 'trail-direction',
-                label: 'Sentido das trilhas',
-                title: showLiveTrail
-                  ? 'Setas ao longo das trilhas e rotas indicando a direção do deslocamento'
-                  : 'Ative a "Trilha ao vivo" para usar o sentido das trilhas',
-                checked: trailDirectionOn,
-                // Sem trilha ao vivo não há trilha para indicar sentido — desabilita.
-                disabled: !showLiveTrail,
-                onChange: setShowTrailDirection,
-              },
-              {
-                kind: 'toggle',
-                id: 'zones',
-                label: 'Exibir zonas',
-                title: 'Exibir/ocultar as zonas (geofences) no mapa',
-                checked: showZones,
-                onChange: setShowZones,
-              },
-              {
-                kind: 'toggle',
-                id: 'media',
-                label: 'Exibir fotos',
-                title: 'Exibir/ocultar os pins de fotos geolocalizadas no mapa',
-                checked: showMedia,
-                onChange: setShowMedia,
-              },
-              { kind: 'section', id: 'sec-routes', label: 'Rotas' },
-              {
-                kind: 'toggle',
-                id: 'connect-routes',
-                label: 'Ligar rotas',
-                title: isAdmin
-                  ? 'Liga o fim de uma rota ao início da próxima (linha tracejada)'
-                  : 'Apenas administradores alteram as configurações',
-                checked: settings.connectRoutes,
-                disabled: !isAdmin,
-                onChange: (v) => updateSetting({ connectRoutes: v }),
-              },
-              {
-                kind: 'number',
-                id: 'min-route-points',
-                label: 'Pontos mínimos por rota',
-                title: isAdmin
-                  ? 'Rotas com menos pontos que isso são ocultadas (trechos insignificantes)'
-                  : 'Apenas administradores alteram as configurações',
-                value: settings.minRoutePoints,
-                min: 1,
-                max: 1000,
-                disabled: !isAdmin,
-                onChange: (v) =>
-                  updateSetting({ minRoutePoints: Math.min(1000, Math.max(1, Math.round(v))) }),
-              },
-              {
-                kind: 'number',
-                id: 'max-gap-minutes',
-                label: 'Intervalo que quebra a rota (min)',
-                title: isAdmin
-                  ? 'Sem transmissão por mais que isso, o trajeto é quebrado (evita o “pulo”)'
-                  : 'Apenas administradores alteram as configurações',
-                value: settings.maxGapMinutes,
-                min: 1,
-                max: 1440,
-                disabled: !isAdmin,
-                onChange: (v) =>
-                  updateSetting({ maxGapMinutes: Math.min(1440, Math.max(1, Math.round(v))) }),
-              },
-            ]}
-          />
-          </div>
+              <button
+                type="button"
+                className="maplabelbtn"
+                onClick={() => setFitNonce((n) => n + 1)}
+                disabled={plottedRoutes.length === 0}
+                title={
+                  plottedRoutes.length === 0
+                    ? 'Selecione rotas para enquadrar'
+                    : 'Enquadrar todas as rotas visíveis'
+                }
+                style={{
+                  position: 'absolute',
+                  bottom: 12,
+                  left: 12,
+                  zIndex: 5,
+                  display: 'flex',
+                  alignItems: 'center',
+                  padding: '6px 10px',
+                  borderRadius: 8,
+                  border: '1px solid var(--border)',
+                  background: 'rgba(20,27,36,0.92)',
+                  color: 'var(--text)',
+                  boxShadow: '0 2px 12px rgba(0,0,0,.4)',
+                  cursor: plottedRoutes.length === 0 ? 'not-allowed' : 'pointer',
+                  opacity: plottedRoutes.length === 0 ? 0.5 : 1,
+                  fontSize: 13,
+                }}
+              >
+                <span>⤢</span>
+                <span className="maplabel">Enquadrar rotas</span>
+              </button>
+              <LiveMap
+                agents={agents}
+                routes={plottedRoutes}
+                trails={liveTrailsForMap}
+                showTrails={showLiveTrail}
+                showTrailDirection={trailDirectionOn}
+                agentColors={agentColors}
+                fitNonce={fitNonce}
+                mediaMarkers={showMedia ? mediaMarkers : []}
+                onMediaClick={(id) => {
+                  const i = mediaMsgs.findIndex((m) => m.id === id);
+                  if (i >= 0) setLightboxIndex(i);
+                }}
+                geofences={displayGeofences}
+                showGeofences={showZones}
+                onMapClick={(lng, lat) => {
+                  if (placing) setPendingCenter({ lng, lat });
+                }}
+                editGeofence={editGeo}
+                onGeofenceMove={(lng, lat) => setEditGeo((e) => (e ? { ...e, lng, lat } : e))}
+                onGeofenceResize={(radiusMeters) =>
+                  setEditGeo((e) => (e ? { ...e, radiusMeters } : e))
+                }
+                onGeofenceReshape={(vertices) => setEditGeo((e) => (e ? { ...e, vertices } : e))}
+                focus={alertFocus}
+              />
+              <MapEffectsMenu
+                controls={[
+                  { kind: 'section', id: 'sec-layers', label: 'Camadas' },
+                  {
+                    kind: 'toggle',
+                    id: 'live-trail',
+                    label: 'Trilha ao vivo',
+                    title: 'Desenha o caminho do agente ao vivo, conforme ele se desloca',
+                    checked: showLiveTrail,
+                    onChange: setLiveTrail,
+                  },
+                  {
+                    kind: 'toggle',
+                    id: 'trail-direction',
+                    label: 'Sentido das trilhas',
+                    title: showLiveTrail
+                      ? 'Setas ao longo das trilhas e rotas indicando a direção do deslocamento'
+                      : 'Ative a "Trilha ao vivo" para usar o sentido das trilhas',
+                    checked: trailDirectionOn,
+                    // Sem trilha ao vivo não há trilha para indicar sentido — desabilita.
+                    disabled: !showLiveTrail,
+                    onChange: setShowTrailDirection,
+                  },
+                  {
+                    kind: 'toggle',
+                    id: 'zones',
+                    label: 'Exibir zonas',
+                    title: 'Exibir/ocultar as zonas (geofences) no mapa',
+                    checked: showZones,
+                    onChange: setShowZones,
+                  },
+                  {
+                    kind: 'toggle',
+                    id: 'media',
+                    label: 'Exibir fotos',
+                    title: 'Exibir/ocultar os pins de fotos geolocalizadas no mapa',
+                    checked: showMedia,
+                    onChange: setShowMedia,
+                  },
+                  { kind: 'section', id: 'sec-routes', label: 'Rotas' },
+                  {
+                    kind: 'toggle',
+                    id: 'connect-routes',
+                    label: 'Ligar rotas',
+                    title: isAdmin
+                      ? 'Liga o fim de uma rota ao início da próxima (linha tracejada)'
+                      : 'Apenas administradores alteram as configurações',
+                    checked: settings.connectRoutes,
+                    disabled: !isAdmin,
+                    onChange: (v) => updateSetting({ connectRoutes: v }),
+                  },
+                  {
+                    kind: 'number',
+                    id: 'min-route-points',
+                    label: 'Pontos mínimos por rota',
+                    title: isAdmin
+                      ? 'Rotas com menos pontos que isso são ocultadas (trechos insignificantes)'
+                      : 'Apenas administradores alteram as configurações',
+                    value: settings.minRoutePoints,
+                    min: 1,
+                    max: 1000,
+                    disabled: !isAdmin,
+                    onChange: (v) =>
+                      updateSetting({ minRoutePoints: Math.min(1000, Math.max(1, Math.round(v))) }),
+                  },
+                  {
+                    kind: 'number',
+                    id: 'max-gap-minutes',
+                    label: 'Intervalo que quebra a rota (min)',
+                    title: isAdmin
+                      ? 'Sem transmissão por mais que isso, o trajeto é quebrado (evita o “pulo”)'
+                      : 'Apenas administradores alteram as configurações',
+                    value: settings.maxGapMinutes,
+                    min: 1,
+                    max: 1440,
+                    disabled: !isAdmin,
+                    onChange: (v) =>
+                      updateSetting({ maxGapMinutes: Math.min(1440, Math.max(1, Math.round(v))) }),
+                  },
+                ]}
+              />
+            </div>
             {layout === 'split' && (
               <div
                 onMouseDown={() => {
@@ -2321,11 +2356,16 @@ export default function LiveOperationPage() {
                 className="thinscroll"
                 style={{ flex: 1, minWidth: 0, minHeight: 0, overflowY: 'auto', padding: 12 }}
               >
-                <strong style={{ fontSize: 15, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <strong
+                  style={{ fontSize: 15, display: 'inline-flex', alignItems: 'center', gap: 6 }}
+                >
                   <Images size={16} aria-hidden /> Galeria ({mediaMsgs.length})
                 </strong>
                 {mediaMsgs.length === 0 ? (
-                  <div className="muted" style={{ fontSize: 13, textAlign: 'center', marginTop: 40 }}>
+                  <div
+                    className="muted"
+                    style={{ fontSize: 13, textAlign: 'center', marginTop: 40 }}
+                  >
                     Nenhuma mídia na operação ainda.
                   </div>
                 ) : (
@@ -2400,11 +2440,18 @@ export default function LiveOperationPage() {
                 style={{ flex: 1, minWidth: 0, minHeight: 0, overflowY: 'auto', padding: 12 }}
               >
                 <div
-                  style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    gap: 8,
+                  }}
                 >
-                  <strong style={{ fontSize: 15, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                  <FileText size={16} aria-hidden /> Documentos ({docMsgs.length})
-                </strong>
+                  <strong
+                    style={{ fontSize: 15, display: 'inline-flex', alignItems: 'center', gap: 6 }}
+                  >
+                    <FileText size={16} aria-hidden /> Documentos ({docMsgs.length})
+                  </strong>
                   <input
                     ref={docFileRef}
                     type="file"
@@ -2435,7 +2482,10 @@ export default function LiveOperationPage() {
                   Arquivos cifrados (E2EE) — o servidor nunca vê o conteúdo.
                 </p>
                 {docMsgs.length === 0 ? (
-                  <div className="muted" style={{ fontSize: 13, textAlign: 'center', marginTop: 30 }}>
+                  <div
+                    className="muted"
+                    style={{ fontSize: 13, textAlign: 'center', marginTop: 30 }}
+                  >
                     Nenhum documento ainda.
                   </div>
                 ) : (
@@ -2492,7 +2542,11 @@ export default function LiveOperationPage() {
                             ⤓ Baixar
                           </button>
                         ) : (
-                          <span className="muted" style={{ display: 'inline-flex' }} title="Indecifrável">
+                          <span
+                            className="muted"
+                            style={{ display: 'inline-flex' }}
+                            title="Indecifrável"
+                          >
                             <Lock size={14} aria-hidden />
                           </span>
                         )}
@@ -2553,7 +2607,12 @@ export default function LiveOperationPage() {
             >
               <span className="muted">Visualizações · Favoritos</span>
               <span
-                style={{ color: 'var(--text)', display: 'inline-flex', alignItems: 'center', gap: 6 }}
+                style={{
+                  color: 'var(--text)',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                }}
               >
                 <Eye size={13} aria-hidden /> {mediaStats[it.id]?.views ?? 0} ·{' '}
                 <Star size={13} aria-hidden /> {mediaStats[it.id]?.favorites ?? 0}
