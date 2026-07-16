@@ -68,22 +68,17 @@ function markerHtml(
   color: string,
   heading?: number | null,
 ): string {
-  if (mode === 'car') {
+  if (mode === 'car' || mode === 'foot') {
+    // Em deslocamento (carro ou a pé): seta `navigation-2` na COR DO AGENTE, girada pelo
+    // rumo, sobre um disco BRANCO (a seta colorida precisa de fundo claro p/ contrastar)
+    // com um HALO pulsante ao redor — o "círculo pulsante" de antes.
     return (
-      `<span class="agent-puck agent-pulse" style="background:${color}">` +
-      `<svg viewBox="0 0 24 24" width="17" height="17" fill="#fff" stroke="#fff" stroke-width="1.5" ` +
+      `<span class="agent-nav">` +
+      `<span class="agent-nav-halo" style="background:${color}"></span>` +
+      `<span class="agent-nav-disc">` +
+      `<svg viewBox="0 0 24 24" width="17" height="17" fill="${color}" stroke="${color}" stroke-width="1" ` +
       `stroke-linejoin="round" style="transform:rotate(${Math.round(heading ?? 0)}deg)">` +
-      `<polygon points="3 11 22 2 13 21 11 13 3 11"/></svg></span>`
-    );
-  }
-  if (mode === 'foot') {
-    // A pé — seta `navigation-2` girada pelo rumo (mostra a direção do deslocamento),
-    // na cor do agente com contorno branco. Diferencia do carro (seta dentro do puck).
-    return (
-      `<span class="agent-foot agent-pulse">` +
-      `<svg viewBox="0 0 24 24" width="28" height="28" fill="${color}" stroke="#fff" stroke-width="1.5" ` +
-      `stroke-linejoin="round" style="transform:rotate(${Math.round(heading ?? 0)}deg)">` +
-      `<polygon points="12 2 19 21 12 17 5 21 12 2"/></svg></span>`
+      `<polygon points="12 2 19 21 12 17 5 21 12 2"/></svg></span></span>`
     );
   }
   // Parado — pin de public/svg, recolorido por máscara: conectado pulsa (map-pin),

@@ -262,25 +262,48 @@
   mask: url('/svg/map-pin-off-filled.svg') center / contain no-repeat;
 }
 
-/* Deslocamento de carro: círculo colorido + seta branca girada pelo rumo. */
-.agent-puck {
+/* Em deslocamento (carro ou a pé): seta na cor do agente sobre um disco branco, com um
+   halo pulsante ao redor (o "círculo pulsante"). A seta é colorida, então precisa do
+   fundo claro para contrastar; a rotação pelo rumo vai inline no <svg>. */
+.agent-nav {
+  position: relative;
   display: grid;
   place-items: center;
-  width: 34px;
-  height: 34px;
-  border-radius: 50%;
-  border: 2px solid #fff;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+  width: 28px;
+  height: 28px;
 }
-
-/* A pé: seta `navigation-2` girada pelo rumo (a rotação vai inline no <svg>). */
-.agent-foot {
+.agent-nav-halo {
+  position: absolute;
+  inset: -6px;
+  border-radius: 50%;
+  filter: blur(5px);
+  animation: agent-halo 1.8s ease-in-out infinite;
+}
+.agent-nav-disc {
+  position: relative;
   display: grid;
   place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+}
+@keyframes agent-halo {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.55;
+  }
+  50% {
+    transform: scale(1.7);
+    opacity: 0.12;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .agent-pulse {
+  .agent-pulse,
+  .agent-nav-halo {
     animation: none;
   }
 }
