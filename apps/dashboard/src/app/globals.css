@@ -273,44 +273,14 @@
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
 }
 
-/* A pé: bullet atual + halo desfocado pulsando na margem. */
+/* A pé: seta `navigation-2` girada pelo rumo (a rotação vai inline no <svg>). */
 .agent-foot {
-  position: relative;
   display: grid;
   place-items: center;
-  width: 20px;
-  height: 20px;
-}
-.agent-foot .agent-bullet {
-  position: relative;
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  border: 2px solid #fff;
-  box-sizing: border-box;
-}
-.agent-foot .agent-halo {
-  position: absolute;
-  inset: -8px;
-  border-radius: 50%;
-  filter: blur(5px);
-  animation: agent-halo 1.8s ease-in-out infinite;
-}
-@keyframes agent-halo {
-  0%,
-  100% {
-    transform: scale(1);
-    opacity: 0.5;
-  }
-  50% {
-    transform: scale(1.7);
-    opacity: 0.12;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .agent-pulse,
-  .agent-foot .agent-halo {
+  .agent-pulse {
     animation: none;
   }
 }

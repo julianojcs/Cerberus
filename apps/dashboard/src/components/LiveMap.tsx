@@ -77,10 +77,13 @@ function markerHtml(
     );
   }
   if (mode === 'foot') {
+    // A pé — seta `navigation-2` girada pelo rumo (mostra a direção do deslocamento),
+    // na cor do agente com contorno branco. Diferencia do carro (seta dentro do puck).
     return (
-      `<span class="agent-foot">` +
-      `<span class="agent-halo" style="background:${color}"></span>` +
-      `<span class="agent-bullet" style="background:${color}"></span></span>`
+      `<span class="agent-foot agent-pulse">` +
+      `<svg viewBox="0 0 24 24" width="28" height="28" fill="${color}" stroke="#fff" stroke-width="1.5" ` +
+      `stroke-linejoin="round" style="transform:rotate(${Math.round(heading ?? 0)}deg)">` +
+      `<polygon points="12 2 19 21 12 17 5 21 12 2"/></svg></span>`
     );
   }
   // Parado — pin de public/svg, recolorido por máscara: conectado pulsa (map-pin),
