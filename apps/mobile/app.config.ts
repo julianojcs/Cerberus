@@ -48,6 +48,12 @@ const config: ExpoConfig = {
       'FOREGROUND_SERVICE',
       'FOREGROUND_SERVICE_LOCATION',
       'POST_NOTIFICATIONS',
+      // Doze: com o aparelho ocioso o Android ADIA os alarmes para janelas de
+      // manutenção cada vez mais espaçadas — e o heartbeat do GPS (5 min) é um alarme,
+      // então vira 30/60 min e a central vê o agente congelado mesmo conectado. O
+      // `foregroundService` impede o app de ser MORTO, mas não o isenta do Doze. Esta
+      // permissão habilita PEDIR a isenção ao operador (ver services/geolocation.ts).
+      'REQUEST_IGNORE_BATTERY_OPTIMIZATIONS',
     ],
   },
   plugins: [

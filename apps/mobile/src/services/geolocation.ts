@@ -1,3 +1,4 @@
+import { Alert, Platform } from 'react-native';
 import BackgroundGeolocation, {
   type Location,
   type MotionActivityEvent,
@@ -158,8 +159,46 @@ export async function initTracking(ctx: TrackingContext): Promise<void> {
   initialized = true;
 }
 
+/**
+ * Doze do Android: com o aparelho ocioso (tela apagada, parado, na bateria), o sistema
+ * ADIA os alarmes para janelas de manutenção cada vez mais espaçadas. O
+ * `heartbeatInterval` é um alarme — então o ping de 5 min vira 30, 60 min, e a central
+ * enxerga o agente "congelado" mesmo com o barramento conectado (foi o que observamos:
+ * presença online + última posição de 57 min atrás).
+ *
+ * `foregroundService: true` impede o app de ser MORTO, mas NÃO o isenta do Doze — a
+ * isenção só o usuário concede. Pedimos UMA vez: o plugin lembra em `request.seen`, e
+ * `showIgnoreBatteryOptimizations()` apenas devolve os metadados (não abre nada) — quem
+ * abre a tela é o `show(request)`, e só depois do operador aceitar.
+ */
+async function ensureBatteryExemption(): Promise<void> {
+  if (Platform.OS !== 'android') return;
+  try {
+    if (await BackgroundGeolocation.deviceSettings.isIgnoringBatteryOptimizations()) return;
+    const request = await BackgroundGeolocation.deviceSettings.showIgnoreBatteryOptimizations();
+    if (request.seen) return; // já pedimos uma vez — não insistir a cada início
+    Alert.alert(
+      'Manter o rastreamento ativo',
+      'O Android está limitando o Cerberus em segundo plano — sua posição pode ficar ' +
+        'dezenas de minutos sem atualizar na central, mesmo com o app conectado.\n\n' +
+        'Na próxima tela, permita que o Cerberus ignore a otimização de bateria.',
+      [
+        { text: 'Agora não', style: 'cancel' },
+        {
+          text: 'Abrir configuração',
+          onPress: () => BackgroundGeolocation.deviceSettings.show(request),
+        },
+      ],
+    );
+  } catch {
+    /* fabricante sem essa tela / API indisponível — segue sem a isenção */
+  }
+}
+
 export async function startTracking(): Promise<void> {
   await BackgroundGeolocation.start();
+  // Depois de iniciar: o rastreamento já vale, a isenção só melhora a regularidade.
+  void ensureBatteryExemption();
 }
 
 export async function stopTracking(): Promise<void> {
