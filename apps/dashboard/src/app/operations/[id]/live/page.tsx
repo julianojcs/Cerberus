@@ -88,6 +88,35 @@ const HOUR_MS = 60 * 60 * 1000;
  */
 type AgentCard = (AgentPoint & { hasSignal: true }) | { agentId: string; hasSignal: false };
 
+/**
+ * Preferências do menu "Efeitos do mapa", lembradas por operador (localStorage —
+ * mesmo tratamento do pin da barra de período e da largura do chat). "Ligar rotas"
+ * NÃO entra aqui: é configuração de sistema, persistida no banco e só editável por admin.
+ */
+const MAP_EFFECTS_KEY = 'cerberus_map_effects';
+interface MapEffects {
+  liveTrail: boolean;
+  trailDirection: boolean;
+  zones: boolean;
+  media: boolean;
+}
+
+/**
+ * Grava o patch por cima do que já está salvo. É chamado pelos SETTERS (e não por um
+ * efeito que observa o estado) de propósito: um efeito rodaria na montagem com os
+ * PADRÕES, antes da leitura inicial aplicar o que estava salvo, e sobrescreveria a
+ * preferência do operador. Mesclar contra o storage também evita closure obsoleto.
+ */
+function persistMapEffects(patch: Partial<MapEffects>): void {
+  try {
+    const raw = localStorage.getItem(MAP_EFFECTS_KEY);
+    const cur = raw ? (JSON.parse(raw) as Partial<MapEffects>) : {};
+    localStorage.setItem(MAP_EFFECTS_KEY, JSON.stringify({ ...cur, ...patch }));
+  } catch {
+    /* storage indisponível/cheio — preferência é best-effort */
+  }
+}
+
 /** Mensagem de texto/broadcast já decifrada para exibição (`text: null` = falha). */
 interface DecryptedMessage {
   id: string;
@@ -248,12 +277,22 @@ export default function LiveOperationPage() {
   const setLiveTrail = useCallback((v: boolean) => {
     setShowLiveTrail(v);
     if (!v) setShowTrailDirection(false);
+    // Ao desligar, o sentido cai junto — persiste os dois para não voltar órfão.
+    persistMapEffects(v ? { liveTrail: true } : { liveTrail: false, trailDirection: false });
+  }, []);
+  const setTrailDirection = useCallback((v: boolean) => {
+    setShowTrailDirection(v);
+    persistMapEffects({ trailDirection: v });
   }, []);
   // Sentido efetivo: só vale com a trilha ao vivo ligada (defesa contra estado órfão).
   const trailDirectionOn = showLiveTrail && showTrailDirection;
   // Exibir fotos (pins de mídia geolocalizada) no mapa — menu de efeitos.
   // Padrão DESLIGADO (o mapa abre limpo); só "Exibir zonas" nasce ligado.
   const [showMedia, setShowMedia] = useState(false);
+  const setMedia = useCallback((v: boolean) => {
+    setShowMedia(v);
+    persistMapEffects({ media: v });
+  }, []);
   const seededTrailRef = useRef(false);
   // Seleção inicial das rotas: marca todos os agentes por padrão na 1ª carga (uma vez).
   const seededSelectionRef = useRef(false);
@@ -390,15 +429,33 @@ export default function LiveOperationPage() {
   } | null>(null);
   const [alertFocus, setAlertFocus] = useState<AlertFocus | null>(null);
   const [showZones, setShowZones] = useState(true);
+  const setZones = useCallback((v: boolean) => {
+    setShowZones(v);
+    persistMapEffects({ zones: v });
+  }, []);
   const [recomputing, setRecomputing] = useState(false);
 
   // Preferências lidas do localStorage (só no cliente — evita mismatch de SSR):
-  // pin da barra + cores escolhidas por agente para esta operação.
+  // pin da barra + cores por agente desta operação + toggles do menu de efeitos.
   useEffect(() => {
     setBarPinned(localStorage.getItem('cerberus_period_pinned') === '1');
     try {
       const raw = localStorage.getItem(colorsKey);
       if (raw) setAgentColorOverrides(JSON.parse(raw) as Record<string, string>);
+    } catch {
+      /* preferência corrompida — ignora */
+    }
+    try {
+      const raw = localStorage.getItem(MAP_EFFECTS_KEY);
+      if (raw) {
+        // Cada toggle é aplicado só se estiver salvo como boolean: preferência antiga
+        // ou corrompida não derruba o padrão nem quebra a tela.
+        const e = JSON.parse(raw) as Partial<MapEffects>;
+        if (typeof e.liveTrail === 'boolean') setShowLiveTrail(e.liveTrail);
+        if (typeof e.trailDirection === 'boolean') setShowTrailDirection(e.trailDirection);
+        if (typeof e.zones === 'boolean') setShowZones(e.zones);
+        if (typeof e.media === 'boolean') setShowMedia(e.media);
+      }
     } catch {
       /* preferência corrompida — ignora */
     }
@@ -2282,7 +2339,7 @@ export default function LiveOperationPage() {
                     checked: trailDirectionOn,
                     // Sem trilha ao vivo não há trilha para indicar sentido — desabilita.
                     disabled: !showLiveTrail,
-                    onChange: setShowTrailDirection,
+                    onChange: setTrailDirection,
                   },
                   {
                     kind: 'toggle',
@@ -2290,7 +2347,7 @@ export default function LiveOperationPage() {
                     label: 'Exibir zonas',
                     title: 'Exibir/ocultar as zonas (geofences) no mapa',
                     checked: showZones,
-                    onChange: setShowZones,
+                    onChange: setZones,
                   },
                   {
                     kind: 'toggle',
@@ -2298,7 +2355,7 @@ export default function LiveOperationPage() {
                     label: 'Exibir fotos',
                     title: 'Exibir/ocultar os pins de fotos geolocalizadas no mapa',
                     checked: showMedia,
-                    onChange: setShowMedia,
+                    onChange: setMedia,
                   },
                   { kind: 'section', id: 'sec-routes', label: 'Rotas' },
                   {
