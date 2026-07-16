@@ -205,6 +205,37 @@ function hoverCardHtml(
 }
 
 /**
+ * Ícone de bateria (lucide) escolhido pelo NÍVEL, com a cor acompanhando a gravidade.
+ * O popup é DOM cru, então os traços vão inline. Faixas: cheia ≥60, média ≥30,
+ * baixa ≥10, alerta <10.
+ */
+function batteryIcon(level: number | undefined): string {
+  if (level == null) return '';
+  const pct = level * 100;
+  const [body, color] =
+    pct >= 60
+      ? ['<path d="M10 10v4"/><path d="M14 10v4"/><path d="M6 10v4"/>', 'var(--ok)']
+      : pct >= 30
+        ? ['<path d="M10 14v-4"/><path d="M6 14v-4"/>', 'var(--text)']
+        : pct >= 10
+          ? ['<path d="M6 14v-4"/>', '#e3b341']
+          : [
+              '<path d="M10 17h.01"/><path d="M10 7v6"/>' +
+                '<path d="M14 6h2a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2"/>' +
+                '<path d="M6 18H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h2"/>',
+              '#f87171',
+            ];
+  // `battery-warning` desenha a própria carcaça (recortada pelo "!"); as demais usam o
+  // retângulo padrão. O terminal (`M22 14v-4`) é comum a todas.
+  const shell = pct >= 10 ? '<rect x="2" y="6" width="16" height="12" rx="2"/>' : '';
+  return (
+    `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="${color}" ` +
+    `stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0">` +
+    `${shell}<path d="M22 14v-4"/>${body}</svg>`
+  );
+}
+
+/**
  * Popup do agente: tudo o que o aparelho manda numa amostra de posição (o dashboard
  * já recebia, só não exibia) + o estado da conexão. Agrupado em Agente / Aparelho /
  * Conexão. `speed` vem em m/s (e negativa quando o GPS não sabe) → km/h.
@@ -218,8 +249,15 @@ function popupHtml(p: AgentPoint, online: boolean, nowMs: number): string {
 
   return (
     `<div style="min-width:190px;font-size:12px;color:var(--text)">` +
+    // Cabeçalho: identificação à esquerda, bateria à direita (o ícone dá o nível num
+    // relance; a porcentagem exata fica na linha "Bateria").
+    `<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px">` +
+    `<div style="min-width:0">` +
     `<div style="font-size:14px;font-weight:700;color:var(--text)">${esc(p.agentId)}</div>` +
     (p.operationName ? `<div style="color:var(--muted)">${esc(p.operationName)}</div>` : '') +
+    `</div>` +
+    batteryIcon(p.battery) +
+    `</div>` +
     sep +
     head('Aparelho') +
     row(
