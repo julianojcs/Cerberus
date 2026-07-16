@@ -39,30 +39,18 @@ function toSample(location: Location): PositionSample {
 }
 
 /**
- * Contexto do rastreamento, lido pelo handler de comando. Fica em módulo porque o
- * handler é registrado no LOAD (abaixo) e não dentro do `initTracking`.
- */
-let trackingCtx: TrackingContext | null = null;
-
-/**
  * Responde ao `request_fix` da central: força um fix AGORA e publica. Mesmo caminho do
  * heartbeat — a central usa isto quando a telemetria congelou (GPS hibernando parado, e
  * o Doze podendo adiar o heartbeat por dezenas de minutos). A resposta não é síncrona:
  * sai como uma posição normal no canal `posicao`.
  *
- * Registrado no LOAD do módulo, e NÃO dentro do `initTracking` (que roda uma única vez):
- * um hot reload do `mqtt.ts` zera o `commandHandler` de lá, e o `initTracking` não roda
- * de novo — o handler sumia em silêncio e o comando chegava para ninguém. Aqui, ao menos
- * um reload DESTE arquivo o re-registra. Injeção evita import circular (já importamos
- * `publishPosition` do mqtt).
+ * Registrado no LOAD do módulo (e não dentro do `initTracking`, que roda uma vez só): um
+ * hot reload zerava o `commandHandler` e o comando chegava para ninguém. O CONTEXTO vem
+ * junto com o comando, vindo do mqtt — antes ele era guardado aqui e o mesmo hot reload
+ * o zerava, deixando o handler vivo porém sem identidade. Injeção evita import circular.
  */
-setCommandHandler((type) => {
+setCommandHandler((type, ctx) => {
   if (type !== AgentCommandType.REQUEST_FIX) return;
-  const ctx = trackingCtx;
-  if (!ctx) {
-    console.warn('[gps] request_fix ignorado: rastreamento ainda não iniciado');
-    return;
-  }
   void (async () => {
     try {
       console.warn('[gps] comando request_fix → buscando posição…');
@@ -137,8 +125,6 @@ export async function getCurrentPositionOnce(ctx: TrackingContext): Promise<Posi
 }
 
 export async function initTracking(ctx: TrackingContext): Promise<void> {
-  // Antes do guard: o handler de comando lê daqui, e o ctx pode mudar (troca de operação).
-  trackingCtx = ctx;
   if (initialized) return;
 
   BackgroundGeolocation.onLocation((location: Location) => {

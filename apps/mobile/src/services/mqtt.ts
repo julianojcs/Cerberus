@@ -17,11 +17,20 @@ let client: MqttClient | null = null;
 /** Tópico de comando DESTE agente (definido no connect) — ver AgentCommandType. */
 let commandTopic: string | null = null;
 
+/** Identidade desta conexão — definida junto com o `commandTopic`, no connect. */
+let commandCtx: { operationId: string; agentId: string } | null = null;
+
 /**
  * Handler dos comandos da central. Registrado de fora (pelo serviço de geolocalização)
  * para não criar import circular: geolocation já importa `publishPosition` daqui.
+ *
+ * O CONTEXTO viaja com o comando de propósito. Antes o geolocation guardava o seu, mas
+ * quem o preenchia era o `initTracking` — que roda uma vez só; um hot reload zerava o
+ * contexto e o comando chegava para um handler sem identidade. Aqui o contexto nasce no
+ * mesmo lugar que a conexão, então vale um invariante: se um comando CHEGOU, havia
+ * conexão; se havia conexão, há contexto.
  */
-type CommandHandler = (type: string) => void;
+type CommandHandler = (type: string, ctx: { operationId: string; agentId: string }) => void;
 let commandHandler: CommandHandler | null = null;
 export function setCommandHandler(h: CommandHandler | null): void {
   commandHandler = h;
@@ -104,7 +113,7 @@ function handleIncoming(topic: string, payload: Uint8Array): void {
       // Diagnóstico: separa "o comando não chegou ao aparelho" de "chegou e o GPS não
       // conseguiu um fix" — hoje os dois terminam igual (o card não muda).
       console.warn('[mqtt] COMANDO recebido do dashboard:', type);
-      if (type) commandHandler?.(type);
+      if (type && commandCtx) commandHandler?.(type, commandCtx);
     } catch {
       /* comando inválido — ignora */
     }
@@ -202,6 +211,7 @@ export function connectMqtt(token: string, operationId: string, agentId: string)
 
   const statusTopic = agentStatusTopic(operationId, agentId);
   commandTopic = agentCommandTopic(operationId, agentId);
+  commandCtx = { operationId, agentId };
   const offline = JSON.stringify({ online: false } satisfies AgentStatus);
 
   client = mqtt.connect(config.mqttWsUrl, {
