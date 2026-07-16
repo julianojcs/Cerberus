@@ -33,15 +33,23 @@ function agentMode(activity?: string): AgentMode {
   }
 }
 
-/** Sinal fresco ⇒ agente "conectado" (telemetria recente). */
-const FRESH_MS = 60_000;
+/**
+ * Sinal fresco ⇒ agente "conectado" (transmitindo). O limiar TEM que respeitar a
+ * hibernação do GPS no mobile, senão um agente parado e conectado parece desconectado:
+ * - parado: o app hiberna o GPS e só faz um heartbeat a cada 5 min (`heartbeatInterval: 300`);
+ * - em deslocamento: as amostras dependem de andar 10 m (`distanceFilter: 10`) e podem
+ *   pausar (carro no semáforo) até o `stopTimeout` (5 min) religar o heartbeat.
+ * Logo o único piso GARANTIDO de vida é o heartbeat — toleramos 1 perdido.
+ */
+const HEARTBEAT_MS = 5 * 60_000; // apps/mobile/src/services/geolocation.ts
+const FRESH_MS = 2 * HEARTBEAT_MS + 60_000; // 11 min
 function isFresh(p: AgentPoint, nowMs: number): boolean {
   return p.capturedAt != null && nowMs - +new Date(p.capturedAt) < FRESH_MS;
 }
 
 /**
  * HTML do marcador conforme o estado do agente:
- * - parado: crosshair-2-dot (pulsa só quando conectado);
+ * - parado: map-pin (conectado, pulsando) ou map-pin-off (desconectado, estático);
  * - carro: puck com a seta `navigation` girada pelo rumo, pulsando;
  * - a pé: bullet com halo desfocado pulsando.
  */
@@ -66,9 +74,10 @@ function markerHtml(
       `<span class="agent-bullet" style="background:${color}"></span></span>`
     );
   }
-  // Parado — crosshair-2-dot de public/svg, recolorido por máscara. Pulsa só quando
-  // o sinal está fresco (agente conectado).
-  return `<span class="agent-crosshair${fresh ? ' agent-pulse' : ''}" style="background:${color}"></span>`;
+  // Parado — pin de public/svg, recolorido por máscara: conectado pulsa (map-pin),
+  // desconectado fica estático e riscado (map-pin-off).
+  const pin = fresh ? 'agent-pin agent-pulse' : 'agent-pin-off';
+  return `<span class="${pin}" style="background:${color}"></span>`;
 }
 
 /** Escapa texto interpolado no HTML do popup (nomes de operação/agente). */

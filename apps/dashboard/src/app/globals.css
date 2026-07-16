@@ -170,13 +170,20 @@
   filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.85));
 }
 
-/* Parado: crosshair-2-dot vindo do arquivo reutilizável (public/svg). Usa MÁSCARA
-   para herdar a cor do agente — um <img> não seria recolorível. */
-.agent-crosshair {
-  width: 24px;
-  height: 24px;
-  -webkit-mask: url('/svg/crosshair-2-dot.svg') center / contain no-repeat;
-  mask: url('/svg/crosshair-2-dot.svg') center / contain no-repeat;
+/* Parado: pin vindo do arquivo reutilizável (public/svg). Usa MÁSCARA para herdar a
+   cor do agente — um <img> não seria recolorível. Trocar o ícone = trocar o arquivo. */
+.agent-pin,
+.agent-pin-off {
+  width: 26px;
+  height: 26px;
+}
+.agent-pin {
+  -webkit-mask: url('/svg/map-pin.svg') center / contain no-repeat;
+  mask: url('/svg/map-pin.svg') center / contain no-repeat;
+}
+.agent-pin-off {
+  -webkit-mask: url('/svg/map-pin-off.svg') center / contain no-repeat;
+  mask: url('/svg/map-pin-off.svg') center / contain no-repeat;
 }
 
 /* Deslocamento de carro: círculo colorido + seta branca girada pelo rumo. */
