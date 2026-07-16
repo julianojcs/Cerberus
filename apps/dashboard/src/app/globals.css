@@ -146,8 +146,9 @@
 }
 
 /* ——— Marcador do agente no mapa ———
-   Estado dirige a forma: parado = map-pin (pulsa só se conectado); de carro = puck
-   com seta (estilo Google Maps); a pé = bullet com halo desfocado. */
+   Estado dirige a forma, e SEM SINAL manda sobre tudo (o `activity` pode ser de horas
+   atrás): sem sinal = map-pin-off estático; parado e conectado = map-pin pulsando; em
+   deslocamento (carro ou a pé) = seta na cor do agente sobre disco + halo pulsante. */
 @keyframes agent-pulse {
   0%,
   100% {
@@ -269,22 +270,26 @@
   position: relative;
   display: grid;
   place-items: center;
-  width: 28px;
-  height: 28px;
+  width: 34px;
+  height: 34px;
 }
 .agent-nav-halo {
   position: absolute;
-  inset: -6px;
+  inset: -7px;
   border-radius: 50%;
   filter: blur(5px);
   animation: agent-halo 1.8s ease-in-out infinite;
 }
+/* O anel (cor do agente, vem inline) é o que segura o marcador no mapa claro: um disco
+   só branco sumia no fundo e sobrava a seta solta. */
 .agent-nav-disc {
   position: relative;
   display: grid;
   place-items: center;
-  width: 28px;
-  height: 28px;
+  width: 34px;
+  height: 34px;
+  box-sizing: border-box;
+  border: 2px solid;
   border-radius: 50%;
   background: #fff;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);

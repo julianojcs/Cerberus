@@ -90,23 +90,25 @@ function markerHtml(
   color: string,
   heading?: number | null,
 ): string {
+  // SEM SINAL manda sobre o modo: o `activity` é a ÚLTIMA notícia (pode ter horas), então
+  // desenhar seta de deslocamento afirmaria um movimento que não sabemos se existe.
+  // Pin riscado e estático — é o que de fato sabemos: não temos sinal.
+  if (!fresh) return `<span class="agent-pin-off" style="background:${color}"></span>`;
   if (mode === 'car' || mode === 'foot') {
     // Em deslocamento (carro ou a pé): seta `navigation-2` na COR DO AGENTE, girada pelo
-    // rumo, sobre um disco BRANCO (a seta colorida precisa de fundo claro p/ contrastar)
-    // com um HALO pulsante ao redor — o "círculo pulsante" de antes.
+    // rumo, sobre um disco BRANCO com anel na cor do agente (só o branco sumia no mapa
+    // claro) e um HALO pulsante ao redor — o "círculo pulsante".
     return (
       `<span class="agent-nav">` +
       `<span class="agent-nav-halo" style="background:${color}"></span>` +
-      `<span class="agent-nav-disc">` +
-      `<svg viewBox="0 0 24 24" width="17" height="17" fill="${color}" stroke="${color}" stroke-width="1" ` +
+      `<span class="agent-nav-disc" style="border-color:${color}">` +
+      `<svg viewBox="0 0 24 24" width="21" height="21" fill="${color}" stroke="${color}" stroke-width="1" ` +
       `stroke-linejoin="round" style="transform:rotate(${Math.round(heading ?? 0)}deg)">` +
       `<polygon points="12 2 19 21 12 17 5 21 12 2"/></svg></span></span>`
     );
   }
-  // Parado — pin de public/svg, recolorido por máscara: conectado pulsa (map-pin),
-  // desconectado fica estático e riscado (map-pin-off).
-  const pin = fresh ? 'agent-pin agent-pulse' : 'agent-pin-off';
-  return `<span class="${pin}" style="background:${color}"></span>`;
+  // Parado e com sinal — pin de public/svg, recolorido por máscara, pulsando.
+  return `<span class="agent-pin agent-pulse" style="background:${color}"></span>`;
 }
 
 /** Escapa texto interpolado no HTML do popup (nomes de operação/agente). */
