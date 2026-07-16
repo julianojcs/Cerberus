@@ -71,7 +71,7 @@ import { Tooltip } from '@/components/ui/tooltip';
 import { UserMenu } from '@/components/UserMenu';
 import { PeriodRange } from '@/components/PeriodRange';
 import { alertBorderFocus, routeBearingAt, type AlertFocus } from '@/lib/geo';
-import { resolveColor } from '@/lib/tailwind-colors';
+import { resolveColor, resolveStrongColor } from '@/lib/tailwind-colors';
 import { buildRoutes, assignAgentColors, splitSegments, type Route } from '@/lib/routes';
 import { MapEffectsMenu } from '@/components/MapEffectsMenu';
 
@@ -699,6 +699,17 @@ export default function LiveOperationPage() {
     const out: Record<string, string> = {};
     const ids = new Set([...Object.keys(agentColorTokens), ...Object.keys(agentColorOverrides)]);
     for (const id of ids) out[id] = resolveColor(agentColorOverrides[id] ?? agentColorTokens[id]);
+    return out;
+  }, [agentColorTokens, agentColorOverrides]);
+
+  // Mesma família, tom 900 (o mais forte) — só para os MARCADORES: o tom 500 se perde
+  // sobre o mapa claro. A trilha/rota segue no 500, que é a identidade do agente.
+  const agentColorsStrong = useMemo(() => {
+    const out: Record<string, string> = {};
+    const ids = new Set([...Object.keys(agentColorTokens), ...Object.keys(agentColorOverrides)]);
+    for (const id of ids) {
+      out[id] = resolveStrongColor(agentColorOverrides[id] ?? agentColorTokens[id]);
+    }
     return out;
   }, [agentColorTokens, agentColorOverrides]);
 
@@ -2223,6 +2234,7 @@ export default function LiveOperationPage() {
               <LiveMap
                 agents={agents}
                 presence={presence}
+                agentColorsStrong={agentColorsStrong}
                 routes={plottedRoutes}
                 trails={liveTrailsForMap}
                 showTrails={showLiveTrail}

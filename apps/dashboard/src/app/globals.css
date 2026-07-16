@@ -146,7 +146,7 @@
 }
 
 /* ——— Marcador do agente no mapa ———
-   Estado dirige a forma: parado = crosshair (pulsa só se conectado); de carro = puck
+   Estado dirige a forma: parado = map-pin (pulsa só se conectado); de carro = puck
    com seta (estilo Google Maps); a pé = bullet com halo desfocado. */
 @keyframes agent-pulse {
   0%,
@@ -163,19 +163,21 @@
   animation: agent-pulse 1.8s ease-in-out infinite;
 }
 
-/* Legibilidade sobre qualquer fundo do mapa. */
+/* Legibilidade sobre o mapa. Os marcadores usam o tom 900 (escuro) da família do
+   agente, então o halo é CLARO — separa o ícone das feições escuras do mapa (vias,
+   parques). Um halo escuro, como antes, sumiria contra um ícone escuro. */
 .agent-marker {
   display: grid;
   place-items: center;
-  filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.85));
+  filter: drop-shadow(0 0 2px rgba(255, 255, 255, 0.95)) drop-shadow(0 1px 1px rgba(0, 0, 0, 0.35));
 }
 
 /* Parado: pin vindo do arquivo reutilizável (public/svg). Usa MÁSCARA para herdar a
    cor do agente — um <img> não seria recolorível. Trocar o ícone = trocar o arquivo. */
 .agent-pin,
 .agent-pin-off {
-  width: 26px;
-  height: 26px;
+  width: 32px;
+  height: 32px;
 }
 .agent-pin {
   -webkit-mask: url('/svg/map-pin.svg') center / contain no-repeat;
@@ -190,8 +192,8 @@
 .agent-puck {
   display: grid;
   place-items: center;
-  width: 30px;
-  height: 30px;
+  width: 34px;
+  height: 34px;
   border-radius: 50%;
   border: 2px solid #fff;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
@@ -202,20 +204,20 @@
   position: relative;
   display: grid;
   place-items: center;
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
 }
 .agent-foot .agent-bullet {
   position: relative;
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
   border-radius: 50%;
   border: 2px solid #fff;
   box-sizing: border-box;
 }
 .agent-foot .agent-halo {
   position: absolute;
-  inset: -7px;
+  inset: -8px;
   border-radius: 50%;
   filter: blur(5px);
   animation: agent-halo 1.8s ease-in-out infinite;

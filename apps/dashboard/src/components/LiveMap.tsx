@@ -66,7 +66,7 @@ function markerHtml(
   if (mode === 'car') {
     return (
       `<span class="agent-puck agent-pulse" style="background:${color}">` +
-      `<svg viewBox="0 0 24 24" width="15" height="15" fill="#fff" stroke="#fff" stroke-width="1.5" ` +
+      `<svg viewBox="0 0 24 24" width="17" height="17" fill="#fff" stroke="#fff" stroke-width="1.5" ` +
       `stroke-linejoin="round" style="transform:rotate(${Math.round(heading ?? 0)}deg)">` +
       `<polygon points="3 11 22 2 13 21 11 13 3 11"/></svg></span>`
     );
@@ -333,6 +333,7 @@ function eastPoint(lng: number, lat: number, meters: number): [number, number] {
 export function LiveMap({
   agents,
   presence,
+  agentColorsStrong,
   trails = {},
   showTrails = true,
   showTrailDirection = false,
@@ -354,6 +355,8 @@ export function LiveMap({
   agents: Record<string, AgentPoint>;
   /** Presenca por agente (canal `status` + LWT). Sem entrada = desconhecida. */
   presence?: Record<string, boolean>;
+  /** Cor da familia no tom 900 por agente — usada SO nos marcadores (contraste). */
+  agentColorsStrong?: Record<string, string>;
   trails?: AgentTrails;
   showTrails?: boolean;
   /** Efeito "Sentido das trilhas": setas ao longo das trilhas e rotas. */
@@ -413,6 +416,8 @@ export function LiveMap({
     resize: onGeofenceResize,
     reshape: onGeofenceReshape,
   };
+  const strongColorsRef = useRef(agentColorsStrong);
+  strongColorsRef.current = agentColorsStrong;
   const fittedRef = useRef(false);
   const styleReadyRef = useRef(false);
 
@@ -606,12 +611,14 @@ export function LiveMap({
       // Forma do marcador conforme o estado; só redesenha quando o estado muda
       // (o efeito re-roda a cada tique de `nowMs` para o sinal poder envelhecer).
       const el = marker.getElement();
+      // Marcador no tom 900 (mais forte) — o 500 da trilha some sobre o mapa claro.
+      const strong = strongColorsRef.current?.[agentId] ?? color;
       const mode = agentMode(point.activity);
       // Presença explícita (status MQTT + LWT) manda; sem ela, cai no proxy de frescor.
       const fresh = presence?.[agentId] ?? isFresh(point, nowMs);
-      const stateKey = `${mode}|${fresh}|${color}|${Math.round(point.heading ?? 0)}`;
+      const stateKey = `${mode}|${fresh}|${strong}|${Math.round(point.heading ?? 0)}`;
       if (el.dataset.state !== stateKey) {
-        el.innerHTML = markerHtml(mode, fresh, color, point.heading);
+        el.innerHTML = markerHtml(mode, fresh, strong, point.heading);
         el.dataset.state = stateKey;
       }
       marker.setLngLat([point.lng, point.lat]);

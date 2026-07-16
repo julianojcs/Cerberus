@@ -139,7 +139,14 @@ export function subscribeInbox(
  * tópico: o agente só publica no próprio canal.
  */
 export function connectMqtt(token: string, operationId: string, agentId: string): MqttClient {
-  if (client?.connected) return client;
+  // UMA instância por processo. O guard olha a EXISTÊNCIA, não `connected`: uma
+  // segunda chamada enquanto o cliente ainda está conectando/reconectando criava um
+  // cliente novo e ABANDONAVA o anterior (que segue reconectando sozinho, pelo
+  // `reconnectPeriod`). Com o `clientId` estável (ADR-0004) os dois órfãos brigam
+  // pelo takeover do broker — um derruba o outro, ambos reconectam — virando um loop
+  // infinito de conecta/desconecta. Antes o id tinha `Date.now()` e os duplicados
+  // apenas coexistiam, mascarando este vazamento. `disconnectMqtt` zera `client`.
+  if (client) return client;
 
   const statusTopic = agentStatusTopic(operationId, agentId);
   const offline = JSON.stringify({ online: false } satisfies AgentStatus);
