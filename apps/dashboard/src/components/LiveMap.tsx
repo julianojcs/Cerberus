@@ -34,8 +34,12 @@ function agentMode(activity?: string): AgentMode {
 }
 
 /**
- * Sinal fresco ⇒ agente "conectado" (transmitindo). O limiar TEM que respeitar a
- * hibernação do GPS no mobile, senão um agente parado e conectado parece desconectado:
+ * FALLBACK de presença: usado só quando o canal `status` ainda não disse nada sobre
+ * o agente (app antigo, ou antes da retida chegar). O sinal AUTORITATIVO é o
+ * `presence` (status MQTT + LWT) — ver docs/decisions/adr-0004-presenca-do-agente-mqtt-lwt.md.
+ *
+ * O limiar TEM que respeitar a hibernação do GPS no mobile, senão um agente parado e
+ * conectado parece desconectado:
  * - parado: o app hiberna o GPS e só faz um heartbeat a cada 5 min (`heartbeatInterval: 300`);
  * - em deslocamento: as amostras dependem de andar 10 m (`distanceFilter: 10`) e podem
  *   pausar (carro no semáforo) até o `stopTimeout` (5 min) religar o heartbeat.
@@ -328,6 +332,7 @@ function eastPoint(lng: number, lat: number, meters: number): [number, number] {
  */
 export function LiveMap({
   agents,
+  presence,
   trails = {},
   showTrails = true,
   showTrailDirection = false,
@@ -347,6 +352,8 @@ export function LiveMap({
   fitPoints,
 }: {
   agents: Record<string, AgentPoint>;
+  /** Presenca por agente (canal `status` + LWT). Sem entrada = desconhecida. */
+  presence?: Record<string, boolean>;
   trails?: AgentTrails;
   showTrails?: boolean;
   /** Efeito "Sentido das trilhas": setas ao longo das trilhas e rotas. */
@@ -600,7 +607,8 @@ export function LiveMap({
       // (o efeito re-roda a cada tique de `nowMs` para o sinal poder envelhecer).
       const el = marker.getElement();
       const mode = agentMode(point.activity);
-      const fresh = isFresh(point, nowMs);
+      // Presença explícita (status MQTT + LWT) manda; sem ela, cai no proxy de frescor.
+      const fresh = presence?.[agentId] ?? isFresh(point, nowMs);
       const stateKey = `${mode}|${fresh}|${color}|${Math.round(point.heading ?? 0)}`;
       if (el.dataset.state !== stateKey) {
         el.innerHTML = markerHtml(mode, fresh, color, point.heading);
@@ -625,7 +633,7 @@ export function LiveMap({
       map.easeTo({ center: [first.lng, first.lat], zoom: 15 });
       fittedRef.current = true;
     }
-  }, [agents, agentColors, nowMs]);
+  }, [agents, agentColors, presence, nowMs]);
 
   // Redesenha a trilha quando novas posições chegam (ou quando o deslocamento muda,
   // que altera a largura do traçado).

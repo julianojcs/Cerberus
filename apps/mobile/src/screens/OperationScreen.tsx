@@ -96,13 +96,13 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
   const [operationName, setOperationName] = useState<string | null>(null);
 
   useEffect(() => {
-    connectMqtt(session.token, agentId);
+    connectMqtt(session.token, operationId, agentId);
     const interval = setInterval(async () => {
       setConnected(isConnected());
       setPending(await outboxSize());
     }, 2000);
     return () => clearInterval(interval);
-  }, [session.token, agentId]);
+  }, [session.token, operationId, agentId]);
 
   // Heartbeat de sessão (~30s + ao voltar ao primeiro plano): se a central derrubou/
   // bloqueou, o /auth/session responde 401 e o handler global desloga (ver App.tsx).
@@ -239,7 +239,8 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
         style: 'destructive',
         onPress: () => {
           void stopTracking();
-          disconnectMqtt();
+          // Anuncia `offline` antes de encerrar (o broker descarta o testamento).
+          disconnectMqtt(operationId, agentId);
           onLogout();
         },
       },

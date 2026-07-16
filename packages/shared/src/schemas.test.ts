@@ -1,5 +1,29 @@
 import { describe, expect, it } from 'vitest';
-import { authClaimsSchema, geoPointSchema, positionSampleSchema } from './schemas.js';
+import {
+  agentStatusSchema,
+  authClaimsSchema,
+  geoPointSchema,
+  positionSampleSchema,
+} from './schemas.js';
+
+describe('agentStatusSchema (presença do agente)', () => {
+  it('aceita o anúncio de presença e o payload do testamento (LWT)', () => {
+    expect(agentStatusSchema.parse({ online: true })).toEqual({ online: true });
+    expect(agentStatusSchema.parse({ online: false })).toEqual({ online: false });
+  });
+
+  it('rejeita payload sem `online`', () => {
+    expect(() => agentStatusSchema.parse({})).toThrow();
+  });
+
+  it('ignora identidade no corpo — ela vem do TÓPICO, nunca do payload', () => {
+    // Um agente malicioso não forja presença de outro: o `agentId` do corpo é
+    // descartado (ver .claude/rules/mqtt-multitenant.md).
+    expect(agentStatusSchema.parse({ online: true, agentId: 'OUTRO-AGENTE' })).toEqual({
+      online: true,
+    });
+  });
+});
 
 describe('positionSampleSchema', () => {
   const valid = {

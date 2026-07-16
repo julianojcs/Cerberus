@@ -3,8 +3,10 @@ import { config } from '../config';
 import {
   agentInboxTopic,
   agentPositionTopic,
+  agentStatusTopic,
   operationBroadcastTopic,
   teamBroadcastTopic,
+  type AgentStatus,
   type PositionSample,
 } from '../shared/contracts';
 import { openMessage } from '../shared/e2ee';
@@ -109,10 +111,7 @@ export function setBroadcastIdentity(id: BroadcastIdentity): void {
 }
 
 /** Assina o canal de broadcast da operação (central → agentes). Identidade já definida. */
-export function subscribeBroadcast(
-  operationId: string,
-  listener: BroadcastListener,
-): () => void {
+export function subscribeBroadcast(operationId: string, listener: BroadcastListener): () => void {
   return subscribeTopic(operationBroadcastTopic(operationId), listener);
 }
 
@@ -139,20 +138,39 @@ export function subscribeInbox(
  * Em produção, o broker (EMQX/Mosquitto) valida o token e aplica as ACLs de
  * tópico: o agente só publica no próprio canal.
  */
-export function connectMqtt(token: string, agentId: string): MqttClient {
+export function connectMqtt(token: string, operationId: string, agentId: string): MqttClient {
   if (client?.connected) return client;
 
+  const statusTopic = agentStatusTopic(operationId, agentId);
+  const offline = JSON.stringify({ online: false } satisfies AgentStatus);
+
   client = mqtt.connect(config.mqttWsUrl, {
-    clientId: `agente_${agentId}_${Date.now()}`,
+    // clientId ESTÁVEL (sem timestamp): numa reconexão o broker faz "takeover" da
+    // sessão zumbi e publica o testamento DELA antes do CONNACK — então o `online`
+    // que mandamos logo abaixo é o último a ficar retido. Com id rotativo o zumbi
+    // sobreviveria até o keepalive estourar e o `offline` chegaria DEPOIS, retendo
+    // um estado falso. Ver docs/decisions/adr-0004-presenca-do-agente-mqtt-lwt.md.
+    clientId: `agente_${agentId}`,
     // Credencial estática do broker gerenciado (HiveMQ Cloud não faz auth JWT)
     // quando configurada; senão o JWT é a credencial (on-prem EMQX/Mosquitto).
     username: config.mqttUsername || 'jwt',
     password: config.mqttUsername ? config.mqttPassword : token,
     reconnectPeriod: 3000,
     clean: true,
+    // TESTAMENTO (LWT): se o app morrer sem se despedir (rede caiu, processo morto,
+    // bateria acabou), o BROKER publica isto por nós quando o keepalive expira.
+    // Custo de bateria ~zero: viaja dentro do CONNECT e não gera tráfego novo — o
+    // keepalive que o detecta já roda hoje para manter o barramento vivo.
+    will: { topic: statusTopic, payload: offline, qos: 1, retain: true },
   });
 
   client.on('connect', () => {
+    // Presença: `retain` faz o dashboard saber o estado assim que assina o tópico,
+    // sem esperar a próxima posição (o GPS hiberna e só pinga a cada 5 min).
+    client?.publish(statusTopic, JSON.stringify({ online: true } satisfies AgentStatus), {
+      qos: 1,
+      retain: true,
+    });
     // Ao reconectar, descarrega o buffer offline (resiliência de rede).
     void flushOutbox(publishNow);
     // Re-assina TODOS os tópicos registrados (broadcast + equipes + inbox).
@@ -198,7 +216,24 @@ export async function publishPosition(
   }
 }
 
-export function disconnectMqtt(): void {
-  client?.end(true);
+/**
+ * Saída LIMPA: anuncia `offline` e só então encerra. O `end(false)` espera o envio
+ * (o `end(true)` de antes descartaria o publish) e o DISCONNECT limpo faz o broker
+ * DESCARTAR o testamento — sem anúncio duplicado. Sem `operationId`/`agentId` não dá
+ * para montar o tópico: cai no encerramento seco e o LWT resolve pelo keepalive.
+ */
+export function disconnectMqtt(operationId?: string, agentId?: string): void {
+  const c = client;
   client = null;
+  if (!c) return;
+  if (c.connected && operationId && agentId) {
+    c.publish(
+      agentStatusTopic(operationId, agentId),
+      JSON.stringify({ online: false } satisfies AgentStatus),
+      { qos: 1, retain: true },
+      () => c.end(false),
+    );
+    return;
+  }
+  c.end(true);
 }

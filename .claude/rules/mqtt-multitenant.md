@@ -23,7 +23,7 @@ Todos os tópicos derivam de `packages/shared/src/topics.ts`. **Nunca** montar s
 |---|---|---|
 | Agente publica posição | `agentPositionTopic(opId, agentId)` | `operacao/{opId}/agente/{agentId}/posicao` |
 | Agente publica mensagem | `agentMessageTopic(opId, agentId)` | `operacao/{opId}/agente/{agentId}/mensagem` |
-| Agente publica status | `agentStatusTopic(opId, agentId)` | `operacao/{opId}/agente/{agentId}/status` |
+| Agente publica presença | `agentStatusTopic(opId, agentId)` | `operacao/{opId}/agente/{agentId}/status` |
 | Central → agentes da operação | `operationBroadcastTopic(opId)` | `operacao/{opId}/broadcast` |
 | Dashboard assina a operação | `operationWildcardTopic(opId)` | `operacao/{opId}/#` |
 | Ponte da API assina tudo | `bridgeIngestTopic()` | `operacao/+/agente/+/#` |
@@ -32,6 +32,26 @@ Todos os tópicos derivam de `packages/shared/src/topics.ts`. **Nunca** montar s
 > **Idioma dos tópicos:** as palavras `operacao`/`agente` nos tópicos são intencionalmente **sem acento**
 > (identificadores de rede, não texto de UI). Isso é a exceção prevista em
 > [pt-br-content.md](pt-br-content.md) — não "corrigir" para `operação`/`agente` acentuado.
+
+## Canal `status` — presença do agente (retido + LWT)
+
+O canal `status` carrega a **presença** do agente e é o sinal **autoritativo** de
+"conectado" — **não** inferir presença do frescor da última posição: o GPS hiberna quando
+o agente está parado (heartbeat a cada 5 min), então telemetria rala é NORMAL e não
+significa queda. Ver [ADR-0004](../../docs/decisions/adr-0004-presenca-do-agente-mqtt-lwt.md).
+
+- **Payload:** `agentStatusSchema` → `{ "online": boolean }`. Sem `agentId` no corpo — a
+  identidade vem do tópico (regra 1 abaixo).
+- **Ao conectar:** o agente publica `{online:true}` com **`retain: true`** e registra o
+  **testamento (LWT)** `{online:false}` (também retido) no mesmo tópico.
+- **Queda suja** (rede/processo/bateria): o **broker** publica o testamento quando o
+  keepalive expira (~90 s). O aparelho não gasta nada — o keepalive já roda.
+- **Saída limpa:** publicar `{online:false}` e só então `end(false)`; o DISCONNECT limpo
+  faz o broker descartar o testamento.
+- **`clientId` deve ser ESTÁVEL** (`agente_{agentId}`, sem timestamp): garante o takeover
+  da sessão zumbi na reconexão, com o testamento dela saindo ANTES do novo `{online:true}`.
+  Um id rotativo inverte a ordem e retém um `offline` falso.
+- **A ponte da API ignora `status`** de propósito (presença é efêmera, mobile↔dashboard).
 
 ## Regras obrigatórias
 

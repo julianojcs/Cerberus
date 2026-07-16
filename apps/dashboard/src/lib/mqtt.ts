@@ -5,6 +5,7 @@ import {
   parseAgentTopic,
   parseTeamTopic,
   AgentChannel,
+  agentStatusSchema,
   positionSampleSchema,
   type PositionSample,
 } from '@cerberus/shared';
@@ -84,6 +85,12 @@ export function subscribeToOperation(
   token?: string,
   onStatus?: (connected: boolean) => void,
   onMessage?: (m: IncomingMessage) => void,
+  /**
+   * Presença de um AGENTE (canal `status`) — não confundir com `onStatus`, que é a
+   * conexão do próprio dashboard ao barramento. Chega retida ao assinar e é
+   * atualizada pelo LWT quando o agente some.
+   */
+  onPresence?: (agentId: string, online: boolean) => void,
 ): () => void {
   const client: MqttClient = mqtt.connect(MQTT_WS_URL, {
     // Credencial estática (broker gerenciado) quando configurada; senão o JWT é
@@ -109,6 +116,16 @@ export function subscribeToOperation(
       try {
         const sample = positionSampleSchema.parse(JSON.parse(payload.toString()));
         onPosition({ ...sample, operationId: agentTopic.operationId, agentId: agentTopic.agentId });
+      } catch {
+        /* payload inválido — ignora */
+      }
+      return;
+    }
+    // Presença do agente (retida): `online` explícito vindo do app ou do LWT.
+    if (agentTopic && agentTopic.channel === AgentChannel.STATUS) {
+      try {
+        const s = agentStatusSchema.parse(JSON.parse(payload.toString()));
+        onPresence?.(agentTopic.agentId, s.online);
       } catch {
         /* payload inválido — ignora */
       }
