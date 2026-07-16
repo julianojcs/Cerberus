@@ -826,7 +826,12 @@ export function LiveMap({
         // Clique: abre/fecha o balão de informações. NÃO usamos `marker.setPopup` porque
         // a âncora é fixada na construção do Popup — e ela precisa ser recalculada a cada
         // abertura, conforme a sobra de espaço em torno do marcador naquele momento.
-        el.addEventListener('click', () => {
+        el.addEventListener('click', (e) => {
+          // Sem isto o clique borbulha até o mapa e o `closeOnClick` (ligado por padrão
+          // no Popup) fecha o balão no MESMO evento que o abriu — era o que impedia o
+          // card de aparecer. O `marker.setPopup`, que deixamos de usar, fazia isto por
+          // dentro. Cliques em qualquer outro ponto do mapa seguem fechando o balão.
+          e.stopPropagation();
           hideHoverCard();
           const m = mapRef.current;
           const mk = markersRef.current[agentId];
