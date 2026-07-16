@@ -110,13 +110,17 @@ export async function initTracking(ctx: TrackingContext): Promise<void> {
     if (type !== AgentCommandType.REQUEST_FIX) return;
     void (async () => {
       try {
+        console.warn('[gps] comando request_fix → buscando posição…');
         const location = await BackgroundGeolocation.getCurrentPosition({
           samples: 1,
           persist: true,
         });
+        console.warn('[gps] fix obtido → publicando');
         report(ctx, toSample(location));
-      } catch {
-        /* sem fix disponível neste momento — a central verá a posição anterior */
+      } catch (err) {
+        // Sem log, um GPS que não consegue fix (Doze, sem sinal, permissão) é
+        // indistinguível de "o comando nunca chegou".
+        console.warn('[gps] FALHOU ao obter fix:', err);
       }
     })();
   });

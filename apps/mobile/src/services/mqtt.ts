@@ -101,6 +101,9 @@ function handleIncoming(topic: string, payload: Uint8Array): void {
   if (topic === commandTopic) {
     try {
       const { type } = JSON.parse(Buffer.from(payload).toString()) as { type?: string };
+      // Diagnóstico: separa "o comando não chegou ao aparelho" de "chegou e o GPS não
+      // conseguiu um fix" — hoje os dois terminam igual (o card não muda).
+      console.warn('[mqtt] COMANDO recebido do dashboard:', type);
       if (type) commandHandler?.(type);
     } catch {
       /* comando inválido — ignora */
@@ -189,7 +192,13 @@ export function connectMqtt(token: string, operationId: string, agentId: string)
   // pelo takeover do broker — um derruba o outro, ambos reconectam — virando um loop
   // infinito de conecta/desconecta. Antes o id tinha `Date.now()` e os duplicados
   // apenas coexistiam, mascarando este vazamento. `disconnectMqtt` zera `client`.
-  if (client) return client;
+  if (client) {
+    console.warn('[mqtt] connectMqtt() chamado de novo → reaproveitando o cliente atual');
+    return client;
+  }
+  // Decide a causa da guerra de takeover: se esta linha sair UMA vez e ainda assim
+  // levarmos `reasonCode 142`, o outro cliente NÃO é este app — é externo.
+  console.warn(`[mqtt] criando cliente | clientId=agente_${agentId} | agentId=${agentId}`);
 
   const statusTopic = agentStatusTopic(operationId, agentId);
   commandTopic = agentCommandTopic(operationId, agentId);
