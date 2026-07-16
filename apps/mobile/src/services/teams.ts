@@ -23,7 +23,5 @@ export async function fetchMyTeams(
   if (!res.ok) throw new Error(`Erro ${res.status} ao obter equipes`);
   const all = (await res.json()) as MyTeam[];
   const agentId = session.agentId;
-  return all.filter(
-    (t) => t.operationId === operationId && (t.agentIds ?? []).includes(agentId),
-  );
+  return all.filter((t) => t.operationId === operationId && (t.agentIds ?? []).includes(agentId));
 }

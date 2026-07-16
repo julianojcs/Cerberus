@@ -55,6 +55,7 @@ export interface LatestPosition {
   lng: number;
   lat: number;
   accuracy?: number;
+  altitude?: number;
   speed?: number;
   heading?: number;
   battery?: number;
@@ -144,8 +145,7 @@ export const api = {
     request<Operation>(`/operations/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteOperation: (id: string) => request<void>(`/operations/${id}`, { method: 'DELETE' }),
   // Membros (usuários) no escopo da operação — popula o multiselect de agentes.
-  operationMembers: (opId: string) =>
-    request<OperationMember[]>(`/operations/${opId}/members`),
+  operationMembers: (opId: string) => request<OperationMember[]>(`/operations/${opId}/members`),
 
   // --- Equipes (Fase 2a) ---
   teams: () => request<TeamInfo[]>('/teams'),
@@ -153,7 +153,8 @@ export const api = {
   createTeam: (
     opId: string,
     data: { name: string; color?: string; agentIds?: string[]; leadId?: string },
-  ) => request<TeamInfo>(`/operations/${opId}/teams`, { method: 'POST', body: JSON.stringify(data) }),
+  ) =>
+    request<TeamInfo>(`/operations/${opId}/teams`, { method: 'POST', body: JSON.stringify(data) }),
   updateTeam: (
     opId: string,
     tid: string,
@@ -178,6 +179,17 @@ export const api = {
     request<void>('/auth/e2ee-backup', { method: 'PUT', body: JSON.stringify(blob) }),
   getE2eeBackup: () => request<E2eeKeyBackup>('/auth/e2ee-backup'),
   deleteE2eeBackup: () => request<void>('/auth/e2ee-backup', { method: 'DELETE' }),
+  /**
+   * Pede ao AGENTE uma posição fresca (canal `comando`). Fire-and-forget: o 202 diz que
+   * o comando foi emitido no barramento, não que o agente respondeu — a resposta chega
+   * depois como uma posição normal, pelo MQTT. Necessário porque o GPS hiberna com o
+   * agente parado e o Doze pode adiar o heartbeat por dezenas de minutos.
+   */
+  requestAgentFix: (operationId: string, agentId: string) =>
+    request<{ sent: boolean }>(`/operations/${operationId}/agents/${agentId}/command`, {
+      method: 'POST',
+      body: JSON.stringify({ type: 'request_fix' }),
+    }),
   latestPositions: (operationId: string) =>
     request<LatestPosition[]>(`/operations/${operationId}/positions/latest`),
   // Histórico da operação (trilha). Vem ordenado do mais recente para o mais antigo.
@@ -243,11 +255,7 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(data),
     }),
-  patchGeofence: (
-    operationId: string,
-    gid: string,
-    data: GeofenceInput,
-  ) =>
+  patchGeofence: (operationId: string, gid: string, data: GeofenceInput) =>
     request<Geofence>(`/operations/${operationId}/geofences/${gid}`, {
       method: 'PATCH',
       body: JSON.stringify(data),

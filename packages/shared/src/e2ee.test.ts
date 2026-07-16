@@ -63,7 +63,9 @@ describe('e2ee', () => {
     const envelope = sealMessage('ordem legítima', central.secretKey, recipients);
 
     // spk esperado correto (do diretório) → decifra normalmente.
-    expect(openMessage(envelope, 'AG-001', ag1.secretKey, central.publicKey)).toBe('ordem legítima');
+    expect(openMessage(envelope, 'AG-001', ag1.secretKey, central.publicKey)).toBe(
+      'ordem legítima',
+    );
     // spk esperado de OUTRO remetente → rejeita (possível spoofing).
     const impostor = generateKeyPair();
     expect(openMessage(envelope, 'AG-001', ag1.secretKey, impostor.publicKey)).toBeNull();

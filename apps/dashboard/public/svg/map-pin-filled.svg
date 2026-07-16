@@ -1,0 +1,5 @@
+<!-- Geometria do `map-pin` do lucide, PREENCHIDA: a gota é sólida e o miolo é vazado
+     via `fill-rule="evenodd"` (dois subpaths → a interseção vira buraco). Usado como
+     MÁSCARA CSS no marcador do agente, então só o alfa importa: gota = opaca (recebe a
+     cor do agente), miolo = transparente (deixa ver o mapa). -->
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path fill="currentColor" fill-rule="evenodd" d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0ZM15 10a3 3 0 1 1-6 0 3 3 0 1 1 6 0Z"/></svg>

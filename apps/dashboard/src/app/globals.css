@@ -146,7 +146,7 @@
 }
 
 /* ——— Marcador do agente no mapa ———
-   Estado dirige a forma: parado = crosshair (pulsa só se conectado); de carro = puck
+   Estado dirige a forma: parado = map-pin (pulsa só se conectado); de carro = puck
    com seta (estilo Google Maps); a pé = bullet com halo desfocado. */
 @keyframes agent-pulse {
   0%,
@@ -163,35 +163,111 @@
   animation: agent-pulse 1.8s ease-in-out infinite;
 }
 
-/* Legibilidade sobre qualquer fundo do mapa. */
+/* Legibilidade sobre o mapa. Os marcadores usam o tom 700 (escuro) da família do
+   agente, então o halo é CLARO — separa o ícone das feições escuras do mapa (vias,
+   parques). Um halo escuro, como antes, sumiria contra um ícone escuro. */
 .agent-marker {
   display: grid;
   place-items: center;
-  filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.85));
+  /* Clicável (abre o popup com os dados do agente) — o cursor de mão sinaliza isso. */
+  cursor: pointer;
+  filter: drop-shadow(0 0 2px rgba(255, 255, 255, 0.95)) drop-shadow(0 1px 1px rgba(0, 0, 0, 0.35));
 }
 
-/* Parado: pin vindo do arquivo reutilizável (public/svg). Usa MÁSCARA para herdar a
-   cor do agente — um <img> não seria recolorível. Trocar o ícone = trocar o arquivo. */
+/* Popup do agente no mapa. O maplibre traz um popup CLARO e o texto herda o tema
+   escuro da página — a combinação dava texto claro sobre fundo branco. Fixamos fundo
+   E cor aqui, sem depender de herança nem de `opacity` (ver ui-contrast.md).
+
+   ESPECIFICIDADE: o `maplibre-gl.css` é importado dentro do LiveMap (componente), então
+   no bundle ele vem DEPOIS deste arquivo — com especificidade igual, o `background:#fff`
+   da lib venceria. Por isso qualificamos com `.maplibregl-popup` (0,2,0 > 0,1,0). */
+.maplibregl-popup .maplibregl-popup-content {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  /* Teto de altura: mesmo com a âncora escolhida, um balão alto não pode vazar do mapa. */
+  max-height: 60vh;
+  overflow-y: auto;
+}
+/* A "seta" do balão é um triângulo de bordas: só o lado virado ao marcador recebe cor. */
+.maplibregl-popup.maplibregl-popup-anchor-top .maplibregl-popup-tip,
+.maplibregl-popup.maplibregl-popup-anchor-top-left .maplibregl-popup-tip,
+.maplibregl-popup.maplibregl-popup-anchor-top-right .maplibregl-popup-tip {
+  border-bottom-color: var(--panel);
+}
+.maplibregl-popup.maplibregl-popup-anchor-bottom .maplibregl-popup-tip,
+.maplibregl-popup.maplibregl-popup-anchor-bottom-left .maplibregl-popup-tip,
+.maplibregl-popup.maplibregl-popup-anchor-bottom-right .maplibregl-popup-tip {
+  border-top-color: var(--panel);
+}
+.maplibregl-popup.maplibregl-popup-anchor-left .maplibregl-popup-tip {
+  border-right-color: var(--panel);
+}
+.maplibregl-popup.maplibregl-popup-anchor-right .maplibregl-popup-tip {
+  border-left-color: var(--panel);
+}
+/* Card de hover do agente: puramente informativo. Sem `pointer-events` ele roubaria o
+   mouse do marcador e o card piscaria (entra no balão → sai do marcador → some). */
+.agent-hover {
+  pointer-events: none;
+}
+
+/* Botão "atualizar" do balão em voo. O comando é assíncrono (o agente responde quando
+   consegue um fix), então sem este retorno o clique parece não ter feito nada. */
+@keyframes agent-refresh-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.agent-refreshing {
+  opacity: 0.6;
+  cursor: default;
+}
+.agent-refreshing svg {
+  animation: agent-refresh-spin 1s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .agent-refreshing svg {
+    animation: none;
+  }
+}
+.maplibregl-popup .maplibregl-popup-close-button {
+  color: var(--muted);
+  font-size: 16px;
+  padding: 0 6px;
+}
+.maplibregl-popup .maplibregl-popup-close-button:hover {
+  background: transparent;
+  color: var(--text);
+}
+
+/* Parado: pin PREENCHIDO vindo do arquivo reutilizável (public/svg). Usa MÁSCARA para
+   herdar a cor do agente — um <img> não seria recolorível. Trocar o ícone = trocar o
+   arquivo. Preenchido (e não contornado) porque um traço fino sumia no mapa e obrigava
+   a um tom extremo, que apagava o matiz da família. */
 .agent-pin,
 .agent-pin-off {
-  width: 26px;
-  height: 26px;
+  width: 32px;
+  height: 32px;
 }
 .agent-pin {
-  -webkit-mask: url('/svg/map-pin.svg') center / contain no-repeat;
-  mask: url('/svg/map-pin.svg') center / contain no-repeat;
+  -webkit-mask: url('/svg/map-pin-filled.svg') center / contain no-repeat;
+  mask: url('/svg/map-pin-filled.svg') center / contain no-repeat;
 }
 .agent-pin-off {
-  -webkit-mask: url('/svg/map-pin-off.svg') center / contain no-repeat;
-  mask: url('/svg/map-pin-off.svg') center / contain no-repeat;
+  -webkit-mask: url('/svg/map-pin-off-filled.svg') center / contain no-repeat;
+  mask: url('/svg/map-pin-off-filled.svg') center / contain no-repeat;
 }
 
 /* Deslocamento de carro: círculo colorido + seta branca girada pelo rumo. */
 .agent-puck {
   display: grid;
   place-items: center;
-  width: 30px;
-  height: 30px;
+  width: 34px;
+  height: 34px;
   border-radius: 50%;
   border: 2px solid #fff;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
@@ -202,20 +278,20 @@
   position: relative;
   display: grid;
   place-items: center;
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
 }
 .agent-foot .agent-bullet {
   position: relative;
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
   border-radius: 50%;
   border: 2px solid #fff;
   box-sizing: border-box;
 }
 .agent-foot .agent-halo {
   position: absolute;
-  inset: -7px;
+  inset: -8px;
   border-radius: 50%;
   filter: blur(5px);
   animation: agent-halo 1.8s ease-in-out infinite;

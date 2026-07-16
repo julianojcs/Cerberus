@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import maplibregl, { type Map as MlMap, type Marker, type GeoJSONSource } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
+import { initialsOf } from './Avatar';
 
 export interface AgentPoint {
   agentId: string;
@@ -11,6 +12,10 @@ export interface AgentPoint {
   heading?: number | null;
   battery?: number;
   activity?: string;
+  /** Precisão do fix (m), altitude (m) e velocidade (m/s) — vêm do GPS do aparelho. */
+  accuracy?: number;
+  altitude?: number;
+  speed?: number | null;
   /** ISO da captura — define se o agente está "conectado" (sinal fresco). */
   capturedAt?: string;
   /** Operação de origem (usado só no mapa global do SA — aparece no popup). */
@@ -66,7 +71,7 @@ function markerHtml(
   if (mode === 'car') {
     return (
       `<span class="agent-puck agent-pulse" style="background:${color}">` +
-      `<svg viewBox="0 0 24 24" width="15" height="15" fill="#fff" stroke="#fff" stroke-width="1.5" ` +
+      `<svg viewBox="0 0 24 24" width="17" height="17" fill="#fff" stroke="#fff" stroke-width="1.5" ` +
       `stroke-linejoin="round" style="transform:rotate(${Math.round(heading ?? 0)}deg)">` +
       `<polygon points="3 11 22 2 13 21 11 13 3 11"/></svg></span>`
     );
@@ -89,6 +94,219 @@ function esc(s: string): string {
   return s.replace(
     /[&<>"]/g,
     (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] as string,
+  );
+}
+
+/** Rótulo pt-BR do `activity` do GPS (ver ActivityType em @cerberus/shared). */
+const ACTIVITY_LABEL: Record<string, string> = {
+  still: 'parado',
+  on_foot: 'a pé',
+  walking: 'caminhando',
+  running: 'correndo',
+  in_vehicle: 'em veículo',
+  on_bicycle: 'de bicicleta',
+  unknown: 'desconhecida',
+};
+
+/** Tempo relativo curto em pt-BR ("agora", "há 5 min", "há 2 h", "há 3 d"). */
+function agoLabel(iso: string | undefined, nowMs: number): string {
+  if (!iso) return '—';
+  const min = Math.floor(Math.max(0, nowMs - +new Date(iso)) / 60_000);
+  if (min < 1) return 'agora';
+  if (min < 60) return `há ${min} min`;
+  const h = Math.floor(min / 60);
+  if (h < 24) return `há ${h} h`;
+  return `há ${Math.floor(h / 24)} d`;
+}
+
+/**
+ * Linha "rótulo → valor" do popup. Cores EXPLÍCITAS (rótulo em `--muted`, valor em
+ * `--text`): usar `opacity` sobre a cor herdada dava rótulo ilegível no fundo escuro.
+ */
+function row(label: string, value: string): string {
+  return (
+    `<div style="display:flex;gap:12px;justify-content:space-between;line-height:1.7">` +
+    `<span style="color:var(--muted)">${label}</span>` +
+    `<span style="color:var(--text);font-weight:600">${value}</span></div>`
+  );
+}
+
+// Dimensões APROXIMADAS dos balões (o conteúdo é fixo) — bastam para escolher a âncora
+// antes de renderizar. O teto de `max-height` no CSS cobre qualquer erro de estimativa.
+const INFO_POPUP_W = 235;
+const INFO_POPUP_H = 265;
+const HOVER_CARD_W = 195;
+const HOVER_CARD_H = 60;
+
+/**
+ * Escolhe a âncora do balão. A automática do maplibre é ingênua: ela olha se o PONTO
+ * está perto da borda, não se o BALÃO cabe — por isso ele ancorava "abaixo" e vazava
+ * para fora do mapa.
+ *
+ * Ordem: abaixo do ponto; se não couber, LATERAL DIREITA centralizada; depois esquerda;
+ * e acima como último recurso. (`anchor` nomeia a borda do balão que encosta no ponto:
+ * 'top' = balão abaixo; 'left' = balão à direita, centralizado na vertical.)
+ */
+function pickAnchor(
+  map: MlMap,
+  lngLat: maplibregl.LngLat,
+  w: number,
+  h: number,
+): maplibregl.PositionAnchor {
+  const p = map.project(lngLat);
+  const c = map.getContainer();
+  const pad = 16;
+  if (p.y + h + pad <= c.clientHeight) return 'top';
+  const fitsVerticallyCentered = p.y - h / 2 >= 0 && p.y + h / 2 <= c.clientHeight;
+  if (fitsVerticallyCentered && p.x + w + pad <= c.clientWidth) return 'left';
+  if (fitsVerticallyCentered && p.x - w - pad >= 0) return 'right';
+  return p.y - h - pad >= 0 ? 'bottom' : 'top';
+}
+
+/** Identidade do agente exibida no card de hover do marcador. */
+export interface AgentIdentity {
+  name: string;
+  username?: string;
+  /** Foto do agente. Ausente ⇒ o avatar cai nas INICIAIS (mesma regra do <Avatar/>). */
+  photoUrl?: string;
+}
+
+/**
+ * Card de HOVER do marcador — espelha o card do agente no chat (avatar + nome), com o
+ * @usuário no lugar da prévia da mensagem.
+ *
+ * Mesmo contrato do componente <Avatar/>: usa a FOTO quando houver e cai nas iniciais
+ * (via `initialsOf`, para baterem com as do chat) sobre a cor do agente quando não
+ * houver. Hoje nenhum agente tem foto — quando o campo existir, basta preencher
+ * `photoUrl` na identidade que o card já a exibe.
+ */
+function hoverCardHtml(
+  name: string,
+  username: string | undefined,
+  color: string,
+  photoUrl?: string,
+): string {
+  const avatar = photoUrl
+    ? `<img src="${esc(photoUrl)}" alt="" style="width:34px;height:34px;flex-shrink:0;` +
+      `border-radius:50%;object-fit:cover"/>`
+    : `<span style="width:34px;height:34px;flex-shrink:0;border-radius:50%;background:${color};` +
+      `color:#fff;display:grid;place-items:center;font-size:13px;font-weight:700;line-height:1">` +
+      `${esc(initialsOf(name))}</span>`;
+  return (
+    `<div style="display:flex;align-items:center;gap:10px;min-width:150px">` +
+    avatar +
+    `<div style="min-width:0">` +
+    `<div style="font-size:13px;font-weight:700;color:var(--text);white-space:nowrap">${esc(name)}</div>` +
+    (username
+      ? `<div style="font-size:12px;color:var(--muted);white-space:nowrap">@${esc(username)}</div>`
+      : '') +
+    `</div></div>`
+  );
+}
+
+/**
+ * Ícone de bateria (lucide) escolhido pelo NÍVEL, com a cor acompanhando a gravidade.
+ * O popup é DOM cru, então os traços vão inline. Faixas: cheia ≥60, média ≥30,
+ * baixa ≥10, alerta <10.
+ */
+function batteryIcon(level: number | undefined): string {
+  if (level == null) return '';
+  const pct = level * 100;
+  const [body, color] =
+    pct >= 60
+      ? ['<path d="M10 10v4"/><path d="M14 10v4"/><path d="M6 10v4"/>', 'var(--ok)']
+      : pct >= 30
+        ? ['<path d="M10 14v-4"/><path d="M6 14v-4"/>', 'var(--text)']
+        : pct >= 10
+          ? ['<path d="M6 14v-4"/>', '#e3b341']
+          : [
+              '<path d="M10 17h.01"/><path d="M10 7v6"/>' +
+                '<path d="M14 6h2a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2"/>' +
+                '<path d="M6 18H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h2"/>',
+              '#f87171',
+            ];
+  // `battery-warning` desenha a própria carcaça (recortada pelo "!"); as demais usam o
+  // retângulo padrão. O terminal (`M22 14v-4`) é comum a todas.
+  const shell = pct >= 10 ? '<rect x="2" y="6" width="16" height="12" rx="2"/>' : '';
+  return (
+    `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="${color}" ` +
+    `stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0">` +
+    `${shell}<path d="M22 14v-4"/>${body}</svg>`
+  );
+}
+
+/**
+ * Popup do agente: tudo o que o aparelho manda numa amostra de posição (o dashboard
+ * já recebia, só não exibia) + o estado da conexão. Agrupado em Agente / Aparelho /
+ * Conexão. `speed` vem em m/s (e negativa quando o GPS não sabe) → km/h.
+ */
+function popupHtml(p: AgentPoint, online: boolean, nowMs: number, refreshing = false): string {
+  const sep = `<div style="height:1px;background:var(--border);margin:8px 0"></div>`;
+  const head = (t: string, action = ''): string =>
+    `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:3px">` +
+    `<span style="font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)">${t}</span>` +
+    `${action}</div>`;
+  // Só faz sentido pedir dados a quem está conectado — desconectado, o botão some.
+  // `data-refresh` é lido por delegação no elemento do popup (o innerHTML é reescrito
+  // a cada atualização de telemetria, o que mataria um listener preso ao botão).
+  const refreshBtn = online
+    ? `<button type="button" data-refresh aria-label="Atualizar dados do agente" ` +
+      `${refreshing ? 'disabled class="agent-refreshing"' : ''} ` +
+      `style="display:grid;place-items:center;width:22px;height:22px;padding:0;border:1px solid var(--border);` +
+      `border-radius:6px;background:transparent;color:var(--muted);cursor:pointer">` +
+      `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" ` +
+      `stroke-linecap="round" stroke-linejoin="round">` +
+      `<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/>` +
+      `<path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg></button>`
+    : '';
+  const num = (v: number | null | undefined, f: (n: number) => string): string =>
+    v == null ? '—' : f(v);
+
+  return (
+    `<div style="min-width:190px;font-size:12px;color:var(--text)">` +
+    // Cabeçalho: identificação à esquerda, bateria à direita (o ícone dá o nível num
+    // relance; a porcentagem exata fica na linha "Bateria").
+    `<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px">` +
+    `<div style="min-width:0">` +
+    `<div style="font-size:14px;font-weight:700;color:var(--text)">${esc(p.agentId)}</div>` +
+    (p.operationName ? `<div style="color:var(--muted)">${esc(p.operationName)}</div>` : '') +
+    `</div>` +
+    batteryIcon(p.battery) +
+    `</div>` +
+    sep +
+    head('Aparelho', refreshBtn) +
+    row(
+      'Bateria',
+      num(p.battery, (b) => `${Math.round(b * 100)}%`),
+    ) +
+    row('Atividade', ACTIVITY_LABEL[p.activity ?? 'unknown'] ?? esc(p.activity ?? '—')) +
+    row(
+      'Velocidade',
+      p.speed != null && p.speed >= 0 ? `${(p.speed * 3.6).toFixed(1)} km/h` : '—',
+    ) +
+    row(
+      'Rumo',
+      num(p.heading, (h) => `${Math.round(h)}°`),
+    ) +
+    row(
+      'Altitude',
+      num(p.altitude, (a) => `${Math.round(a)} m`),
+    ) +
+    row(
+      'Precisão',
+      num(p.accuracy, (a) => `±${Math.round(a)} m`),
+    ) +
+    sep +
+    head('Conexão') +
+    // Tons CLAROS: o 700 dos marcadores é escuro demais sobre o `--panel` do popup.
+    row(
+      'Estado',
+      online
+        ? `<span style="color:var(--ok)">conectado</span>`
+        : `<span style="color:#f87171">sem sinal</span>`,
+    ) +
+    row('Última posição', agoLabel(p.capturedAt, nowMs)) +
+    `</div>`
   );
 }
 
@@ -333,6 +551,9 @@ function eastPoint(lng: number, lat: number, meters: number): [number, number] {
 export function LiveMap({
   agents,
   presence,
+  agentColorsStrong,
+  agentIdentity,
+  onRefreshAgent,
   trails = {},
   showTrails = true,
   showTrailDirection = false,
@@ -354,6 +575,12 @@ export function LiveMap({
   agents: Record<string, AgentPoint>;
   /** Presenca por agente (canal `status` + LWT). Sem entrada = desconhecida. */
   presence?: Record<string, boolean>;
+  /** Cor da familia no tom 900 por agente — usada SO nos marcadores (contraste). */
+  agentColorsStrong?: Record<string, string>;
+  /** Nome + @usuario por agente — card de hover do marcador. */
+  agentIdentity?: Record<string, AgentIdentity>;
+  /** Botao "atualizar" do balao: pede fix ao agente + re-sincroniza com o servidor. */
+  onRefreshAgent?: (agentId: string) => void;
   trails?: AgentTrails;
   showTrails?: boolean;
   /** Efeito "Sentido das trilhas": setas ao longo das trilhas e rotas. */
@@ -413,6 +640,22 @@ export function LiveMap({
     resize: onGeofenceResize,
     reshape: onGeofenceReshape,
   };
+  const strongColorsRef = useRef(agentColorsStrong);
+  strongColorsRef.current = agentColorsStrong;
+  // Lido dentro dos listeners do marcador (que sao registrados uma vez) — sem ref
+  // eles congelariam a identidade da primeira renderizacao.
+  const identityRef = useRef(agentIdentity);
+  identityRef.current = agentIdentity;
+  const onRefreshRef = useRef(onRefreshAgent);
+  onRefreshRef.current = onRefreshAgent;
+  const hoverPopupRef = useRef<maplibregl.Popup | null>(null);
+  // Balão de informações: instância única + de qual agente é + o HTML de cada um
+  // (o listener de clique é registrado uma vez, então precisa ler tudo via ref).
+  const infoPopupRef = useRef<maplibregl.Popup | null>(null);
+  const infoAgentRef = useRef<string | null>(null);
+  const infoHtmlRef = useRef<Record<string, string>>({});
+  /** agentId → instante do pedido de fix. Enquanto existe, o botão gira. */
+  const refreshingRef = useRef<Record<string, number>>({});
   const fittedRef = useRef(false);
   const styleReadyRef = useRef(false);
 
@@ -595,36 +838,131 @@ export function LiveMap({
       let marker = markersRef.current[agentId];
       if (!marker) {
         const el = document.createElement('div');
-        el.title = agentId;
+        // Sem `title`: o hint nativo do navegador está fora do padrão da UI — quem dá
+        // a informação é o popup no clique (e o cursor de mão sinaliza que é clicável).
         el.className = 'agent-marker';
         marker = new maplibregl.Marker({ element: el })
           .setLngLat([point.lng, point.lat])
           .addTo(map);
-        marker.setPopup(new maplibregl.Popup({ offset: 12 }));
         markersRef.current[agentId] = marker;
+
+        // Hover: card com avatar + nome + @usuário (espelha o card do chat). Um único
+        // popup reaproveitado entre os marcadores; lê a identidade via ref para não
+        // congelar a desta renderização. O clique abre o popup completo, então o card
+        // sai de cena para os dois não se sobreporem.
+        const showHoverCard = (): void => {
+          const m = mapRef.current;
+          const mk = markersRef.current[agentId];
+          if (!m || !mk) return;
+          const ident = identityRef.current?.[agentId];
+          // Recriado a cada hover: a âncora do Popup é fixada na construção, e ela
+          // depende de onde o marcador está AGORA na tela.
+          hoverPopupRef.current?.remove();
+          hoverPopupRef.current = new maplibregl.Popup({
+            closeButton: false,
+            closeOnClick: false,
+            offset: 16,
+            className: 'agent-hover',
+            anchor: pickAnchor(m, mk.getLngLat(), HOVER_CARD_W, HOVER_CARD_H),
+          });
+          hoverPopupRef.current
+            .setLngLat(mk.getLngLat())
+            .setHTML(
+              hoverCardHtml(
+                ident?.name ?? agentId,
+                ident?.username,
+                agentColorsRef.current[agentId] ?? '#c1121f',
+                ident?.photoUrl,
+              ),
+            )
+            .addTo(m);
+        };
+        const hideHoverCard = (): void => {
+          hoverPopupRef.current?.remove();
+        };
+        el.addEventListener('mouseenter', showHoverCard);
+        el.addEventListener('mouseleave', hideHoverCard);
+
+        // Clique: abre/fecha o balão de informações. NÃO usamos `marker.setPopup` porque
+        // a âncora é fixada na construção do Popup — e ela precisa ser recalculada a cada
+        // abertura, conforme a sobra de espaço em torno do marcador naquele momento.
+        el.addEventListener('click', (e) => {
+          // Sem isto o clique borbulha até o mapa e o `closeOnClick` (ligado por padrão
+          // no Popup) fecha o balão no MESMO evento que o abriu — era o que impedia o
+          // card de aparecer. O `marker.setPopup`, que deixamos de usar, fazia isto por
+          // dentro. Cliques em qualquer outro ponto do mapa seguem fechando o balão.
+          e.stopPropagation();
+          hideHoverCard();
+          const m = mapRef.current;
+          const mk = markersRef.current[agentId];
+          if (!m || !mk) return;
+          const wasOpen = infoAgentRef.current === agentId;
+          infoPopupRef.current?.remove();
+          if (wasOpen) {
+            infoAgentRef.current = null; // segundo clique fecha
+            return;
+          }
+          infoAgentRef.current = agentId;
+          infoPopupRef.current = new maplibregl.Popup({
+            offset: 14,
+            anchor: pickAnchor(m, mk.getLngLat(), INFO_POPUP_W, INFO_POPUP_H),
+          })
+            .setLngLat(mk.getLngLat())
+            .setHTML(infoHtmlRef.current[agentId] ?? '')
+            .addTo(m);
+          infoPopupRef.current.on('close', () => {
+            if (infoAgentRef.current === agentId) infoAgentRef.current = null;
+          });
+          // Delegacao: o listener fica no ELEMENTO do popup, nao no botao — o innerHTML
+          // e reescrito a cada telemetria nova e levaria junto um listener no botao.
+          infoPopupRef.current.getElement()?.addEventListener('click', (ev) => {
+            const btn = (ev.target as HTMLElement)?.closest('[data-refresh]');
+            if (btn instanceof HTMLButtonElement && !btn.disabled) {
+              ev.stopPropagation();
+              refreshingRef.current[agentId] = Date.now();
+              // Feedback na hora, sem esperar o próximo ciclo de render do balão.
+              btn.disabled = true;
+              btn.classList.add('agent-refreshing');
+              onRefreshRef.current?.(agentId);
+            }
+          });
+        });
       }
       // Forma do marcador conforme o estado; só redesenha quando o estado muda
       // (o efeito re-roda a cada tique de `nowMs` para o sinal poder envelhecer).
       const el = marker.getElement();
+      // Marcador no tom 900 (mais forte) — o 500 da trilha some sobre o mapa claro.
+      const strong = strongColorsRef.current?.[agentId] ?? color;
       const mode = agentMode(point.activity);
       // Presença explícita (status MQTT + LWT) manda; sem ela, cai no proxy de frescor.
       const fresh = presence?.[agentId] ?? isFresh(point, nowMs);
-      const stateKey = `${mode}|${fresh}|${color}|${Math.round(point.heading ?? 0)}`;
+      const stateKey = `${mode}|${fresh}|${strong}|${Math.round(point.heading ?? 0)}`;
       if (el.dataset.state !== stateKey) {
-        el.innerHTML = markerHtml(mode, fresh, color, point.heading);
+        el.innerHTML = markerHtml(mode, fresh, strong, point.heading);
         el.dataset.state = stateKey;
       }
       marker.setLngLat([point.lng, point.lat]);
-      marker
-        .getPopup()
-        ?.setHTML(
-          `<strong>${esc(agentId)}</strong>` +
-            (point.operationName
-              ? `<br/><span style="opacity:.75">${esc(point.operationName)}</span>`
-              : '') +
-            `<br/>bat: ${point.battery != null ? Math.round(point.battery * 100) + '%' : '—'}` +
-            (point.activity ? `<br/>${esc(point.activity)}` : ''),
-        );
+      // Guarda o HTML de cada agente (o clique lê daqui) e atualiza ao vivo o balão que
+      // estiver aberto — a telemetria continua chegando enquanto ele está na tela.
+      // Para de girar quando o agente RESPONDEU (posição mais nova que o pedido) ou
+      // quando o pedido envelheceu — senão o botão giraria para sempre.
+      const askedAt = refreshingRef.current[agentId];
+      if (
+        askedAt != null &&
+        (+new Date(point.capturedAt ?? 0) > askedAt || nowMs - askedAt > 20_000)
+      ) {
+        delete refreshingRef.current[agentId];
+      }
+      infoHtmlRef.current[agentId] = popupHtml(
+        point,
+        fresh,
+        nowMs,
+        refreshingRef.current[agentId] != null,
+      );
+      if (infoAgentRef.current === agentId) {
+        infoPopupRef.current?.setLngLat([point.lng, point.lat]);
+        infoPopupRef.current?.setHTML(infoHtmlRef.current[agentId]);
+      }
     }
 
     // Enquadra a primeira posição recebida.

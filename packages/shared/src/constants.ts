@@ -78,6 +78,20 @@ export const ActivityType = {
 } as const;
 export type ActivityType = (typeof ActivityType)[keyof typeof ActivityType];
 
+/**
+ * Comandos da central para um agente (canal `comando`). Não confundir com mensagem
+ * tática: comando é CONTROLE (não é E2EE, não vira chat, não é persistido no histórico).
+ */
+export const AgentCommandType = {
+  /**
+   * Pede uma posição fresca AGORA. Existe porque o GPS hiberna quando o agente está
+   * parado (heartbeat de 5 min) e o Android pode adiar esse alarme por muito mais
+   * (Doze) — sem isto a central não tem como forçar uma atualização.
+   */
+  REQUEST_FIX: 'request_fix',
+} as const;
+export type AgentCommandType = (typeof AgentCommandType)[keyof typeof AgentCommandType];
+
 /** Tipos de mensagem tática. */
 export const MessageType = {
   TEXT: 'text',

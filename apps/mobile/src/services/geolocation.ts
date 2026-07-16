@@ -1,10 +1,11 @@
+import { Alert, Platform } from 'react-native';
 import BackgroundGeolocation, {
   type Location,
   type MotionActivityEvent,
   type MotionChangeEvent,
 } from 'react-native-background-geolocation';
-import { publishPosition } from './mqtt';
-import type { PositionSample } from '../shared/contracts';
+import { publishPosition, setCommandHandler } from './mqtt';
+import { AgentCommandType, type PositionSample } from '../shared/contracts';
 
 /**
  * Camada de telemetria. Configura o plugin nativo da Transistor Software para:
@@ -96,6 +97,30 @@ export async function getCurrentPositionOnce(ctx: TrackingContext): Promise<Posi
 export async function initTracking(ctx: TrackingContext): Promise<void> {
   if (initialized) return;
 
+  /**
+   * Responde ao comando `request_fix` da central: força um fix AGORA e publica. Mesmo
+   * caminho do heartbeat — a central usa isto quando a telemetria congelou (GPS
+   * hibernando parado, e o Doze podendo adiar o heartbeat por dezenas de minutos).
+   * A resposta não é síncrona: sai como uma posição normal no canal `posicao`.
+   *
+   * Registrado por injeção (`setCommandHandler`) para não criar import circular — este
+   * módulo já importa `publishPosition` do mqtt.
+   */
+  setCommandHandler((type) => {
+    if (type !== AgentCommandType.REQUEST_FIX) return;
+    void (async () => {
+      try {
+        const location = await BackgroundGeolocation.getCurrentPosition({
+          samples: 1,
+          persist: true,
+        });
+        report(ctx, toSample(location));
+      } catch {
+        /* sem fix disponível neste momento — a central verá a posição anterior */
+      }
+    })();
+  });
+
   BackgroundGeolocation.onLocation((location: Location) => {
     report(ctx, toSample(location));
   });
@@ -158,8 +183,46 @@ export async function initTracking(ctx: TrackingContext): Promise<void> {
   initialized = true;
 }
 
+/**
+ * Doze do Android: com o aparelho ocioso (tela apagada, parado, na bateria), o sistema
+ * ADIA os alarmes para janelas de manutenção cada vez mais espaçadas. O
+ * `heartbeatInterval` é um alarme — então o ping de 5 min vira 30, 60 min, e a central
+ * enxerga o agente "congelado" mesmo com o barramento conectado (foi o que observamos:
+ * presença online + última posição de 57 min atrás).
+ *
+ * `foregroundService: true` impede o app de ser MORTO, mas NÃO o isenta do Doze — a
+ * isenção só o usuário concede. Pedimos UMA vez: o plugin lembra em `request.seen`, e
+ * `showIgnoreBatteryOptimizations()` apenas devolve os metadados (não abre nada) — quem
+ * abre a tela é o `show(request)`, e só depois do operador aceitar.
+ */
+async function ensureBatteryExemption(): Promise<void> {
+  if (Platform.OS !== 'android') return;
+  try {
+    if (await BackgroundGeolocation.deviceSettings.isIgnoringBatteryOptimizations()) return;
+    const request = await BackgroundGeolocation.deviceSettings.showIgnoreBatteryOptimizations();
+    if (request.seen) return; // já pedimos uma vez — não insistir a cada início
+    Alert.alert(
+      'Manter o rastreamento ativo',
+      'O Android está limitando o Cerberus em segundo plano — sua posição pode ficar ' +
+        'dezenas de minutos sem atualizar na central, mesmo com o app conectado.\n\n' +
+        'Na próxima tela, permita que o Cerberus ignore a otimização de bateria.',
+      [
+        { text: 'Agora não', style: 'cancel' },
+        {
+          text: 'Abrir configuração',
+          onPress: () => BackgroundGeolocation.deviceSettings.show(request),
+        },
+      ],
+    );
+  } catch {
+    /* fabricante sem essa tela / API indisponível — segue sem a isenção */
+  }
+}
+
 export async function startTracking(): Promise<void> {
   await BackgroundGeolocation.start();
+  // Depois de iniciar: o rastreamento já vale, a isenção só melhora a regularidade.
+  void ensureBatteryExemption();
 }
 
 export async function stopTracking(): Promise<void> {

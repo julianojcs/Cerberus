@@ -1,6 +1,7 @@
 import mqtt, { type MqttClient } from 'mqtt';
 import { config } from '../config';
 import {
+  agentCommandTopic,
   agentInboxTopic,
   agentPositionTopic,
   agentStatusTopic,
@@ -13,6 +14,18 @@ import { openMessage } from '../shared/e2ee';
 import { flushOutbox, queuePosition } from './outbox';
 
 let client: MqttClient | null = null;
+/** Tópico de comando DESTE agente (definido no connect) — ver AgentCommandType. */
+let commandTopic: string | null = null;
+
+/**
+ * Handler dos comandos da central. Registrado de fora (pelo serviço de geolocalização)
+ * para não criar import circular: geolocation já importa `publishPosition` daqui.
+ */
+type CommandHandler = (type: string) => void;
+let commandHandler: CommandHandler | null = null;
+export function setCommandHandler(h: CommandHandler | null): void {
+  commandHandler = h;
+}
 
 /** Escopo da mensagem recebida (deriva do tópico/payload). */
 export type MessageScope = 'central' | 'equipe' | 'dm';
@@ -64,6 +77,17 @@ function resolveText(m: RawBroadcast): string | null {
 }
 
 function handleIncoming(topic: string, payload: Uint8Array): void {
+  // Comando de controle: payload em claro e fora do caminho de chat (que tentaria
+  // decifrar um envelope E2EE que não existe aqui).
+  if (topic === commandTopic) {
+    try {
+      const { type } = JSON.parse(Buffer.from(payload).toString()) as { type?: string };
+      if (type) commandHandler?.(type);
+    } catch {
+      /* comando inválido — ignora */
+    }
+    return;
+  }
   const listeners = subscriptions.get(topic);
   if (!listeners || listeners.size === 0) return; // tópico não assinado — descarta
   try {
@@ -139,9 +163,17 @@ export function subscribeInbox(
  * tópico: o agente só publica no próprio canal.
  */
 export function connectMqtt(token: string, operationId: string, agentId: string): MqttClient {
-  if (client?.connected) return client;
+  // UMA instância por processo. O guard olha a EXISTÊNCIA, não `connected`: uma
+  // segunda chamada enquanto o cliente ainda está conectando/reconectando criava um
+  // cliente novo e ABANDONAVA o anterior (que segue reconectando sozinho, pelo
+  // `reconnectPeriod`). Com o `clientId` estável (ADR-0004) os dois órfãos brigam
+  // pelo takeover do broker — um derruba o outro, ambos reconectam — virando um loop
+  // infinito de conecta/desconecta. Antes o id tinha `Date.now()` e os duplicados
+  // apenas coexistiam, mascarando este vazamento. `disconnectMqtt` zera `client`.
+  if (client) return client;
 
   const statusTopic = agentStatusTopic(operationId, agentId);
+  commandTopic = agentCommandTopic(operationId, agentId);
   const offline = JSON.stringify({ online: false } satisfies AgentStatus);
 
   client = mqtt.connect(config.mqttWsUrl, {
@@ -173,6 +205,8 @@ export function connectMqtt(token: string, operationId: string, agentId: string)
     });
     // Ao reconectar, descarrega o buffer offline (resiliência de rede).
     void flushOutbox(publishNow);
+    // Canal de comando da central (fora do `subscriptions`, que é só de chat E2EE).
+    if (commandTopic) client?.subscribe(commandTopic, { qos: 1 });
     // Re-assina TODOS os tópicos registrados (broadcast + equipes + inbox).
     for (const topic of subscriptions.keys()) {
       client?.subscribe(topic, { qos: 1 });

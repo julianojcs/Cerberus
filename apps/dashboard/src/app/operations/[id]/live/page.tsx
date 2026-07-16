@@ -56,6 +56,7 @@ import {
   LiveMap,
   circleRing,
   rectangleRing,
+  type AgentIdentity,
   type AgentPoint,
   type AgentTrails,
   type GeofenceCircle,
@@ -68,10 +69,11 @@ import { ColorPalettePicker } from '@/components/ColorPalettePicker';
 import { SettingsModal } from '@/components/SettingsModal';
 import { NotificationCenter, type NotifItem } from '@/components/NotificationCenter';
 import { Tooltip } from '@/components/ui/tooltip';
+import { toast } from '@/components/ui/sonner';
 import { UserMenu } from '@/components/UserMenu';
 import { PeriodRange } from '@/components/PeriodRange';
 import { alertBorderFocus, routeBearingAt, type AlertFocus } from '@/lib/geo';
-import { resolveColor } from '@/lib/tailwind-colors';
+import { resolveColor, resolveStrongColor } from '@/lib/tailwind-colors';
 import { buildRoutes, assignAgentColors, splitSegments, type Route } from '@/lib/routes';
 import { MapEffectsMenu } from '@/components/MapEffectsMenu';
 
@@ -87,6 +89,35 @@ const HOUR_MS = 60 * 60 * 1000;
  * "aguardando sinal" para o operador ver quem DEVERIA estar na operação.
  */
 type AgentCard = (AgentPoint & { hasSignal: true }) | { agentId: string; hasSignal: false };
+
+/**
+ * Preferências do menu "Efeitos do mapa", lembradas por operador (localStorage —
+ * mesmo tratamento do pin da barra de período e da largura do chat). "Ligar rotas"
+ * NÃO entra aqui: é configuração de sistema, persistida no banco e só editável por admin.
+ */
+const MAP_EFFECTS_KEY = 'cerberus_map_effects';
+interface MapEffects {
+  liveTrail: boolean;
+  trailDirection: boolean;
+  zones: boolean;
+  media: boolean;
+}
+
+/**
+ * Grava o patch por cima do que já está salvo. É chamado pelos SETTERS (e não por um
+ * efeito que observa o estado) de propósito: um efeito rodaria na montagem com os
+ * PADRÕES, antes da leitura inicial aplicar o que estava salvo, e sobrescreveria a
+ * preferência do operador. Mesclar contra o storage também evita closure obsoleto.
+ */
+function persistMapEffects(patch: Partial<MapEffects>): void {
+  try {
+    const raw = localStorage.getItem(MAP_EFFECTS_KEY);
+    const cur = raw ? (JSON.parse(raw) as Partial<MapEffects>) : {};
+    localStorage.setItem(MAP_EFFECTS_KEY, JSON.stringify({ ...cur, ...patch }));
+  } catch {
+    /* storage indisponível/cheio — preferência é best-effort */
+  }
+}
 
 /** Mensagem de texto/broadcast já decifrada para exibição (`text: null` = falha). */
 interface DecryptedMessage {
@@ -239,7 +270,8 @@ export default function LiveOperationPage() {
   const [liveTrails, setLiveTrails] = useState<
     Record<string, { lng: number; lat: number; capturedAt: string }[]>
   >({});
-  const [showLiveTrail, setShowLiveTrail] = useState(true);
+  // Padrão DESLIGADO: o mapa abre limpo — o operador liga as camadas que quiser.
+  const [showLiveTrail, setShowLiveTrail] = useState(false);
   // Efeito "Sentido das trilhas" (setas no mapa) — controlado pelo menu de efeitos.
   const [showTrailDirection, setShowTrailDirection] = useState(false);
   // Ligar/desligar a trilha ao vivo. Ao DESLIGAR, também desliga o "Sentido das
@@ -247,11 +279,22 @@ export default function LiveOperationPage() {
   const setLiveTrail = useCallback((v: boolean) => {
     setShowLiveTrail(v);
     if (!v) setShowTrailDirection(false);
+    // Ao desligar, o sentido cai junto — persiste os dois para não voltar órfão.
+    persistMapEffects(v ? { liveTrail: true } : { liveTrail: false, trailDirection: false });
+  }, []);
+  const setTrailDirection = useCallback((v: boolean) => {
+    setShowTrailDirection(v);
+    persistMapEffects({ trailDirection: v });
   }, []);
   // Sentido efetivo: só vale com a trilha ao vivo ligada (defesa contra estado órfão).
   const trailDirectionOn = showLiveTrail && showTrailDirection;
   // Exibir fotos (pins de mídia geolocalizada) no mapa — menu de efeitos.
-  const [showMedia, setShowMedia] = useState(true);
+  // Padrão DESLIGADO (o mapa abre limpo); só "Exibir zonas" nasce ligado.
+  const [showMedia, setShowMedia] = useState(false);
+  const setMedia = useCallback((v: boolean) => {
+    setShowMedia(v);
+    persistMapEffects({ media: v });
+  }, []);
   const seededTrailRef = useRef(false);
   // Seleção inicial das rotas: marca todos os agentes por padrão na 1ª carga (uma vez).
   const seededSelectionRef = useRef(false);
@@ -322,6 +365,8 @@ export default function LiveOperationPage() {
   }, []);
   // Nome de exibição por id (agente/usuário) para o card de mensagens.
   const [memberNames, setMemberNames] = useState<Record<string, string>>({});
+  /** @usuário por agente — usado no card de hover do marcador no mapa. */
+  const [memberUsernames, setMemberUsernames] = useState<Record<string, string>>({});
 
   // Barra de período: aparece ao passar o cursor no topo do mapa; "pin" fixa.
   const [barHover, setBarHover] = useState(false);
@@ -388,15 +433,33 @@ export default function LiveOperationPage() {
   } | null>(null);
   const [alertFocus, setAlertFocus] = useState<AlertFocus | null>(null);
   const [showZones, setShowZones] = useState(true);
+  const setZones = useCallback((v: boolean) => {
+    setShowZones(v);
+    persistMapEffects({ zones: v });
+  }, []);
   const [recomputing, setRecomputing] = useState(false);
 
   // Preferências lidas do localStorage (só no cliente — evita mismatch de SSR):
-  // pin da barra + cores escolhidas por agente para esta operação.
+  // pin da barra + cores por agente desta operação + toggles do menu de efeitos.
   useEffect(() => {
     setBarPinned(localStorage.getItem('cerberus_period_pinned') === '1');
     try {
       const raw = localStorage.getItem(colorsKey);
       if (raw) setAgentColorOverrides(JSON.parse(raw) as Record<string, string>);
+    } catch {
+      /* preferência corrompida — ignora */
+    }
+    try {
+      const raw = localStorage.getItem(MAP_EFFECTS_KEY);
+      if (raw) {
+        // Cada toggle é aplicado só se estiver salvo como boolean: preferência antiga
+        // ou corrompida não derruba o padrão nem quebra a tela.
+        const e = JSON.parse(raw) as Partial<MapEffects>;
+        if (typeof e.liveTrail === 'boolean') setShowLiveTrail(e.liveTrail);
+        if (typeof e.trailDirection === 'boolean') setShowTrailDirection(e.trailDirection);
+        if (typeof e.zones === 'boolean') setShowZones(e.zones);
+        if (typeof e.media === 'boolean') setShowMedia(e.media);
+      }
     } catch {
       /* preferência corrompida — ignora */
     }
@@ -544,6 +607,9 @@ export default function LiveOperationPage() {
               heading: p.heading,
               battery: p.battery,
               activity: p.activity,
+              accuracy: p.accuracy,
+              altitude: p.altitude,
+              speed: p.speed,
               capturedAt: p.capturedAt, // sinal fresco ⇒ marcador "conectado"
             };
           }
@@ -613,11 +679,17 @@ export default function LiveOperationPage() {
       .operationMembers(operationId)
       .then((ms) => {
         const map: Record<string, string> = {};
+        const users: Record<string, string> = {};
         for (const m of ms) {
-          if (m.agentId) map[m.agentId] = m.name;
+          if (m.agentId) {
+            map[m.agentId] = m.name;
+            users[m.agentId] = m.username;
+          }
           map[m.id] = m.name;
+          users[m.id] = m.username;
         }
         setMemberNames(map);
+        setMemberUsernames(users);
       })
       .catch(() => {});
     // Fase 6b — estatísticas de mídia (views + favoritos).
@@ -651,6 +723,9 @@ export default function LiveOperationPage() {
             heading: pos.heading,
             battery: pos.battery,
             activity: pos.activity,
+            accuracy: pos.accuracy,
+            altitude: pos.altitude,
+            speed: pos.speed,
             capturedAt: pos.capturedAt, // sinal fresco ⇒ marcador "conectado"
           },
         }));
@@ -699,6 +774,85 @@ export default function LiveOperationPage() {
     const out: Record<string, string> = {};
     const ids = new Set([...Object.keys(agentColorTokens), ...Object.keys(agentColorOverrides)]);
     for (const id of ids) out[id] = resolveColor(agentColorOverrides[id] ?? agentColorTokens[id]);
+    return out;
+  }, [agentColorTokens, agentColorOverrides]);
+
+  /**
+   * Botão "atualizar" do balão do agente. Faz as DUAS coisas:
+   * 1. pede um fix fresco AO AGENTE (canal `comando`) — o GPS hiberna parado e o Doze
+   *    pode adiar o heartbeat, então só re-buscar do servidor traria o mesmo dado velho;
+   * 2. re-sincroniza com o servidor, cobrindo uma posição que o dashboard tenha perdido
+   *    (ex.: mensagem MQTT durante uma reconexão).
+   * A resposta do agente não é síncrona: chega depois como posição normal, pelo MQTT.
+   */
+  const refreshAgent = useCallback(
+    (agentId: string) => {
+      // O retorno vai para o OPERADOR, não para o console: uma falha (403/503/rota
+      // ausente) era indistinguível de "o comando saiu e o agente não respondeu".
+      void api
+        .requestAgentFix(operationId, agentId)
+        .then(() => {
+          // 202 = comando EMITIDO. A resposta é assíncrona (o agente manda a posição
+          // quando conseguir um fix) — o texto deixa isso explícito.
+          toast.success('Posição solicitada ao agente', {
+            description: 'O card atualiza sozinho assim que o aparelho responder.',
+          });
+        })
+        .catch((err: unknown) => {
+          toast.error('Não foi possível solicitar a posição', {
+            description: err instanceof Error ? err.message : 'Falha no barramento.',
+          });
+        });
+      void api
+        .latestPositions(operationId)
+        .then((positions: LatestPosition[]) => {
+          setAgents((prev) => {
+            const next = { ...prev };
+            for (const p of positions) {
+              next[p.agentId] = {
+                agentId: p.agentId,
+                lat: p.lat,
+                lng: p.lng,
+                heading: p.heading,
+                battery: p.battery,
+                activity: p.activity,
+                accuracy: p.accuracy,
+                altitude: p.altitude,
+                speed: p.speed,
+                capturedAt: p.capturedAt,
+              };
+            }
+            return next;
+          });
+        })
+        .catch((err: unknown) => {
+          toast.error('Falha ao re-sincronizar as posições', {
+            description: err instanceof Error ? err.message : undefined,
+          });
+        });
+    },
+    [operationId],
+  );
+
+  // Identidade por agente para o card de hover no mapa (avatar + nome + @usuário),
+  // espelhando o card do chat. Sem foto no sistema ainda → o avatar usa as INICIAIS.
+  const agentIdentity = useMemo(() => {
+    const out: Record<string, AgentIdentity> = {};
+    for (const id of Object.keys(agents)) {
+      // `photoUrl` ainda não existe no cadastro — o card cai nas iniciais até existir.
+      out[id] = { name: memberNames[id] ?? id, username: memberUsernames[id] };
+    }
+    return out;
+  }, [agents, memberNames, memberUsernames]);
+
+  // Mesma família, tom 900 (o mais forte) — só para os MARCADORES: o tom 500 se perde
+  // sobre o mapa claro. A trilha/rota segue no 500, que é a identidade do agente.
+  const agentColorsStrong = useMemo(() => {
+    const out: Record<string, string> = {};
+    const ids = new Set([...Object.keys(agentColorTokens), ...Object.keys(agentColorOverrides)]);
+    for (const id of ids) {
+      out[id] = resolveStrongColor(agentColorOverrides[id] ?? agentColorTokens[id]);
+    }
     return out;
   }, [agentColorTokens, agentColorOverrides]);
 
@@ -2223,6 +2377,9 @@ export default function LiveOperationPage() {
               <LiveMap
                 agents={agents}
                 presence={presence}
+                agentColorsStrong={agentColorsStrong}
+                agentIdentity={agentIdentity}
+                onRefreshAgent={refreshAgent}
                 routes={plottedRoutes}
                 trails={liveTrailsForMap}
                 showTrails={showLiveTrail}
@@ -2268,7 +2425,7 @@ export default function LiveOperationPage() {
                     checked: trailDirectionOn,
                     // Sem trilha ao vivo não há trilha para indicar sentido — desabilita.
                     disabled: !showLiveTrail,
-                    onChange: setShowTrailDirection,
+                    onChange: setTrailDirection,
                   },
                   {
                     kind: 'toggle',
@@ -2276,7 +2433,7 @@ export default function LiveOperationPage() {
                     label: 'Exibir zonas',
                     title: 'Exibir/ocultar as zonas (geofences) no mapa',
                     checked: showZones,
-                    onChange: setShowZones,
+                    onChange: setZones,
                   },
                   {
                     kind: 'toggle',
@@ -2284,7 +2441,7 @@ export default function LiveOperationPage() {
                     label: 'Exibir fotos',
                     title: 'Exibir/ocultar os pins de fotos geolocalizadas no mapa',
                     checked: showMedia,
-                    onChange: setShowMedia,
+                    onChange: setMedia,
                   },
                   { kind: 'section', id: 'sec-routes', label: 'Rotas' },
                   {

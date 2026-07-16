@@ -25,6 +25,21 @@ export function agentInboxTopic(operationId: string, agentId: string): string {
   return `${TOPIC_ROOT}/${operationId}/agente/${agentId}/inbox`;
 }
 
+/**
+ * `operacao/{operationId}/agente/{agentId}/comando` — central → ESTE agente (controle).
+ * Fica no subtópico do próprio agente, que ele já assina (menor privilégio).
+ */
+export function agentCommandTopic(operationId: string, agentId: string): string {
+  return `${TOPIC_ROOT}/${operationId}/agente/${agentId}/comando`;
+}
+
+/** Comandos de CONTROLE da central (não é chat, não é E2EE, não vai pro histórico). */
+export const AgentCommandType = {
+  /** Pede uma posição fresca AGORA (o GPS hiberna parado; o Doze adia o heartbeat). */
+  REQUEST_FIX: 'request_fix',
+} as const;
+export type AgentCommandType = (typeof AgentCommandType)[keyof typeof AgentCommandType];
+
 /** `operacao/{operationId}/agente/{agentId}/status` — presença do agente. */
 export function agentStatusTopic(operationId: string, agentId: string): string {
   return `${TOPIC_ROOT}/${operationId}/agente/${agentId}/status`;
