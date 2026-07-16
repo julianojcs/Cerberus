@@ -38,6 +38,48 @@ function toSample(location: Location): PositionSample {
   };
 }
 
+/**
+ * Contexto do rastreamento, lido pelo handler de comando. Fica em módulo porque o
+ * handler é registrado no LOAD (abaixo) e não dentro do `initTracking`.
+ */
+let trackingCtx: TrackingContext | null = null;
+
+/**
+ * Responde ao `request_fix` da central: força um fix AGORA e publica. Mesmo caminho do
+ * heartbeat — a central usa isto quando a telemetria congelou (GPS hibernando parado, e
+ * o Doze podendo adiar o heartbeat por dezenas de minutos). A resposta não é síncrona:
+ * sai como uma posição normal no canal `posicao`.
+ *
+ * Registrado no LOAD do módulo, e NÃO dentro do `initTracking` (que roda uma única vez):
+ * um hot reload do `mqtt.ts` zera o `commandHandler` de lá, e o `initTracking` não roda
+ * de novo — o handler sumia em silêncio e o comando chegava para ninguém. Aqui, ao menos
+ * um reload DESTE arquivo o re-registra. Injeção evita import circular (já importamos
+ * `publishPosition` do mqtt).
+ */
+setCommandHandler((type) => {
+  if (type !== AgentCommandType.REQUEST_FIX) return;
+  const ctx = trackingCtx;
+  if (!ctx) {
+    console.warn('[gps] request_fix ignorado: rastreamento ainda não iniciado');
+    return;
+  }
+  void (async () => {
+    try {
+      console.warn('[gps] comando request_fix → buscando posição…');
+      const location = await BackgroundGeolocation.getCurrentPosition({
+        samples: 1,
+        persist: true,
+      });
+      console.warn('[gps] fix obtido → publicando');
+      report(ctx, toSample(location));
+    } catch (err) {
+      // Sem log, um GPS que não consegue fix (Doze, sem sinal, permissão) é
+      // indistinguível de "o comando nunca chegou".
+      console.warn('[gps] FALHOU ao obter fix:', err);
+    }
+  })();
+});
+
 // --- Assinatura de posições para a própria UI do agente ---
 export type PositionListener = (sample: PositionSample) => void;
 const positionListeners = new Set<PositionListener>();
@@ -95,35 +137,9 @@ export async function getCurrentPositionOnce(ctx: TrackingContext): Promise<Posi
 }
 
 export async function initTracking(ctx: TrackingContext): Promise<void> {
+  // Antes do guard: o handler de comando lê daqui, e o ctx pode mudar (troca de operação).
+  trackingCtx = ctx;
   if (initialized) return;
-
-  /**
-   * Responde ao comando `request_fix` da central: força um fix AGORA e publica. Mesmo
-   * caminho do heartbeat — a central usa isto quando a telemetria congelou (GPS
-   * hibernando parado, e o Doze podendo adiar o heartbeat por dezenas de minutos).
-   * A resposta não é síncrona: sai como uma posição normal no canal `posicao`.
-   *
-   * Registrado por injeção (`setCommandHandler`) para não criar import circular — este
-   * módulo já importa `publishPosition` do mqtt.
-   */
-  setCommandHandler((type) => {
-    if (type !== AgentCommandType.REQUEST_FIX) return;
-    void (async () => {
-      try {
-        console.warn('[gps] comando request_fix → buscando posição…');
-        const location = await BackgroundGeolocation.getCurrentPosition({
-          samples: 1,
-          persist: true,
-        });
-        console.warn('[gps] fix obtido → publicando');
-        report(ctx, toSample(location));
-      } catch (err) {
-        // Sem log, um GPS que não consegue fix (Doze, sem sinal, permissão) é
-        // indistinguível de "o comando nunca chegou".
-        console.warn('[gps] FALHOU ao obter fix:', err);
-      }
-    })();
-  });
 
   BackgroundGeolocation.onLocation((location: Location) => {
     report(ctx, toSample(location));
