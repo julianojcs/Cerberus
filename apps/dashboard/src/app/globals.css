@@ -202,6 +202,11 @@
 .maplibregl-popup-anchor-right .maplibregl-popup-tip {
   border-left-color: var(--panel);
 }
+/* Card de hover do agente: puramente informativo. Sem `pointer-events` ele roubaria o
+   mouse do marcador e o card piscaria (entra no balão → sai do marcador → some). */
+.agent-hover {
+  pointer-events: none;
+}
 .maplibregl-popup-close-button {
   color: var(--muted);
   font-size: 16px;

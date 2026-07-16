@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import maplibregl, { type Map as MlMap, type Marker, type GeoJSONSource } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
+import { initialsOf } from './Avatar';
 
 export interface AgentPoint {
   agentId: string;
@@ -127,6 +128,47 @@ function row(label: string, value: string): string {
     `<div style="display:flex;gap:12px;justify-content:space-between;line-height:1.7">` +
     `<span style="color:var(--muted)">${label}</span>` +
     `<span style="color:var(--text);font-weight:600">${value}</span></div>`
+  );
+}
+
+/** Identidade do agente exibida no card de hover do marcador. */
+export interface AgentIdentity {
+  name: string;
+  username?: string;
+  /** Foto do agente. Ausente ⇒ o avatar cai nas INICIAIS (mesma regra do <Avatar/>). */
+  photoUrl?: string;
+}
+
+/**
+ * Card de HOVER do marcador — espelha o card do agente no chat (avatar + nome), com o
+ * @usuário no lugar da prévia da mensagem.
+ *
+ * Mesmo contrato do componente <Avatar/>: usa a FOTO quando houver e cai nas iniciais
+ * (via `initialsOf`, para baterem com as do chat) sobre a cor do agente quando não
+ * houver. Hoje nenhum agente tem foto — quando o campo existir, basta preencher
+ * `photoUrl` na identidade que o card já a exibe.
+ */
+function hoverCardHtml(
+  name: string,
+  username: string | undefined,
+  color: string,
+  photoUrl?: string,
+): string {
+  const avatar = photoUrl
+    ? `<img src="${esc(photoUrl)}" alt="" style="width:34px;height:34px;flex-shrink:0;` +
+      `border-radius:50%;object-fit:cover"/>`
+    : `<span style="width:34px;height:34px;flex-shrink:0;border-radius:50%;background:${color};` +
+      `color:#fff;display:grid;place-items:center;font-size:13px;font-weight:700;line-height:1">` +
+      `${esc(initialsOf(name))}</span>`;
+  return (
+    `<div style="display:flex;align-items:center;gap:10px;min-width:150px">` +
+    avatar +
+    `<div style="min-width:0">` +
+    `<div style="font-size:13px;font-weight:700;color:var(--text);white-space:nowrap">${esc(name)}</div>` +
+    (username
+      ? `<div style="font-size:12px;color:var(--muted);white-space:nowrap">@${esc(username)}</div>`
+      : '') +
+    `</div></div>`
   );
 }
 
@@ -425,6 +467,7 @@ export function LiveMap({
   agents,
   presence,
   agentColorsStrong,
+  agentIdentity,
   trails = {},
   showTrails = true,
   showTrailDirection = false,
@@ -448,6 +491,8 @@ export function LiveMap({
   presence?: Record<string, boolean>;
   /** Cor da familia no tom 900 por agente — usada SO nos marcadores (contraste). */
   agentColorsStrong?: Record<string, string>;
+  /** Nome + @usuario por agente — card de hover do marcador. */
+  agentIdentity?: Record<string, AgentIdentity>;
   trails?: AgentTrails;
   showTrails?: boolean;
   /** Efeito "Sentido das trilhas": setas ao longo das trilhas e rotas. */
@@ -509,6 +554,11 @@ export function LiveMap({
   };
   const strongColorsRef = useRef(agentColorsStrong);
   strongColorsRef.current = agentColorsStrong;
+  // Lido dentro dos listeners do marcador (que sao registrados uma vez) — sem ref
+  // eles congelariam a identidade da primeira renderizacao.
+  const identityRef = useRef(agentIdentity);
+  identityRef.current = agentIdentity;
+  const hoverPopupRef = useRef<maplibregl.Popup | null>(null);
   const fittedRef = useRef(false);
   const styleReadyRef = useRef(false);
 
@@ -699,6 +749,40 @@ export function LiveMap({
           .addTo(map);
         marker.setPopup(new maplibregl.Popup({ offset: 12 }));
         markersRef.current[agentId] = marker;
+
+        // Hover: card com avatar + nome + @usuário (espelha o card do chat). Um único
+        // popup reaproveitado entre os marcadores; lê a identidade via ref para não
+        // congelar a desta renderização. O clique abre o popup completo, então o card
+        // sai de cena para os dois não se sobreporem.
+        const showHoverCard = (): void => {
+          const m = mapRef.current;
+          const mk = markersRef.current[agentId];
+          if (!m || !mk) return;
+          const ident = identityRef.current?.[agentId];
+          hoverPopupRef.current ??= new maplibregl.Popup({
+            closeButton: false,
+            closeOnClick: false,
+            offset: 16,
+            className: 'agent-hover',
+          });
+          hoverPopupRef.current
+            .setLngLat(mk.getLngLat())
+            .setHTML(
+              hoverCardHtml(
+                ident?.name ?? agentId,
+                ident?.username,
+                agentColorsRef.current[agentId] ?? '#c1121f',
+                ident?.photoUrl,
+              ),
+            )
+            .addTo(m);
+        };
+        const hideHoverCard = (): void => {
+          hoverPopupRef.current?.remove();
+        };
+        el.addEventListener('mouseenter', showHoverCard);
+        el.addEventListener('mouseleave', hideHoverCard);
+        el.addEventListener('click', hideHoverCard);
       }
       // Forma do marcador conforme o estado; só redesenha quando o estado muda
       // (o efeito re-roda a cada tique de `nowMs` para o sinal poder envelhecer).

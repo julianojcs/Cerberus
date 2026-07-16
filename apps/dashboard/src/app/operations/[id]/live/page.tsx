@@ -56,6 +56,7 @@ import {
   LiveMap,
   circleRing,
   rectangleRing,
+  type AgentIdentity,
   type AgentPoint,
   type AgentTrails,
   type GeofenceCircle,
@@ -363,6 +364,8 @@ export default function LiveOperationPage() {
   }, []);
   // Nome de exibição por id (agente/usuário) para o card de mensagens.
   const [memberNames, setMemberNames] = useState<Record<string, string>>({});
+  /** @usuário por agente — usado no card de hover do marcador no mapa. */
+  const [memberUsernames, setMemberUsernames] = useState<Record<string, string>>({});
 
   // Barra de período: aparece ao passar o cursor no topo do mapa; "pin" fixa.
   const [barHover, setBarHover] = useState(false);
@@ -675,11 +678,17 @@ export default function LiveOperationPage() {
       .operationMembers(operationId)
       .then((ms) => {
         const map: Record<string, string> = {};
+        const users: Record<string, string> = {};
         for (const m of ms) {
-          if (m.agentId) map[m.agentId] = m.name;
+          if (m.agentId) {
+            map[m.agentId] = m.name;
+            users[m.agentId] = m.username;
+          }
           map[m.id] = m.name;
+          users[m.id] = m.username;
         }
         setMemberNames(map);
+        setMemberUsernames(users);
       })
       .catch(() => {});
     // Fase 6b — estatísticas de mídia (views + favoritos).
@@ -766,6 +775,17 @@ export default function LiveOperationPage() {
     for (const id of ids) out[id] = resolveColor(agentColorOverrides[id] ?? agentColorTokens[id]);
     return out;
   }, [agentColorTokens, agentColorOverrides]);
+
+  // Identidade por agente para o card de hover no mapa (avatar + nome + @usuário),
+  // espelhando o card do chat. Sem foto no sistema ainda → o avatar usa as INICIAIS.
+  const agentIdentity = useMemo(() => {
+    const out: Record<string, AgentIdentity> = {};
+    for (const id of Object.keys(agents)) {
+      // `photoUrl` ainda não existe no cadastro — o card cai nas iniciais até existir.
+      out[id] = { name: memberNames[id] ?? id, username: memberUsernames[id] };
+    }
+    return out;
+  }, [agents, memberNames, memberUsernames]);
 
   // Mesma família, tom 900 (o mais forte) — só para os MARCADORES: o tom 500 se perde
   // sobre o mapa claro. A trilha/rota segue no 500, que é a identidade do agente.
@@ -2300,6 +2320,7 @@ export default function LiveOperationPage() {
                 agents={agents}
                 presence={presence}
                 agentColorsStrong={agentColorsStrong}
+                agentIdentity={agentIdentity}
                 routes={plottedRoutes}
                 trails={liveTrailsForMap}
                 showTrails={showLiveTrail}
