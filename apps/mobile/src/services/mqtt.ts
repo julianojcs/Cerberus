@@ -217,6 +217,11 @@ export function connectMqtt(token: string, operationId: string, agentId: string)
     password: config.mqttUsername ? config.mqttPassword : token,
     reconnectPeriod: 3000,
     clean: true,
+    // MQTT 5 (o mqtt.js usa 3.1.1 por padrão). Motivo: em 3.1.1 o broker derrubar o
+    // cliente ("session taken over") e a rede cair são a MESMA coisa do lado de cá —
+    // um socket fechando, sem motivo. Na v5 o broker manda um DISCONNECT com
+    // `reasonCode`, que separa os dois casos. O HiveMQ Cloud atende v5.
+    protocolVersion: 5,
     // TESTAMENTO (LWT): se o app morrer sem se despedir (rede caiu, processo morto,
     // bateria acabou), o BROKER publica isto por nós quando o keepalive expira.
     // Custo de bateria ~zero: viaja dentro do CONNECT e não gera tráfego novo — o
@@ -246,6 +251,22 @@ export function connectMqtt(token: string, operationId: string, agentId: string)
   // tentando reconectar sozinho (reconnectPeriod).
   client.on('error', (err) => {
     console.warn(`[mqtt] falha de conexão em ${config.mqttWsUrl}:`, err?.message ?? err);
+  });
+
+  // Diagnóstico do ciclo de vida. Sem isto, "o barramento cai" não diz NADA sobre a
+  // causa: quem derruba? o broker, a rede, ou nós? Cada evento responde uma parte.
+  client.on('connect', () => console.warn('[mqtt] conectado'));
+  client.on('reconnect', () => console.warn('[mqtt] reconectando…'));
+  client.on('offline', () => console.warn('[mqtt] offline (rede sumiu)'));
+  client.on('close', () => console.warn('[mqtt] socket fechado'));
+  // Só existe no MQTT 5: é o broker dizendo POR QUE nos derrubou. `reasonCode: 142`
+  // (0x8E) = "Session taken over" ⇒ outro cliente conectou com o MESMO clientId.
+  client.on('disconnect', (packet) => {
+    console.warn(
+      '[mqtt] DERRUBADO pelo broker — reasonCode:',
+      packet?.reasonCode,
+      packet?.properties?.reasonString ?? '',
+    );
   });
 
   client.on('message', handleIncoming);
