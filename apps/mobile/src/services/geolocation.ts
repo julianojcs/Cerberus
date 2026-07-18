@@ -4,7 +4,7 @@ import BackgroundGeolocation, {
   type MotionActivityEvent,
   type MotionChangeEvent,
 } from 'react-native-background-geolocation';
-import { publishPosition, setCommandHandler } from './mqtt';
+import { addCommandHandler, publishPosition } from './mqtt';
 import { AgentCommandType, type PositionSample } from '../shared/contracts';
 
 /**
@@ -103,10 +103,11 @@ export async function initTracking(ctx: TrackingContext): Promise<void> {
    * hibernando parado, e o Doze podendo adiar o heartbeat por dezenas de minutos).
    * A resposta não é síncrona: sai como uma posição normal no canal `posicao`.
    *
-   * Registrado por injeção (`setCommandHandler`) para não criar import circular — este
-   * módulo já importa `publishPosition` do mqtt.
+   * Registrado por injeção (`addCommandHandler`) para não criar import circular — este
+   * módulo já importa `publishPosition` do mqtt. Sem remoção: o `initialized` acima
+   * garante registro único e o handler vive o processo inteiro.
    */
-  setCommandHandler((type) => {
+  addCommandHandler((type) => {
     if (type !== AgentCommandType.REQUEST_FIX) return;
     void (async () => {
       try {

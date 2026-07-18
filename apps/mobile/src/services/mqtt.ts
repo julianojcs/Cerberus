@@ -18,13 +18,23 @@ let client: MqttClient | null = null;
 let commandTopic: string | null = null;
 
 /**
- * Handler dos comandos da central. Registrado de fora (pelo serviço de geolocalização)
- * para não criar import circular: geolocation já importa `publishPosition` daqui.
+ * Handlers dos comandos da central. Registrados de fora (geolocalização e navegação)
+ * para não criar import circular: os dois já importam deste módulo.
+ *
+ * É um CONJUNTO, não um slot único: `request_fix` é tratado pela telemetria e
+ * `route_assign`/`route_cancel` pela navegação. Com um slot só, o segundo a registrar
+ * derrubaria o primeiro em silêncio.
+ *
+ * `routeId` é o ponteiro dos comandos de rota — o traçado nunca viaja no canal de
+ * controle (ver .claude/rules/mqtt-multitenant.md).
  */
-type CommandHandler = (type: string) => void;
-let commandHandler: CommandHandler | null = null;
-export function setCommandHandler(h: CommandHandler | null): void {
-  commandHandler = h;
+type CommandHandler = (type: string, routeId?: string) => void;
+const commandHandlers = new Set<CommandHandler>();
+export function addCommandHandler(h: CommandHandler): () => void {
+  commandHandlers.add(h);
+  return () => {
+    commandHandlers.delete(h);
+  };
 }
 
 /**
@@ -100,8 +110,11 @@ function handleIncoming(topic: string, payload: Uint8Array): void {
   // decifrar um envelope E2EE que não existe aqui).
   if (topic === commandTopic) {
     try {
-      const { type } = JSON.parse(Buffer.from(payload).toString()) as { type?: string };
-      if (type) commandHandler?.(type);
+      const { type, routeId } = JSON.parse(Buffer.from(payload).toString()) as {
+        type?: string;
+        routeId?: string;
+      };
+      if (type) for (const handler of commandHandlers) handler(type, routeId);
     } catch {
       /* comando inválido — ignora */
     }

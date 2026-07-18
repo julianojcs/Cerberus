@@ -26,7 +26,10 @@ const HTML = `<!DOCTYPE html>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/leaflet-rotate@0.2.8/dist/leaflet-rotate-src.js"></script>
-<style>html,body,#map{height:100%;margin:0;background:#0b0f14}</style>
+<style>
+html,body,#map{height:100%;margin:0;background:#0b0f14}
+.dest{font-size:22px;line-height:30px;text-align:center;text-shadow:0 0 5px #000,0 0 2px #000}
+</style>
 </head>
 <body>
 <div id="map"></div>
@@ -49,9 +52,20 @@ const HTML = `<!DOCTYPE html>
     maxZoom: 21,
     maxNativeZoom: 19,
   }).addTo(map);
+  // Rota PLANEJADA (issue #131), distinta do rastro JÁ percorrido (vermelho): azul com
+  // "casing" escuro por baixo, o padrão de navegação veicular. Declarada ANTES da
+  // trilha de propósito — no Leaflet quem entra depois desenha por cima, e o rastro
+  // precisa ficar visível sobre a rota.
+  var routeCasing = L.polyline([], { color: '#0b0f14', weight: 11, opacity: 0.9 }).addTo(map);
+  var routeLine = L.polyline([], { color: '#2f81f7', weight: 6, opacity: 0.95 }).addTo(map);
+  var destMarker = null;
+  var routeFitKey = 0;
   var line = L.polyline([], { color: '#c1121f', weight: 4, opacity: 0.85 }).addTo(map);
   var meMarker = null;
   var fitted = false;
+  // Modo "escolher destino": só então o toque no mapa vira evento. Sem isto qualquer
+  // arraste do mapa abriria a confirmação de destino.
+  var pickMode = false;
   // Marcador ÚNICO "você está aqui" (azul), distinto da trilha vermelha. Segue a
   // posição ao vivo (__update) e também é reposicionado ao centralizar (__focus) —
   // um só ponto, sem duplicar/"pular" entre um marcador de trilha e outro de foco.
@@ -86,6 +100,47 @@ const HTML = `<!DOCTYPE html>
       map.setBearing(heading);
     }
   };
+  // Rota planejada. O parâmetro points chega JÁ em [lat, lng]: a transposição do GeoJSON
+  // [lng, lat] é feita uma única vez, do lado tipado (src/shared/geo.ts) — ver
+  // .claude/rules/geospatial-coordinates.md.
+  window.__route = function (points, dest, isFallback, fitKey) {
+    var has = points && points.length > 1;
+    routeCasing.setLatLngs(has ? points : []);
+    routeLine.setLatLngs(has ? points : []);
+    // Traçado direto (provedor de rotas fora): pontilhado âmbar deixa explícito que
+    // NÃO é um trajeto por vias e que não haverá instrução de manobra.
+    routeLine.setStyle(
+      isFallback
+        ? { dashArray: '10 8', color: '#e3b341' }
+        : { dashArray: null, color: '#2f81f7' }
+    );
+    if (dest) {
+      if (!destMarker) {
+        destMarker = L.marker([dest.lat, dest.lng], {
+          icon: L.divIcon({ className: '', html: '<div class="dest">🏁</div>', iconSize: [30, 30], iconAnchor: [15, 15] })
+        }).addTo(map);
+      } else {
+        destMarker.setLatLng([dest.lat, dest.lng]);
+      }
+      destMarker.bindTooltip(dest.label || 'Destino', { direction: 'top', offset: [0, -14] });
+    } else if (destMarker) {
+      map.removeLayer(destMarker);
+      destMarker = null;
+    }
+    // Enquadra o trajeto inteiro só quando a ROTA muda (fitKey), nunca a cada fix —
+    // senão o mapa daria zoom-out a cada atualização de posição.
+    if (has && fitKey && fitKey !== routeFitKey) {
+      routeFitKey = fitKey;
+      try { map.fitBounds(routeCasing.getBounds(), { padding: [30, 30] }); fitted = true; } catch (e) {}
+    }
+  };
+  window.__pick = function (on) { pickMode = !!on; };
+  map.on('click', function (e) {
+    if (!pickMode || !window.ReactNativeWebView) return;
+    window.ReactNativeWebView.postMessage(
+      JSON.stringify({ type: 'maptap', lat: e.latlng.lat, lng: e.latlng.lng })
+    );
+  });
   // Recalcula o tamanho do mapa quando o container muda de dimensão (layout tardio
   // do WebView, rotação, tela cheia). Sem isso o Leaflet renderiza só um pedaço e
   // não recarrega os tiles ao arrastar.
@@ -102,32 +157,74 @@ const HTML = `<!DOCTYPE html>
 </body>
 </html>`;
 
+/** Rota planejada a desenhar. `path` já vem em `{lat,lng}` (transposto em shared/geo). */
+export interface PlannedRoute {
+  /** Identidade do traçado: quando muda, o mapa reenquadra o trajeto inteiro. */
+  id: string;
+  path: TrackPoint[];
+  destination: TrackPoint & { label?: string };
+  /** Traçado direto (provedor fora) — desenhado pontilhado, sem promessa de vias. */
+  fallback: boolean;
+}
+
 export function AgentMap({
   track,
-  showRoute = true,
+  showTrack = true,
   headingUp = false,
   heading = null,
   focus = null,
+  route = null,
+  pickMode = false,
+  onMapTap,
 }: {
   track: TrackPoint[];
-  showRoute?: boolean;
+  /** Desenhar o RASTRO já percorrido (não confundir com `route`, o trajeto planejado). */
+  showTrack?: boolean;
   headingUp?: boolean;
   heading?: number | null;
   /** Centralizar o mapa na posição do agente; `nonce` muda a cada acionamento. */
   focus?: { lat: number; lng: number; nonce: number } | null;
+  route?: PlannedRoute | null;
+  /** Habilita a escolha de destino por toque no mapa (Fase 6b). */
+  pickMode?: boolean;
+  onMapTap?: (point: TrackPoint) => void;
 }) {
   const ref = useRef<WebView>(null);
   const readyRef = useRef(false);
   const focusNonceRef = useRef(0);
+  // Enquadramento: contador que só avança quando a rota é OUTRA — reenviar a mesma
+  // rota (re-render, `ready` do WebView) não pode mexer no zoom do agente.
+  const routeIdRef = useRef<string | null>(null);
+  const routeFitRef = useRef(0);
 
   const push = useCallback(() => {
     if (!readyRef.current) return;
     ref.current?.injectJavaScript(
-      `window.__update(${JSON.stringify(track)}, ${showRoute}, ${headingUp}, ${
+      `window.__update(${JSON.stringify(track)}, ${showTrack}, ${headingUp}, ${
         typeof heading === 'number' ? heading : 'null'
       }); true;`,
     );
-  }, [track, showRoute, headingUp, heading]);
+  }, [track, showTrack, headingUp, heading]);
+
+  const pushRoute = useCallback(() => {
+    if (!readyRef.current) return;
+    const id = route?.id ?? null;
+    if (id !== routeIdRef.current) {
+      routeIdRef.current = id;
+      routeFitRef.current += 1;
+    }
+    const points = route ? route.path.map((p) => [p.lat, p.lng]) : [];
+    ref.current?.injectJavaScript(
+      `window.__route(${JSON.stringify(points)}, ${JSON.stringify(route?.destination ?? null)}, ${
+        route?.fallback ?? false
+      }, ${routeFitRef.current}); true;`,
+    );
+  }, [route]);
+
+  const pushPickMode = useCallback(() => {
+    if (!readyRef.current) return;
+    ref.current?.injectJavaScript(`window.__pick(${pickMode}); true;`);
+  }, [pickMode]);
 
   // Centraliza quando o `nonce` do focus muda (evita recentralizar em cada render).
   const pushFocus = useCallback(() => {
@@ -144,11 +241,35 @@ export function AgentMap({
     pushFocus();
   }, [pushFocus]);
 
+  useEffect(() => {
+    pushRoute();
+  }, [pushRoute]);
+
+  useEffect(() => {
+    pushPickMode();
+  }, [pushPickMode]);
+
   const onMessage = (event: WebViewMessageEvent) => {
-    if (event.nativeEvent.data === 'ready') {
+    const data = event.nativeEvent.data;
+    if (data === 'ready') {
       readyRef.current = true;
       push();
       pushFocus();
+      pushRoute();
+      pushPickMode();
+      return;
+    }
+    try {
+      const message = JSON.parse(data) as { type?: string; lat?: number; lng?: number };
+      if (
+        message.type === 'maptap' &&
+        typeof message.lat === 'number' &&
+        typeof message.lng === 'number'
+      ) {
+        onMapTap?.({ lat: message.lat, lng: message.lng });
+      }
+    } catch {
+      /* mensagem desconhecida do WebView — ignora */
     }
   };
 
