@@ -5,6 +5,7 @@ import type {
   KeyDirectoryEntry,
   LoginResponse,
   Operation,
+  RouteInfo,
   SessionInfo,
   TeamInfo,
   UserInfo,
@@ -303,6 +304,25 @@ export const api = {
     request<void>(`/devices/${encodeURIComponent(deviceId)}/unblock`, { method: 'POST' }),
   blockedDevices: () => request<DeviceBlockInfo[]>('/devices/blocked'),
   audit: (limit = 200) => request<AuditLogEntry[]>(`/audit?limit=${limit}`),
+
+  // --- Rotas PLANEJADAS (issue #131) ---
+  // Trajeto até um destino. Não confundir com as "rotas" de `lib/routes.ts`, que são
+  // o rastro JÁ percorrido pelo agente.
+
+  /** Despacha um destino. A origem é a última posição conhecida do agente, no servidor. */
+  createRoute: (opId: string, input: { agentId: string; lat: number; lng: number; label?: string }) =>
+    request<RouteInfo & { dispatched: boolean }>(`/operations/${opId}/routes`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  /** Sem `status` vêm só as ativas; `'todas'` traz o histórico. */
+  routes: (opId: string, status?: 'todas') =>
+    request<RouteInfo[]>(`/operations/${opId}/routes${status ? `?status=${status}` : ''}`),
+  cancelRoute: (opId: string, routeId: string) =>
+    request<void>(`/operations/${opId}/routes/${routeId}`, { method: 'DELETE' }),
+  /** Recalcula a partir da posição atual do agente, mantendo o destino. */
+  recalculateRoute: (opId: string, routeId: string) =>
+    request<RouteInfo>(`/operations/${opId}/routes/${routeId}/recalculate`, { method: 'POST' }),
 };
 
 export interface Settings {

@@ -38,6 +38,7 @@ import {
   encryptBytes,
   sealMessage,
   type KeyDirectoryEntry,
+  type RouteInfo,
   type TeamInfo,
 } from '@cerberus/shared';
 import { putCachedCiphertext } from '@/lib/mediaCache';
@@ -60,6 +61,7 @@ import {
   type AgentPoint,
   type AgentTrails,
   type GeofenceCircle,
+  type PlannedRouteLine,
   type PlottedRoute,
 } from '@/components/LiveMap';
 import { AuthImage } from '@/components/AuthImage';
@@ -76,6 +78,7 @@ import { alertBorderFocus, routeBearingAt, type AlertFocus } from '@/lib/geo';
 import { resolveColor, resolveStrongColor } from '@/lib/tailwind-colors';
 import { buildRoutes, assignAgentColors, splitSegments, type Route } from '@/lib/routes';
 import { MapEffectsMenu } from '@/components/MapEffectsMenu';
+import { RouteDispatchPanel } from '@/components/RouteDispatchPanel';
 
 /** Histórico buscado para montar as rotas por agente. */
 const HISTORY_LIMIT = 5000;
@@ -396,6 +399,16 @@ export default function LiveOperationPage() {
   keyDirectoryRef.current = keyDirectory;
 
   // Geofencing.
+  // --- Rotas planejadas (issue #131): destino despachado para o agente. Não confundir
+  // com `plottedRoutes`, que é o rastro histórico já percorrido.
+  const [plannedRoutes, setPlannedRoutes] = useState<RouteInfo[]>([]);
+  const [routePicking, setRoutePicking] = useState(false);
+  const [routeDestination, setRouteDestination] = useState<{ lng: number; lat: number } | null>(
+    null,
+  );
+  /** Pontos a enquadrar no próximo `fitNonce`. Vazio ⇒ o mapa volta ao padrão. */
+  const [fitOverride, setFitOverride] = useState<[number, number][]>([]);
+
   const [geofences, setGeofences] = useState<Geofence[]>([]);
   const [alerts, setAlerts] = useState<GeofenceAlert[]>([]);
   const [placing, setPlacing] = useState(false);
@@ -644,9 +657,14 @@ export default function LiveOperationPage() {
             windowInitRef.current = true;
             const now = Date.now();
             setWindowEndMs(now);
-            setWindowStartMs(
-              Math.max(Number.isFinite(earliest) ? earliest : -Infinity, now - 24 * HOUR_MS),
+            // Últimas 24 h até agora, com PISO de 1 h: sem o piso, operação recém-criada
+            // (earliest ≈ agora) abriria com janela ~nula (thumbs empilhados) e a barra
+            // parecia travada. Com dados reais (earliest bem anterior) o piso não altera nada.
+            const startCap = Math.max(
+              Number.isFinite(earliest) ? earliest : -Infinity,
+              now - 24 * HOUR_MS,
             );
+            setWindowStartMs(Math.min(startCap, now - HOUR_MS));
           }
         })
         .catch(() => {
@@ -767,6 +785,23 @@ export default function LiveOperationPage() {
     }
     return [...byId.values()];
   }, [agents, keyDirectory]);
+
+  // Agrupa os cards por EQUIPE quando ela existir: cada equipe cadastrada com ao menos
+  // um agente presente vira uma seção com cabeçalho; agentes sem equipe caem numa seção
+  // "Sem equipe" ao final. Sem nenhuma equipe, é uma lista plana (comportamento antigo).
+  const agentSections = useMemo<{ team: TeamInfo | null; agents: AgentCard[] }[]>(() => {
+    const teamByAgent = new Map<string, TeamInfo>();
+    for (const t of teams) for (const aid of t.agentIds) teamByAgent.set(aid, t);
+    const sections: { team: TeamInfo | null; agents: AgentCard[] }[] = [];
+    for (const t of teams) {
+      const members = agentList.filter((a) => teamByAgent.get(a.agentId)?.id === t.id);
+      if (members.length > 0) sections.push({ team: t, agents: members });
+    }
+    const ungrouped = agentList.filter((a) => !teamByAgent.has(a.agentId));
+    if (ungrouped.length > 0) sections.push({ team: null, agents: ungrouped });
+    return sections;
+  }, [agentList, teams]);
+  const hasTeamSection = agentSections.some((s) => s.team !== null);
 
   // Cor efetiva (hex) por agente: override do admin quando houver, senão o token
   // auto-atribuído — resolvida para hex (usada no marcador, na rota e no card).
@@ -902,8 +937,12 @@ export default function LiveOperationPage() {
   }
 
   // Limites do período ajustável: da 1ª plotagem até "agora".
-  const rangeMin = firstTs ?? nowTs - 24 * HOUR_MS;
   const rangeMax = nowTs;
+  // Piso de 1 h no extremo esquerdo: operação recém-criada tem firstTs ≈ agora, o que
+  // colapsaria a barra (min ≈ max → selos de data idênticos e nada arrastável). O piso
+  // garante largura mínima utilizável e NÃO afeta dados reais: com firstTs bem anterior
+  // a agora, o Math.min escolhe firstTs. Mesmo piso na janela padrão (windowStart) acima.
+  const rangeMin = Math.min(firstTs ?? rangeMax - 24 * HOUR_MS, rangeMax - HOUR_MS);
   // Rota dentro do período se SOBREPÕE o intervalo [início, fim].
   const inWindow = (r: Route) => r.end >= windowStartMs && r.start <= windowEndMs;
 
@@ -1025,6 +1064,37 @@ export default function LiveOperationPage() {
           caption: m.caption ?? undefined,
         })),
     [mediaMsgs],
+  );
+
+  // Rotas planejadas ativas. Recarregadas por sondagem porque o recálculo por desvio
+  // nasce no SERVIDOR (ponte de ingest), não numa ação do operador — sem sondar, o
+  // mapa continuaria mostrando o traçado antigo depois que o agente saiu dele.
+  const reloadRoutes = useCallback(async () => {
+    if (!operationId) return;
+    try {
+      setPlannedRoutes(await api.routes(operationId));
+    } catch {
+      // Falha de rede aqui não pode derrubar o mapa; a próxima sondagem tenta de novo.
+    }
+  }, [operationId]);
+
+  useEffect(() => {
+    void reloadRoutes();
+    const id = setInterval(() => void reloadRoutes(), 20_000);
+    return () => clearInterval(id);
+  }, [reloadRoutes]);
+
+  const plannedRouteLines = useMemo<PlannedRouteLine[]>(
+    () =>
+      plannedRoutes.map((r) => ({
+        id: r.id,
+        agentId: r.agentId,
+        points: r.geometry,
+        color: agentColors[r.agentId] ?? '#c1121f',
+        destination: r.destination,
+        fallback: r.fallback,
+      })),
+    [plannedRoutes, agentColors],
   );
 
   // Zonas exibidas no mapa: cor resolvida (familia->hex), valores ao vivo da zona
@@ -1638,6 +1708,44 @@ export default function LiveOperationPage() {
           )}
 
           <div className="card" style={{ padding: 12, marginBottom: 16 }}>
+            <RouteDispatchPanel
+              agentIds={Object.keys(agents).sort()}
+              agentColors={agentColors}
+              routes={plannedRoutes}
+              pendingDestination={routeDestination}
+              picking={routePicking}
+              onPickingChange={(p) => {
+                setRoutePicking(p);
+                setRouteDestination(null);
+                // Sair do modo de zona ao entrar no de destino evita que um clique
+                // no mapa faça as duas coisas ao mesmo tempo.
+                if (p) setPlacing(false);
+              }}
+              onDispatch={async (input) => {
+                const created = await api.createRoute(operationId, input);
+                setRouteDestination(null);
+                await reloadRoutes();
+                toast.success(
+                  created.fallback
+                    ? 'Rota despachada com traçado direto (serviço de rotas indisponível).'
+                    : `Rota despachada para ${input.agentId}.`,
+                );
+              }}
+              onCancelRoute={async (routeId) => {
+                await api.cancelRoute(operationId, routeId);
+                await reloadRoutes();
+                toast.success('Rota cancelada.');
+              }}
+              onFocusRoute={(r) => {
+                // Reusa o mecanismo de enquadramento do mapa: enquadrar o traçado
+                // inteiro (e não só o pino) mostra de onde o agente vem.
+                setFitOverride(r.geometry.length > 1 ? r.geometry : [[r.destination.lng, r.destination.lat]]);
+                setFitNonce((n) => n + 1);
+              }}
+            />
+          </div>
+
+          <div className="card" style={{ padding: 12, marginBottom: 16 }}>
             <div
               style={{
                 display: 'flex',
@@ -1979,166 +2087,206 @@ export default function LiveOperationPage() {
               Nenhuma posição recebida. Simule com o publish-fake-position.
             </p>
           )}
-          {agentList.map((a) => {
-            const color = agentColors[a.agentId] ?? '#c1121f';
-            const agentRoutes = visibleRoutes[a.agentId] ?? [];
-            const routesInWindow = agentRoutes.filter(inWindow);
-            const selCount = routesInWindow.filter((r) => selectedRouteIds.has(r.id)).length;
-            const allSel = routesInWindow.length > 0 && selCount === routesInWindow.length;
-            const anySel = selCount > 0;
-            const expanded = expandedAgent === a.agentId;
-            return (
-              <div key={a.agentId}>
+          {agentSections.map((section) => (
+            <div key={section.team?.id ?? '__sem-equipe__'}>
+              {section.team ? (
                 <div
-                  className="card"
                   style={{
-                    padding: 12,
-                    marginBottom: expanded ? 0 : 10,
-                    borderLeft: `3px solid ${color}`,
-                    boxShadow: anySel ? `0 0 0 1px ${color}` : undefined,
-                    opacity: a.hasSignal ? 1 : 0.6, // designado mas sem sinal ainda
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    margin: '2px 2px 8px',
                   }}
                 >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <button
-                      type="button"
-                      onClick={() => toggleAgentRoutes(a.agentId)}
-                      disabled={routesInWindow.length === 0}
-                      title={
-                        routesInWindow.length === 0
-                          ? 'Sem rotas no período atual'
-                          : allSel
-                            ? 'Ocultar as rotas deste agente'
-                            : 'Plotar as rotas deste agente'
-                      }
-                      style={{
-                        width: 16,
-                        height: 16,
-                        borderRadius: 4,
-                        border: `2px solid ${color}`,
-                        background: allSel ? color : anySel ? `${color}80` : 'transparent',
-                        cursor: routesInWindow.length === 0 ? 'not-allowed' : 'pointer',
-                        flexShrink: 0,
-                        padding: 0,
-                      }}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setExpandedAgent(expanded ? null : a.agentId)}
-                      style={{
-                        flex: 1,
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 6,
-                        background: 'transparent',
-                        border: 'none',
-                        color: 'inherit',
-                        cursor: 'pointer',
-                        padding: 0,
-                        textAlign: 'left',
-                        font: 'inherit',
-                      }}
-                    >
-                      <strong>{a.agentId}</strong>
-                      <span className="muted" style={{ fontSize: 12 }}>
-                        {agentRoutes.length} rota{agentRoutes.length === 1 ? '' : 's'}
-                      </span>
-                      <span className="muted" style={{ marginLeft: 'auto', fontSize: 12 }}>
-                        {expanded ? '▾' : '▸'}
-                      </span>
-                    </button>
-                  </div>
-                  {a.hasSignal ? (
-                    <>
-                      <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>
-                        {a.lat.toFixed(5)}, {a.lng.toFixed(5)}
-                      </div>
-                      <div className="muted" style={{ fontSize: 13 }}>
-                        bateria: {a.battery != null ? Math.round(a.battery * 100) + '%' : '—'} ·{' '}
-                        {a.activity ?? '—'}
-                      </div>
-                    </>
-                  ) : (
-                    <div
-                      className="muted"
-                      style={{ fontSize: 13, marginTop: 6, fontStyle: 'italic' }}
-                    >
-                      aguardando sinal…
-                    </div>
-                  )}
-                </div>
-                {expanded && (
-                  <div
-                    className="card"
+                  <span
+                    aria-hidden
                     style={{
-                      padding: 10,
-                      margin: '0 0 10px',
-                      borderLeft: `3px solid ${color}`,
-                      background: 'var(--bg)',
+                      width: 10,
+                      height: 10,
+                      borderRadius: 3,
+                      background: resolveColor(section.team.color),
+                      flexShrink: 0,
                     }}
-                  >
+                  />
+                  <strong style={{ fontSize: 13 }}>{section.team.name}</strong>
+                  <span className="muted" style={{ fontSize: 12 }}>
+                    {section.agents.length} agente{section.agents.length === 1 ? '' : 's'}
+                  </span>
+                </div>
+              ) : hasTeamSection ? (
+                <div
+                  className="muted"
+                  style={{ fontSize: 12, margin: '2px 2px 8px', fontStyle: 'italic' }}
+                >
+                  Sem equipe
+                </div>
+              ) : null}
+              {section.agents.map((a) => {
+                const color = agentColors[a.agentId] ?? '#c1121f';
+                const agentRoutes = visibleRoutes[a.agentId] ?? [];
+                const routesInWindow = agentRoutes.filter(inWindow);
+                const selCount = routesInWindow.filter((r) => selectedRouteIds.has(r.id)).length;
+                const allSel = routesInWindow.length > 0 && selCount === routesInWindow.length;
+                const anySel = selCount > 0;
+                const expanded = expandedAgent === a.agentId;
+                return (
+                  <div key={a.agentId}>
                     <div
+                      className="card"
                       style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 8,
-                        marginBottom: 10,
-                        paddingBottom: 10,
-                        borderBottom: '1px solid var(--border)',
+                        padding: 12,
+                        marginBottom: expanded ? 0 : 10,
+                        borderLeft: `3px solid ${color}`,
+                        boxShadow: anySel ? `0 0 0 1px ${color}` : undefined,
+                        opacity: a.hasSignal ? 1 : 0.6, // designado mas sem sinal ainda
                       }}
                     >
-                      <span style={{ fontSize: 12, whiteSpace: 'nowrap' }}>Cor do agente</span>
-                      <ColorPalettePicker
-                        value={
-                          agentColorOverrides[a.agentId] ?? agentColorTokens[a.agentId] ?? 'blue'
-                        }
-                        onChange={(token) => setAgentColor(a.agentId, token)}
-                      />
-                    </div>
-                    {agentRoutes.length === 0 && (
-                      <div className="muted" style={{ fontSize: 12 }}>
-                        Nenhuma rota registrada para este agente.
-                      </div>
-                    )}
-                    {agentRoutes.map((r, i) => {
-                      const outWin = !inWindow(r);
-                      const sel = selectedRouteIds.has(r.id);
-                      return (
-                        <label
-                          key={r.id}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <button
+                          type="button"
+                          onClick={() => toggleAgentRoutes(a.agentId)}
+                          disabled={routesInWindow.length === 0}
                           title={
-                            outWin ? 'Fora do período atual' : 'Exibir/ocultar esta rota no mapa'
+                            routesInWindow.length === 0
+                              ? 'Sem rotas no período atual'
+                              : allSel
+                                ? 'Ocultar as rotas deste agente'
+                                : 'Plotar as rotas deste agente'
                           }
+                          style={{
+                            width: 16,
+                            height: 16,
+                            borderRadius: 4,
+                            border: `2px solid ${color}`,
+                            background: allSel ? color : anySel ? `${color}80` : 'transparent',
+                            cursor: routesInWindow.length === 0 ? 'not-allowed' : 'pointer',
+                            flexShrink: 0,
+                            padding: 0,
+                          }}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setExpandedAgent(expanded ? null : a.agentId)}
+                          style={{
+                            flex: 1,
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 6,
+                            background: 'transparent',
+                            border: 'none',
+                            color: 'inherit',
+                            cursor: 'pointer',
+                            padding: 0,
+                            textAlign: 'left',
+                            font: 'inherit',
+                          }}
+                        >
+                          <strong>{a.agentId}</strong>
+                          <span className="muted" style={{ fontSize: 12 }}>
+                            {agentRoutes.length} rota{agentRoutes.length === 1 ? '' : 's'}
+                          </span>
+                          <span className="muted" style={{ marginLeft: 'auto', fontSize: 12 }}>
+                            {expanded ? '▾' : '▸'}
+                          </span>
+                        </button>
+                      </div>
+                      {a.hasSignal ? (
+                        <>
+                          <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>
+                            {a.lat.toFixed(5)}, {a.lng.toFixed(5)}
+                          </div>
+                          <div className="muted" style={{ fontSize: 13 }}>
+                            bateria: {a.battery != null ? Math.round(a.battery * 100) + '%' : '—'} ·{' '}
+                            {a.activity ?? '—'}
+                          </div>
+                        </>
+                      ) : (
+                        <div
+                          className="muted"
+                          style={{ fontSize: 13, marginTop: 6, fontStyle: 'italic' }}
+                        >
+                          aguardando sinal…
+                        </div>
+                      )}
+                    </div>
+                    {expanded && (
+                      <div
+                        className="card"
+                        style={{
+                          padding: 10,
+                          margin: '0 0 10px',
+                          borderLeft: `3px solid ${color}`,
+                          background: 'var(--bg)',
+                        }}
+                      >
+                        <div
                           style={{
                             display: 'flex',
                             alignItems: 'center',
                             gap: 8,
-                            fontSize: 12,
-                            padding: '4px 0',
-                            opacity: outWin ? 0.45 : 1,
-                            cursor: 'pointer',
+                            marginBottom: 10,
+                            paddingBottom: 10,
+                            borderBottom: '1px solid var(--border)',
                           }}
                         >
-                          <input
-                            type="checkbox"
-                            checked={sel}
-                            onChange={() => toggleRoute(r.id)}
-                            style={{ accentColor: color, flexShrink: 0 }}
+                          <span style={{ fontSize: 12, whiteSpace: 'nowrap' }}>Cor do agente</span>
+                          <ColorPalettePicker
+                            value={
+                              agentColorOverrides[a.agentId] ??
+                              agentColorTokens[a.agentId] ??
+                              'blue'
+                            }
+                            onChange={(token) => setAgentColor(a.agentId, token)}
                           />
-                          <span style={{ fontVariantNumeric: 'tabular-nums' }}>
-                            {fmtDateTime(r.start)} → {fmtDateTime(r.end)}
-                          </span>
-                          <span className="muted" style={{ marginLeft: 'auto', flexShrink: 0 }}>
-                            #{i + 1} · {r.points.length}p
-                          </span>
-                        </label>
-                      );
-                    })}
+                        </div>
+                        {agentRoutes.length === 0 && (
+                          <div className="muted" style={{ fontSize: 12 }}>
+                            Nenhuma rota registrada para este agente.
+                          </div>
+                        )}
+                        {agentRoutes.map((r, i) => {
+                          const outWin = !inWindow(r);
+                          const sel = selectedRouteIds.has(r.id);
+                          return (
+                            <label
+                              key={r.id}
+                              title={
+                                outWin
+                                  ? 'Fora do período atual'
+                                  : 'Exibir/ocultar esta rota no mapa'
+                              }
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 8,
+                                fontSize: 12,
+                                padding: '4px 0',
+                                opacity: outWin ? 0.45 : 1,
+                                cursor: 'pointer',
+                              }}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={sel}
+                                onChange={() => toggleRoute(r.id)}
+                                style={{ accentColor: color, flexShrink: 0 }}
+                              />
+                              <span style={{ fontVariantNumeric: 'tabular-nums' }}>
+                                {fmtDateTime(r.start)} → {fmtDateTime(r.end)}
+                              </span>
+                              <span className="muted" style={{ marginLeft: 'auto', flexShrink: 0 }}>
+                                #{i + 1} · {r.points.length}p
+                              </span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
-            );
-          })}
+                );
+              })}
+            </div>
+          ))}
         </ResizableSidebar>
 
         <main style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
@@ -2393,8 +2541,13 @@ export default function LiveOperationPage() {
                 }}
                 geofences={displayGeofences}
                 showGeofences={showZones}
+                plannedRoutes={plannedRouteLines}
+                fitPoints={fitOverride}
                 onMapClick={(lng, lat) => {
                   if (placing) setPendingCenter({ lng, lat });
+                  // Marcar destino e posicionar zona são modos exclusivos: o clique
+                  // pertence a um ou a outro, nunca aos dois.
+                  else if (routePicking) setRouteDestination({ lng, lat });
                 }}
                 editGeofence={editGeo}
                 onGeofenceMove={(lng, lat) => setEditGeo((e) => (e ? { ...e, lng, lat } : e))}
