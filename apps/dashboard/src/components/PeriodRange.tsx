@@ -9,6 +9,23 @@
  * Com `format`, cada thumb ganha uma "pílula" com a data/hora daquela ponta (como a
  * barra do replay) — posicionada acima do thumb correspondente.
  */
+/**
+ * Largura RENDERIZADA do thumb (`.rangepair` em globals.css: 16px, e o `box-sizing:
+ * border-box` global faz a borda de 2px já entrar nesses 16px).
+ */
+const THUMB = 16;
+
+/**
+ * Converte uma porcentagem do intervalo na posição do CENTRO do thumb nativo.
+ *
+ * O navegador impede o thumb de vazar do trilho, então seu centro percorre de THUMB/2
+ * até (largura − THUMB/2) — e NÃO de 0% a 100%. Posicionar a faixa vermelha em
+ * `left: pct%` cru fazia ela começar meio thumb à ESQUERDA do bullet nas pontas: com o
+ * início no extremo, sobrava vermelho "antes" do começo do período. Esta conversão põe
+ * faixa e pílulas no mesmo eixo do thumb.
+ */
+const thumbCenter = (pct: number) => `calc(${pct}% + ${THUMB / 2 - (pct / 100) * THUMB}px)`;
+
 export function PeriodRange({
   min,
   max,
@@ -31,6 +48,7 @@ export function PeriodRange({
   const hi = Math.max(start, end);
   const startPct = ((lo - min) / span) * 100;
   const endPct = ((hi - min) / span) * 100;
+  const fillPct = Math.max(0, endPct - startPct);
   // Quando um thumb encosta no extremo, sua pílula FUNDE com o badge fixo daquela
   // ponta (evita a data/hora duplicada). O fim no extremo = "ao vivo" (thumb vermelho).
   const startAtMin = startPct <= 0.5;
@@ -39,7 +57,7 @@ export function PeriodRange({
   const pill = (pct: number): React.CSSProperties => ({
     position: 'absolute',
     top: 0,
-    left: `${pct}%`,
+    left: thumbCenter(pct),
     transform: 'translateX(-50%)',
     whiteSpace: 'nowrap',
     fontSize: 11,
@@ -63,19 +81,20 @@ export function PeriodRange({
         </>
       )}
       <div className="rangepair" style={{ width: '100%' }}>
-        {/* Trilha de fundo */}
+        {/* Trilha de fundo — recuada meio thumb em cada ponta para cobrir exatamente o
+            percurso do thumb; senão sobra um "toco" cinza fora da faixa nos extremos. */}
         <div
           style={{
             position: 'absolute',
             top: 9,
-            left: 0,
-            right: 0,
+            left: THUMB / 2,
+            right: THUMB / 2,
             height: 4,
             borderRadius: 2,
             background: 'var(--border)',
           }}
         />
-        {/* Faixa selecionada (entre início e fim) */}
+        {/* Faixa selecionada — começa e termina nos CENTROS dos thumbs (ver thumbCenter). */}
         <div
           style={{
             position: 'absolute',
@@ -83,8 +102,8 @@ export function PeriodRange({
             height: 4,
             borderRadius: 2,
             background: '#c1121f',
-            left: `${startPct}%`,
-            width: `${Math.max(0, endPct - startPct)}%`,
+            left: thumbCenter(startPct),
+            width: `calc(${fillPct}% - ${(fillPct / 100) * THUMB}px)`,
           }}
         />
         {/* Início — nunca ultrapassa o fim. No extremo esquerdo, junta-se ao começo da
