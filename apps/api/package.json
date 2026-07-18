@@ -9,6 +9,8 @@
     "build": "tsc -p tsconfig.json",
     "start": "node --env-file-if-exists=../../.env dist/server.js",
     "seed": "tsx --env-file-if-exists=../../.env src/scripts/seed.ts",
+    "sim": "tsx --env-file-if-exists=../../.env src/scripts/simulate-agents.ts",
+    "sim:setup": "tsx --env-file-if-exists=../../.env src/scripts/setup-simulation.ts",
     "ensure-superadmin": "tsx --env-file-if-exists=../../.env src/scripts/ensure-superadmin.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
