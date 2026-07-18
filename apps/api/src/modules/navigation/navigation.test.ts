@@ -184,6 +184,78 @@ describe('parsing da resposta do OSRM', () => {
   });
 });
 
+/**
+ * Fixture CAPTURADA do OSRM público (Praça da Liberdade → Av. Álvares Cabral, BH,
+ * 18/07/2026), reduzida aos campos que o parser consome. Existe porque o resto da
+ * suíte usa mocks escritos à mão — que provam que o parser faz o que EU acho que o
+ * OSRM devolve, não o que ele devolve de fato. Se o provedor mudar o contrato, é
+ * aqui que quebra.
+ */
+const OSRM_REAL_RESPONSE = {
+  code: 'Ok',
+  routes: [
+    {
+      distance: 1313.1,
+      duration: 134.8,
+      geometry: {
+        coordinates: [
+          [-43.938682, -19.931881],
+          [-43.938773, -19.932206],
+          [-43.938919, -19.932741],
+          [-43.935195, -19.924506],
+        ] as [number, number][],
+      },
+      legs: [
+        {
+          steps: [
+            { name: 'Praça da Liberdade', distance: 98.4, duration: 10.9,
+              maneuver: { type: 'depart', modifier: 'left', location: [-43.938682, -19.931881] } },
+            { name: 'Praça da Liberdade', distance: 120.4, duration: 11.8,
+              maneuver: { type: 'turn', modifier: 'left', location: [-43.938919, -19.932741] } },
+            { name: 'Praça da Liberdade', distance: 30.2, duration: 7,
+              maneuver: { type: 'fork', modifier: 'slight left', location: [-43.938037, -19.933179] } },
+            { name: 'Rua Gonçalves Dias', distance: 33.5, duration: 3.3,
+              maneuver: { type: 'turn', modifier: 'left', location: [-43.937329, -19.931254] } },
+            { name: 'Avenida João Pinheiro', distance: 692.2, duration: 70.4,
+              maneuver: { type: 'turn', modifier: 'right', location: [-43.937641, -19.931185] } },
+            { name: 'Avenida Álvares Cabral', distance: 118, duration: 8.4,
+              maneuver: { type: 'fork', modifier: 'slight right', location: [-43.936077, -19.925131] } },
+            // A manobra de chegada NÃO traz `modifier` — o mapeamento não pode depender dele.
+            { name: 'Avenida Álvares Cabral', distance: 0, duration: 0,
+              maneuver: { type: 'arrive', location: [-43.935195, -19.924506] } },
+          ],
+        },
+      ],
+    },
+  ],
+};
+
+describe('resposta REAL do OSRM (fixture capturada)', () => {
+  it('produz um itinerário completo em pt-BR', () => {
+    const route = parseOsrmRoute(OSRM_REAL_RESPONSE);
+    expect(route).not.toBeNull();
+    expect(route!.fallback).toBe(false);
+    expect(route!.distanceMeters).toBe(1313);
+    expect(route!.durationSec).toBe(135);
+    expect(route!.steps).toHaveLength(7);
+    expect(route!.steps.map((s) => s.instruction)).toEqual([
+      'Siga pela Praça da Liberdade',
+      'Vire à esquerda na Praça da Liberdade',
+      'Na bifurcação, mantenha-se à esquerda na Praça da Liberdade',
+      'Vire à esquerda na Rua Gonçalves Dias',
+      'Vire à direita na Avenida João Pinheiro',
+      'Na bifurcação, mantenha-se à direita na Avenida Álvares Cabral',
+      'Você chegou ao destino',
+    ]);
+  });
+
+  it('acentuação dos logradouros sobrevive ao parsing', () => {
+    const route = parseOsrmRoute(OSRM_REAL_RESPONSE);
+    expect(route!.steps[3]!.streetName).toBe('Rua Gonçalves Dias');
+    expect(route!.steps[5]!.streetName).toBe('Avenida Álvares Cabral');
+  });
+});
+
 describe('fallback em linha reta', () => {
   it('marca fallback e devolve partida + chegada', () => {
     const route = straightLineRoute({ lng: -43.9386, lat: -19.9319 }, { lng: -43.94, lat: -19.94 });
