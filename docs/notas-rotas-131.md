@@ -56,7 +56,48 @@ Em `packages/shared/src/constants.ts`:
 Escolhidos por raciocínio (erro típico de GPS urbano 5–20 m, largura de pistas paralelas),
 **não medidos**. Provavelmente querem ajuste depois de rodar de verdade.
 
-### 5. Bateria no turn-by-turn — NÃO resolvido
+### 5. `npm install` no mobile é obrigatório antes de bundlar
+
+Adicionei `expo-speech: ~13.0.1` ao `apps/mobile/package.json` mas **não rodei o
+install** e **não toquei no `package-lock.json`** (ele já tinha alterações suas não
+commitadas, do `expo-dev-client`).
+
+O wrapper em `services/speech.ts` protege o caso de o módulo nativo não estar linkado
+em runtime (degrada para no-op silencioso), mas **não** protege o pacote ausente de
+`node_modules` — aí o Metro falha a resolução em tempo de bundle.
+
+Só a linha do `expo-speech` foi versionada; seu `expo-dev-client` continua não
+commitado na árvore, como estava.
+
+### 6. O app NÃO foi executado
+
+Sem device/emulador nesta sessão. O que foi verificado de verdade:
+
+- Máquina de estados da navegação: **exercitada** com 27 asserções e nativos stubados
+  (adoção da rota, retomada sem rede a partir do cache, avanço de passo, uma locução
+  por manobra, chegada anunciada uma vez, fallback degradando sem falar manobra).
+- Paridade de formatação app↔servidor: **travada por teste automatizado**
+  (`format-parity.test.ts`) — a duplicação não pode divergir em silêncio.
+- Contrato do OSRM: **validado contra resposta real** capturada do serviço público.
+
+O que **não** foi visto rodando: o desenho da rota no Leaflet/WebView, o pino de
+destino, o `fitBounds` e o toque-para-destino. Foram verificados só por parse do
+script inline. **Rodar o app é o próximo passo antes de confiar na camada visual.**
+
+### 7. Navegação só processa comando com a tela montada
+
+`startNavigation` roda num `useEffect` do `OperationScreen`. Um `route_assign` que
+chegue com o app em background não é processado até a tela voltar — aí o
+`GET /routes/active` recupera. Levar isso para o nível do `App` exigiria mexer no
+ciclo de vida do app, o que estava fora do escopo delimitado.
+
+### 8. O ESLint não cobre o mobile
+
+`eslint.config.mjs` tem `apps/mobile/**` no `ignores` (decisão pré-existente, não
+mexi). O `npm run lint` verde **não diz nada** sobre o código do app. Lá valem só o
+`tsc --noEmit` (limpo) e o Prettier (limpo).
+
+### 9. Bateria no turn-by-turn — NÃO resolvido
 
 Sinalizei isso na conversa e **continua pendente**. Turn-by-turn precisa de GPS em alta
 frequência, o que briga com a estratégia atual de hibernação + heartbeat de 5 min
@@ -95,4 +136,18 @@ recálculo automático na ponte de ingest. **44 testes novos; 195 no total, sem 
 rótulo, camada da rota planejada (com contorno, acima do rastro), pino de destino,
 tracejado para traçado direto, lista de rotas ativas com cancelar e enquadrar.
 
-**Mobile** — fases 4/5/6b, ver relatório do subagente e o commit correspondente.
+**Mobile** — recebe o ponteiro pelo canal de comando, baixa o traçado por HTTPS e o
+mantém em cache (seguir a rota não exige rede); barra turn-by-turn com locução pt-BR;
+segunda polyline + pino de destino no Leaflet; toque no mapa para definir o próprio
+destino; cancelar e mudo.
+
+**Validação final:** `npm run typecheck` 4/4 · `npm run lint` limpo · `npm run test`
+**232 passando** (31 shared + 201 API), sem regressão nos 138 testes que já existiam.
+
+### Bug encontrado e corrigido durante a implementação
+
+Escrevi um teste de concorrência para despacho simultâneo e ele reprovou o código: três
+despachos em paralelo deixavam **zero** rotas ativas. Aposentar "todas menos a minha"
+depois de criar fazia cada requisição matar a rota da outra. A correção corta por `_id`
+(ordem total do ObjectId), então cada uma aposenta só as estritamente mais antigas e
+exatamente uma sobrevive. Commit `586bde1`.
