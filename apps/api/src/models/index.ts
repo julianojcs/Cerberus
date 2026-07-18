@@ -323,6 +323,13 @@ const routeSchema = new Schema(
     durationSec: { type: Number, required: true },
     /** Traçado é a linha reta (provedor de rotas indisponível) — o app não fala instruções. */
     fallback: { type: Boolean, default: false },
+    /**
+     * Posições consecutivas fora do traçado. O recálculo só dispara a partir da
+     * segunda: uma leitura isolada de GPS ruim (túnel, viaduto, reflexão urbana)
+     * jogaria o agente para fora da rota e provocaria recálculo à toa. Zera assim
+     * que ele volta ao traçado.
+     */
+    deviationStrikes: { type: Number, default: 0 },
     /** Rota que esta substituiu (recálculo por desvio). */
     recalculatedFrom: { type: String, default: null },
     createdBy: { type: Schema.Types.ObjectId, ref: 'User' },

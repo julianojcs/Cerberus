@@ -2,7 +2,6 @@ import type { FastifyInstance } from 'fastify';
 import { Types } from 'mongoose';
 import {
   AgentCommandType,
-  agentCommandTopic,
   createRouteSchema,
   Role,
   RouteProfile,
@@ -12,9 +11,10 @@ import {
   type RouteInfo,
   type RouteStep,
 } from '@cerberus/shared';
-import { Position, Route } from '../../models/index.js';
+import { Route } from '../../models/index.js';
 import { assertOperationScope, isSuperAdmin } from '../scope.js';
-import { computeRouteWithFallback, OsrmRoutingProvider } from './provider.js';
+import { OsrmRoutingProvider } from './provider.js';
+import { createAndDispatchRoute, dispatchRouteCommand, lastKnownPosition } from './service.js';
 
 /**
  * Navegação por rota (issue #131) — despacho de destino e ciclo de vida da rota.
@@ -69,36 +69,22 @@ export async function navigationRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(409).send({ error: 'Agente sem posição conhecida para iniciar a rota' });
     }
 
-    const destination = { lng: body.data.lng, lat: body.data.lat };
-    const computed = await computeRouteWithFallback(provider, origin, destination);
-
-    // Uma rota nova aposenta a anterior ANTES de nascer: sem isso o agente ficaria com
-    // duas rotas "ativas" e a detecção de desvio não saberia qual traçado seguir.
-    await supersedeActive(id, body.data.agentId);
-
-    const route = await Route.create({
+    const { route, dispatched } = await createAndDispatchRoute({
       operationId: id,
       agentId: body.data.agentId,
       source: actor.source,
-      status: RouteStatus.ATIVA,
-      profile: RouteProfile.DRIVING,
-      destination: { type: 'Point', coordinates: [destination.lng, destination.lat] },
-      destinationLabel: body.data.label,
-      geometry: { type: 'LineString', coordinates: computed.geometry },
-      steps: computed.steps,
-      distanceMeters: computed.distanceMeters,
-      durationSec: computed.durationSec,
-      fallback: computed.fallback,
+      origin,
+      destination: { lng: body.data.lng, lat: body.data.lat },
+      label: body.data.label,
+      provider,
+      mqtt: app.mqtt,
       createdBy: actor.userId,
     });
-
-    const dispatched = dispatch(app, id, body.data.agentId, AgentCommandType.ROUTE_ASSIGN,
-      String(route._id));
 
     // 201 mesmo com o barramento fora: a rota fica persistida e o app a encontra em
     // `GET .../routes/active` ao reconectar. Falhar aqui perderia o trabalho de cálculo
     // por uma indisponibilidade que o próprio app sabe contornar.
-    return reply.code(201).send({ ...serializeRoute(route.toObject()), dispatched });
+    return reply.code(201).send({ ...serializeRoute(route), dispatched });
   });
 
   /** Rota completa — é o que o app busca após receber o ponteiro no comando MQTT. */
@@ -185,7 +171,13 @@ export async function navigationRoutes(app: FastifyInstance): Promise<void> {
       );
       if (!route) return reply.code(404).send({ error: 'Rota ativa não encontrada' });
 
-      dispatch(app, id, route.agentId, AgentCommandType.ROUTE_CANCEL, String(route._id));
+      dispatchRouteCommand(
+        app.mqtt,
+        id,
+        route.agentId,
+        AgentCommandType.ROUTE_CANCEL,
+        String(route._id),
+      );
       return reply.code(204).send();
     },
   );
@@ -224,77 +216,24 @@ export async function navigationRoutes(app: FastifyInstance): Promise<void> {
       if (dLng == null || dLat == null) {
         return reply.code(409).send({ error: 'Rota sem destino válido' });
       }
-      const destination = { lng: dLng, lat: dLat };
-      const computed = await computeRouteWithFallback(provider, origin, destination);
-
-      await supersedeActive(id, previous.agentId);
-      const route = await Route.create({
+      const { route, dispatched } = await createAndDispatchRoute({
         operationId: id,
         agentId: previous.agentId,
-        source: previous.source,
-        status: RouteStatus.ATIVA,
-        profile: RouteProfile.DRIVING,
-        destination: { type: 'Point', coordinates: [destination.lng, destination.lat] },
-        destinationLabel: previous.destinationLabel,
-        geometry: { type: 'LineString', coordinates: computed.geometry },
-        steps: computed.steps,
-        distanceMeters: computed.distanceMeters,
-        durationSec: computed.durationSec,
-        fallback: computed.fallback,
-        recalculatedFrom: String(previous._id),
+        source: previous.source as RouteSource,
+        origin,
+        destination: { lng: dLng, lat: dLat },
+        label: previous.destinationLabel ?? undefined,
+        provider,
+        mqtt: app.mqtt,
         createdBy: actor.userId,
+        recalculatedFrom: String(previous._id),
       });
-
-      const dispatched = dispatch(app, id, previous.agentId, AgentCommandType.ROUTE_ASSIGN,
-        String(route._id));
-      return reply.code(201).send({ ...serializeRoute(route.toObject()), dispatched });
+      return reply.code(201).send({ ...serializeRoute(route), dispatched });
     },
   );
 }
 
 /* ------------------------------------------------------------------ Helpers */
-
-/** Última posição conhecida do agente na operação — origem de qualquer cálculo. */
-async function lastKnownPosition(
-  operationId: string,
-  agentId: string,
-): Promise<{ lng: number; lat: number } | null> {
-  const last = await Position.findOne({ operationId, agentId })
-    .sort({ capturedAt: -1 })
-    .select('location')
-    .lean();
-  const [lng, lat] = last?.location?.coordinates ?? [];
-  return lng != null && lat != null ? { lng, lat } : null;
-}
-
-/** Aposenta as rotas ativas do agente (uma rota nova ou recalculada substitui a anterior). */
-async function supersedeActive(operationId: string, agentId: string): Promise<void> {
-  await Route.updateMany(
-    { operationId, agentId, status: RouteStatus.ATIVA },
-    { $set: { status: RouteStatus.SUBSTITUIDA } },
-  );
-}
-
-/**
- * Publica o comando no canal do agente. Fire-and-forget: retorna se FOI EMITIDO, não
- * se o agente recebeu. O payload leva só o `routeId` — o traçado é buscado por HTTPS
- * (ver .claude/rules/mqtt-multitenant.md, canal `comando`).
- */
-function dispatch(
-  app: FastifyInstance,
-  operationId: string,
-  agentId: string,
-  type: AgentCommandType,
-  routeId: string,
-): boolean {
-  if (!app.mqtt?.connected) return false;
-  app.mqtt.publish(
-    agentCommandTopic(operationId, agentId),
-    JSON.stringify({ type, routeId }),
-    { qos: 1 },
-  );
-  return true;
-}
 
 function serializeRoute(r: Record<string, unknown>): RouteInfo {
   const destination = r.destination as { coordinates?: number[] } | undefined;

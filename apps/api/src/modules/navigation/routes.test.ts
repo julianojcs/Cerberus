@@ -379,6 +379,113 @@ describe('ciclo de vida da rota', () => {
   });
 });
 
+describe('acompanhamento na ponte de ingest (chegada e desvio)', () => {
+  /** Cria uma rota ativa direto no banco, com o traçado controlado pelo teste. */
+  async function seedActiveRoute(overrides: Record<string, unknown> = {}) {
+    const { Route } = await import('../../models/index.js');
+    await Route.updateMany(
+      { operationId, agentId: AGENT, status: 'ativa' },
+      { $set: { status: 'substituida' } },
+    );
+    return Route.create({
+      operationId,
+      agentId: AGENT,
+      source: 'central',
+      status: 'ativa',
+      profile: 'driving',
+      destination: { type: 'Point', coordinates: [-43.93, -19.93] },
+      geometry: {
+        type: 'LineString',
+        coordinates: [
+          [-43.94, -19.93],
+          [-43.93, -19.93],
+        ],
+      },
+      steps: [],
+      distanceMeters: 1000,
+      durationSec: 200,
+      ...overrides,
+    });
+  }
+
+  async function track(point: { lng: number; lat: number }) {
+    const { trackRouteProgress } = await import('./track.js');
+    const { OsrmRoutingProvider } = await import('./provider.js');
+    await trackRouteProgress(
+      {
+        log: app.log,
+        mqtt: undefined, // barramento fora: o comando não sai, a persistência continua
+        provider: new OsrmRoutingProvider('http://stub'),
+      },
+      operationId,
+      AGENT,
+      point,
+      '2026-07-18T13:00:00Z',
+    );
+  }
+
+  it('chegar ao destino conclui a rota', async () => {
+    const { Route } = await import('../../models/index.js');
+    const route = await seedActiveRoute();
+    await track({ lng: -43.93, lat: -19.93 });
+    expect((await Route.findById(route._id).lean())?.status).toBe('concluida');
+  });
+
+  it('um desvio isolado NÃO recalcula (absorve GPS ruim)', async () => {
+    const { Route } = await import('../../models/index.js');
+    const route = await seedActiveRoute();
+    await track({ lng: -43.935, lat: -19.932 }); // ~220 m fora do traçado
+
+    const after = await Route.findById(route._id).lean();
+    expect(after?.status).toBe('ativa');
+    expect(after?.deviationStrikes).toBe(1);
+  });
+
+  it('voltar ao traçado zera os desvios acumulados', async () => {
+    const { Route } = await import('../../models/index.js');
+    const route = await seedActiveRoute();
+    await track({ lng: -43.935, lat: -19.932 });
+    await track({ lng: -43.935, lat: -19.93 }); // de volta à rota
+
+    expect((await Route.findById(route._id).lean())?.deviationStrikes).toBe(0);
+  });
+
+  it('dois desvios seguidos recalculam e substituem a rota', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(osrmOk()));
+    const { Route } = await import('../../models/index.js');
+    const route = await seedActiveRoute();
+
+    await track({ lng: -43.935, lat: -19.932 });
+    await track({ lng: -43.935, lat: -19.933 });
+
+    expect((await Route.findById(route._id).lean())?.status).toBe('substituida');
+    const nova = await Route.findOne({ operationId, agentId: AGENT, status: 'ativa' }).lean();
+    expect(String(nova?.recalculatedFrom)).toBe(String(route._id));
+  });
+
+  it('rota de fallback nunca dispara recálculo (evitaria laço infinito)', async () => {
+    const { Route } = await import('../../models/index.js');
+    // A linha reta ignora as ruas: um agente dirigindo fica sempre "fora" dela.
+    const route = await seedActiveRoute({ fallback: true });
+
+    await track({ lng: -43.935, lat: -19.932 });
+    await track({ lng: -43.935, lat: -19.933 });
+
+    const after = await Route.findById(route._id).lean();
+    expect(after?.status).toBe('ativa');
+    expect(after?.deviationStrikes).toBe(0);
+  });
+
+  it('sem rota ativa o acompanhamento é inócuo (não lança)', async () => {
+    const { Route } = await import('../../models/index.js');
+    await Route.updateMany(
+      { operationId, agentId: AGENT, status: 'ativa' },
+      { $set: { status: 'cancelada' } },
+    );
+    await expect(track({ lng: -43.9, lat: -19.9 })).resolves.toBeUndefined();
+  });
+});
+
 describe('listagem de rotas', () => {
   it('agente só enxerga as próprias rotas', async () => {
     const res = await app.inject({
