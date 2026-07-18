@@ -4,6 +4,28 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import maplibregl, { type Map as MlMap, type Marker, type GeoJSONSource } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { initialsOf } from './Avatar';
+import { bearingDeg } from '@/lib/geo';
+
+/**
+ * Rumo do DESLOCAMENTO pelos dois últimos pontos da trilha do agente. É mais confiável
+ * que o `heading` do GPS, que fica velho/ruidoso em baixa velocidade e não bate com a
+ * trilha desenhada. Devolve null se não houver movimento medível (pontos coincidentes)
+ * — aí o chamador cai no heading do GPS.
+ */
+function trailBearing(segments: [number, number][][] | undefined): number | null {
+  if (!segments) return null;
+  for (let i = segments.length - 1; i >= 0; i--) {
+    const seg = segments[i];
+    if (!seg || seg.length < 2) continue;
+    const to = seg[seg.length - 1];
+    // Recua até achar um ponto DIFERENTE do último (GPS parado repete a coordenada).
+    for (let j = seg.length - 2; j >= 0; j--) {
+      const from = seg[j];
+      if (from && to && (from[0] !== to[0] || from[1] !== to[1])) return bearingDeg(from, to);
+    }
+  }
+  return null;
+}
 
 export interface AgentPoint {
   agentId: string;
@@ -68,25 +90,25 @@ function markerHtml(
   color: string,
   heading?: number | null,
 ): string {
-  if (mode === 'car') {
+  // SEM SINAL manda sobre o modo: o `activity` é a ÚLTIMA notícia (pode ter horas), então
+  // desenhar seta de deslocamento afirmaria um movimento que não sabemos se existe.
+  // Pin riscado e estático — é o que de fato sabemos: não temos sinal.
+  if (!fresh) return `<span class="agent-pin-off" style="background:${color}"></span>`;
+  if (mode === 'car' || mode === 'foot') {
+    // Em deslocamento (carro ou a pé): seta `navigation-2` na COR DO AGENTE, girada pelo
+    // rumo, sobre um disco BRANCO com anel na cor do agente (só o branco sumia no mapa
+    // claro) e um HALO pulsante ao redor — o "círculo pulsante".
     return (
-      `<span class="agent-puck agent-pulse" style="background:${color}">` +
-      `<svg viewBox="0 0 24 24" width="17" height="17" fill="#fff" stroke="#fff" stroke-width="1.5" ` +
+      `<span class="agent-nav">` +
+      `<span class="agent-nav-halo" style="background:${color}"></span>` +
+      `<span class="agent-nav-disc" style="border-color:${color}">` +
+      `<svg viewBox="0 0 24 24" width="21" height="21" fill="${color}" stroke="${color}" stroke-width="1" ` +
       `stroke-linejoin="round" style="transform:rotate(${Math.round(heading ?? 0)}deg)">` +
-      `<polygon points="3 11 22 2 13 21 11 13 3 11"/></svg></span>`
+      `<polygon points="12 2 19 21 12 17 5 21 12 2"/></svg></span></span>`
     );
   }
-  if (mode === 'foot') {
-    return (
-      `<span class="agent-foot">` +
-      `<span class="agent-halo" style="background:${color}"></span>` +
-      `<span class="agent-bullet" style="background:${color}"></span></span>`
-    );
-  }
-  // Parado — pin de public/svg, recolorido por máscara: conectado pulsa (map-pin),
-  // desconectado fica estático e riscado (map-pin-off).
-  const pin = fresh ? 'agent-pin agent-pulse' : 'agent-pin-off';
-  return `<span class="${pin}" style="background:${color}"></span>`;
+  // Parado e com sinal — pin de public/svg, recolorido por máscara, pulsando.
+  return `<span class="agent-pin agent-pulse" style="background:${color}"></span>`;
 }
 
 /** Escapa texto interpolado no HTML do popup (nomes de operação/agente). */
@@ -936,9 +958,11 @@ export function LiveMap({
       const mode = agentMode(point.activity);
       // Presença explícita (status MQTT + LWT) manda; sem ela, cai no proxy de frescor.
       const fresh = presence?.[agentId] ?? isFresh(point, nowMs);
-      const stateKey = `${mode}|${fresh}|${strong}|${Math.round(point.heading ?? 0)}`;
+      // Direção da seta = rumo da TRILHA (o do GPS não bate); GPS só como fallback.
+      const heading = trailBearing(trailsRef.current[agentId]) ?? point.heading ?? 0;
+      const stateKey = `${mode}|${fresh}|${strong}|${Math.round(heading)}`;
       if (el.dataset.state !== stateKey) {
-        el.innerHTML = markerHtml(mode, fresh, strong, point.heading);
+        el.innerHTML = markerHtml(mode, fresh, strong, heading);
         el.dataset.state = stateKey;
       }
       marker.setLngLat([point.lng, point.lat]);
