@@ -1,6 +1,6 @@
 import type { MqttClient } from 'mqtt';
 import type { FastifyBaseLogger } from 'fastify';
-import { operationBroadcastTopic, RouteStatus } from '@cerberus/shared';
+import { operationBroadcastTopic, RouteStatus, type RouteSource } from '@cerberus/shared';
 import { Route } from '../../models/index.js';
 import type { GeoPoint } from '../geofences/detect.js';
 import { evaluateProgress } from './progress.js';
@@ -84,7 +84,9 @@ export async function trackRouteProgress(
     await createAndDispatchRoute({
       operationId,
       agentId,
-      source: route.source as never,
+      // O recálculo preserva a autoria: uma rota que o agente traçou para si continua
+      // dele, mesmo quando quem recalculou foi o servidor.
+      source: route.source as RouteSource,
       origin: current,
       destination: { lng: dLng, lat: dLat },
       label: route.destinationLabel ?? undefined,

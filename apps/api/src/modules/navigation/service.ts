@@ -77,11 +77,6 @@ export async function createAndDispatchRoute(input: CreateRouteInput): Promise<{
 }> {
   const computed = await computeRouteWithFallback(input.provider, input.origin, input.destination);
 
-  await Route.updateMany(
-    { operationId: input.operationId, agentId: input.agentId, status: RouteStatus.ATIVA },
-    { $set: { status: RouteStatus.SUBSTITUIDA } },
-  );
-
   const route = await Route.create({
     operationId: input.operationId,
     agentId: input.agentId,
@@ -101,6 +96,27 @@ export async function createAndDispatchRoute(input: CreateRouteInput): Promise<{
     recalculatedFrom: input.recalculatedFrom ?? null,
     createdBy: input.createdBy,
   });
+
+  // Aposenta as anteriores DEPOIS de criar, e só as de `_id` menor que o meu.
+  //
+  // Aposentar antes de criar não basta: `updateMany` + `create` não são atômicos, então
+  // dois despachos simultâneos (operador clicando duas vezes, ou um despacho concorrente
+  // com o recálculo do servidor) passam ambos pela varredura e deixam DUAS rotas ativas.
+  // Aposentar "todas menos a minha" depois é pior ainda — cada requisição mata a rota da
+  // outra e não sobra nenhuma ativa.
+  //
+  // O corte por `_id` resolve: ObjectId é uma ordem total, então cada requisição só
+  // aposenta rotas estritamente mais antigas e exatamente uma — a de maior `_id` —
+  // sobrevive, independentemente da ordem em que as gravações chegarem.
+  await Route.updateMany(
+    {
+      operationId: input.operationId,
+      agentId: input.agentId,
+      status: RouteStatus.ATIVA,
+      _id: { $lt: route._id },
+    },
+    { $set: { status: RouteStatus.SUBSTITUIDA } },
+  );
 
   const dispatched = dispatchRouteCommand(
     input.mqtt,

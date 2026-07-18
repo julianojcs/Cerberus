@@ -280,6 +280,27 @@ describe('ciclo de vida da rota', () => {
     ).toBeGreaterThan(0);
   });
 
+  it('despachos SIMULTÂNEOS não deixam duas rotas ativas', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(osrmOk()));
+    const { Route } = await import('../../models/index.js');
+
+    // Operador clicando duas vezes, ou despacho concorrendo com o recálculo do servidor.
+    await Promise.all(
+      [1, 2, 3].map(() =>
+        app.inject({
+          method: 'POST',
+          url: `/operations/${operationId}/routes`,
+          headers: { authorization: `Bearer ${adminToken}` },
+          payload: { agentId: AGENT, ...DESTINATION },
+        }),
+      ),
+    );
+
+    expect(
+      await Route.countDocuments({ operationId, agentId: AGENT, status: 'ativa' }),
+    ).toBe(1);
+  });
+
   it('GET /routes/active devolve a rota ativa (recuperação após reconexão)', async () => {
     const res = await app.inject({
       method: 'GET',
