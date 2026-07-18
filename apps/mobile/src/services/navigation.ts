@@ -137,7 +137,23 @@ function requireContext(): NavigationContext {
 }
 
 async function errorMessage(res: Response, fallback: string): Promise<string> {
-  const body = (await res.json().catch(() => null)) as { error?: string } | null;
+  const body = (await res.json().catch(() => null)) as
+    | { error?: string; message?: string; statusCode?: number }
+    | null;
+
+  // Os erros da NOSSA API vêm como `{ error: '<texto pt-BR>' }` e são para o agente ler.
+  // Já o envelope PADRÃO do Fastify (rota inexistente, erro não tratado) traz
+  // `statusCode` + `message`, e ali `error` é apenas o nome do status em inglês — um
+  // "Not Found" seco. Repassar isso troca uma mensagem útil por duas palavras sem
+  // contexto, além de furar o pt-BR da UI.
+  if (body?.statusCode != null && body?.message != null) {
+    // 404 no envelope padrão = o ENDPOINT não existe (não é "o recurso sumiu"). Na
+    // prática significa app novo contra API velha — foi exatamente o que aconteceu no
+    // primeiro teste em campo, e a mensagem crua não ajudou a descobrir isso.
+    return res.status === 404
+      ? `${fallback}: endpoint inexistente nesta API (servidor desatualizado?)`
+      : fallback;
+  }
   return body?.error ?? fallback;
 }
 
