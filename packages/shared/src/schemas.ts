@@ -7,6 +7,10 @@ import {
   OperationStatus,
   OperationType,
   Role,
+  type RouteManeuver,
+  type RouteProfile,
+  type RouteSource,
+  type RouteStatus,
   type SessionRevokeReason,
 } from './constants.js';
 
@@ -50,6 +54,12 @@ export type PositionSample = z.infer<typeof positionSampleSchema>;
  */
 export const agentCommandSchema = z.object({
   type: z.enum(enumValues(AgentCommandType)),
+  /**
+   * PONTEIRO para a rota (comandos `route_assign`/`route_cancel`) — nunca o traçado.
+   * O canal `comando` é controle e exige payload mínimo; o agente busca a rota em
+   * `GET /operations/:id/routes/:routeId`. Ver .claude/rules/mqtt-multitenant.md.
+   */
+  routeId: z.string().min(1).optional(),
 });
 export type AgentCommand = z.infer<typeof agentCommandSchema>;
 
@@ -216,6 +226,67 @@ export interface UserInfo {
   agentId?: string;
   operationIds: string[];
   blocked: boolean;
+}
+
+/* --------------------------------------------------------- Rotas (navegação) */
+
+/**
+ * Criação de uma rota até um destino (issue #131).
+ *
+ * `lat`/`lng` porque é entrada vinda de humano/mapa (convenção GPS); a persistência
+ * transpõe para GeoJSON `[lng, lat]` — ver .claude/rules/geospatial-coordinates.md.
+ *
+ * A ORIGEM não vem no corpo de propósito: é a última posição conhecida do agente,
+ * que o servidor já tem. Aceitar origem do cliente abriria espaço para traçar rota a
+ * partir de um ponto onde o agente não está.
+ */
+export const createRouteSchema = z.object({
+  /** Agente que vai receber a rota (canal MQTT); casa com `Position.agentId`. */
+  agentId: z.string().min(1).max(64),
+  lat: z.number().min(-90).max(90),
+  lng: z.number().min(-180).max(180),
+  /** Rótulo do destino exibido ao operador e ao agente (ex.: "Ponto de encontro"). */
+  label: z.string().min(1).max(120).optional(),
+});
+export type CreateRoute = z.infer<typeof createRouteSchema>;
+
+/** Um passo (manobra) do trajeto, já com a instrução redigida em pt-BR. */
+export interface RouteStep {
+  /** Instrução pronta para exibir/falar (ex.: "Vire à direita na Rua dos Aimorés"). */
+  instruction: string;
+  maneuver: RouteManeuver;
+  /** Nome da via do passo, quando o provedor souber. */
+  streetName?: string;
+  distanceMeters: number;
+  durationSec: number;
+  /** Onde a manobra acontece: `[lng, lat]` (pronto para MapLibre/Leaflet). */
+  location: [number, number];
+}
+
+/** Rota serializada — resposta da API e payload que o app do agente segue. */
+export interface RouteInfo {
+  id: string;
+  operationId: string;
+  agentId: string;
+  source: RouteSource;
+  status: RouteStatus;
+  profile: RouteProfile;
+  destination: { lat: number; lng: number; label?: string };
+  /** Traçado completo: `[[lng, lat], …]` — desenhável direto no mapa. */
+  geometry: [number, number][];
+  steps: RouteStep[];
+  distanceMeters: number;
+  durationSec: number;
+  /**
+   * `true` quando o provedor de rotas estava indisponível e o traçado é a linha reta
+   * entre origem e destino. O app degrada para rumo/distância em vez de fingir que
+   * tem instruções de via — ver o fallback em `modules/navigation/provider.ts`.
+   */
+  fallback: boolean;
+  /** Id da rota que esta substituiu (recálculo por desvio). */
+  recalculatedFrom?: string;
+  createdAt: string;
+  createdBy?: string;
 }
 
 /** Equipe (sub-grupo de uma operação) serializada — lista/CRUD + filtro no mapa. */

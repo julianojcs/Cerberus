@@ -20,6 +20,16 @@ const envSchema = z.object({
 
   JWT_SECRET: z.string().min(8, 'JWT_SECRET deve ter ao menos 8 caracteres'),
   JWT_EXPIRES_IN: z.string().default('8h'),
+
+  /**
+   * Motor de rotas (issue #131). O padrão é o OSRM público, que serve para
+   * DESENVOLVIMENTO — não tem SLA e o uso pesado é desencorajado. Em produção isto
+   * aponta para uma API de rotas gerenciada (ver `modules/navigation/provider.ts`);
+   * auto-hospedar OSRM está fora de cogitação porque exigiria Docker.
+   */
+  OSRM_BASE_URL: z.string().default('https://router.project-osrm.org'),
+  /** Timeout (ms) do provedor de rotas. Estourou ⇒ despacha a linha reta. */
+  ROUTING_TIMEOUT_MS: z.coerce.number().default(10_000),
 });
 
 export type Env = z.infer<typeof envSchema>;
