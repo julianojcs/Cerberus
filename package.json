@@ -23,6 +23,8 @@
     "shared:build": "npm run build --workspace @cerberus/shared",
     "api:dev": "npm run dev --workspace @cerberus/api",
     "api:seed": "npm run seed --workspace @cerberus/api",
+    "api:sim": "npm run sim --workspace @cerberus/api --",
+    "api:sim:setup": "npm run sim:setup --workspace @cerberus/api --",
     "api:ensure-superadmin": "npm run ensure-superadmin --workspace @cerberus/api",
     "dashboard:dev": "npm run dev --workspace @cerberus/dashboard",
     "infra:up": "docker compose up -d",
