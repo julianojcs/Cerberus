@@ -17,11 +17,20 @@ let client: MqttClient | null = null;
 /** Tópico de comando DESTE agente (definido no connect) — ver AgentCommandType. */
 let commandTopic: string | null = null;
 
+/** Identidade desta conexão — definida junto com o `commandTopic`, no connect. */
+let commandCtx: { operationId: string; agentId: string } | null = null;
+
 /**
  * Handler dos comandos da central. Registrado de fora (pelo serviço de geolocalização)
  * para não criar import circular: geolocation já importa `publishPosition` daqui.
+ *
+ * O CONTEXTO viaja com o comando de propósito. Antes o geolocation guardava o seu, mas
+ * quem o preenchia era o `initTracking` — que roda uma vez só; um hot reload zerava o
+ * contexto e o comando chegava para um handler sem identidade. Aqui o contexto nasce no
+ * mesmo lugar que a conexão, então vale um invariante: se um comando CHEGOU, havia
+ * conexão; se havia conexão, há contexto.
  */
-type CommandHandler = (type: string) => void;
+type CommandHandler = (type: string, ctx: { operationId: string; agentId: string }) => void;
 let commandHandler: CommandHandler | null = null;
 export function setCommandHandler(h: CommandHandler | null): void {
   commandHandler = h;
@@ -101,7 +110,10 @@ function handleIncoming(topic: string, payload: Uint8Array): void {
   if (topic === commandTopic) {
     try {
       const { type } = JSON.parse(Buffer.from(payload).toString()) as { type?: string };
-      if (type) commandHandler?.(type);
+      // Diagnóstico: separa "o comando não chegou ao aparelho" de "chegou e o GPS não
+      // conseguiu um fix" — hoje os dois terminam igual (o card não muda).
+      console.warn('[mqtt] COMANDO recebido do dashboard:', type);
+      if (type && commandCtx) commandHandler?.(type, commandCtx);
     } catch {
       /* comando inválido — ignora */
     }
@@ -189,10 +201,17 @@ export function connectMqtt(token: string, operationId: string, agentId: string)
   // pelo takeover do broker — um derruba o outro, ambos reconectam — virando um loop
   // infinito de conecta/desconecta. Antes o id tinha `Date.now()` e os duplicados
   // apenas coexistiam, mascarando este vazamento. `disconnectMqtt` zera `client`.
-  if (client) return client;
+  if (client) {
+    console.warn('[mqtt] connectMqtt() chamado de novo → reaproveitando o cliente atual');
+    return client;
+  }
+  // Decide a causa da guerra de takeover: se esta linha sair UMA vez e ainda assim
+  // levarmos `reasonCode 142`, o outro cliente NÃO é este app — é externo.
+  console.warn(`[mqtt] criando cliente | clientId=agente_${agentId} | agentId=${agentId}`);
 
   const statusTopic = agentStatusTopic(operationId, agentId);
   commandTopic = agentCommandTopic(operationId, agentId);
+  commandCtx = { operationId, agentId };
   const offline = JSON.stringify({ online: false } satisfies AgentStatus);
 
   client = mqtt.connect(config.mqttWsUrl, {
@@ -208,6 +227,11 @@ export function connectMqtt(token: string, operationId: string, agentId: string)
     password: config.mqttUsername ? config.mqttPassword : token,
     reconnectPeriod: 3000,
     clean: true,
+    // MQTT 5 (o mqtt.js usa 3.1.1 por padrão). Motivo: em 3.1.1 o broker derrubar o
+    // cliente ("session taken over") e a rede cair são a MESMA coisa do lado de cá —
+    // um socket fechando, sem motivo. Na v5 o broker manda um DISCONNECT com
+    // `reasonCode`, que separa os dois casos. O HiveMQ Cloud atende v5.
+    protocolVersion: 5,
     // TESTAMENTO (LWT): se o app morrer sem se despedir (rede caiu, processo morto,
     // bateria acabou), o BROKER publica isto por nós quando o keepalive expira.
     // Custo de bateria ~zero: viaja dentro do CONNECT e não gera tráfego novo — o
@@ -237,6 +261,22 @@ export function connectMqtt(token: string, operationId: string, agentId: string)
   // tentando reconectar sozinho (reconnectPeriod).
   client.on('error', (err) => {
     console.warn(`[mqtt] falha de conexão em ${config.mqttWsUrl}:`, err?.message ?? err);
+  });
+
+  // Diagnóstico do ciclo de vida. Sem isto, "o barramento cai" não diz NADA sobre a
+  // causa: quem derruba? o broker, a rede, ou nós? Cada evento responde uma parte.
+  client.on('connect', () => console.warn('[mqtt] conectado'));
+  client.on('reconnect', () => console.warn('[mqtt] reconectando…'));
+  client.on('offline', () => console.warn('[mqtt] offline (rede sumiu)'));
+  client.on('close', () => console.warn('[mqtt] socket fechado'));
+  // Só existe no MQTT 5: é o broker dizendo POR QUE nos derrubou. `reasonCode: 142`
+  // (0x8E) = "Session taken over" ⇒ outro cliente conectou com o MESMO clientId.
+  client.on('disconnect', (packet) => {
+    console.warn(
+      '[mqtt] DERRUBADO pelo broker — reasonCode:',
+      packet?.reasonCode,
+      packet?.properties?.reasonString ?? '',
+    );
   });
 
   client.on('message', handleIncoming);

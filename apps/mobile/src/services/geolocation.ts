@@ -38,6 +38,36 @@ function toSample(location: Location): PositionSample {
   };
 }
 
+/**
+ * Responde ao `request_fix` da central: força um fix AGORA e publica. Mesmo caminho do
+ * heartbeat — a central usa isto quando a telemetria congelou (GPS hibernando parado, e
+ * o Doze podendo adiar o heartbeat por dezenas de minutos). A resposta não é síncrona:
+ * sai como uma posição normal no canal `posicao`.
+ *
+ * Registrado no LOAD do módulo (e não dentro do `initTracking`, que roda uma vez só): um
+ * hot reload zerava o `commandHandler` e o comando chegava para ninguém. O CONTEXTO vem
+ * junto com o comando, vindo do mqtt — antes ele era guardado aqui e o mesmo hot reload
+ * o zerava, deixando o handler vivo porém sem identidade. Injeção evita import circular.
+ */
+setCommandHandler((type, ctx) => {
+  if (type !== AgentCommandType.REQUEST_FIX) return;
+  void (async () => {
+    try {
+      console.warn('[gps] comando request_fix → buscando posição…');
+      const location = await BackgroundGeolocation.getCurrentPosition({
+        samples: 1,
+        persist: true,
+      });
+      console.warn('[gps] fix obtido → publicando');
+      report(ctx, toSample(location));
+    } catch (err) {
+      // Sem log, um GPS que não consegue fix (Doze, sem sinal, permissão) é
+      // indistinguível de "o comando nunca chegou".
+      console.warn('[gps] FALHOU ao obter fix:', err);
+    }
+  })();
+});
+
 // --- Assinatura de posições para a própria UI do agente ---
 export type PositionListener = (sample: PositionSample) => void;
 const positionListeners = new Set<PositionListener>();
@@ -96,30 +126,6 @@ export async function getCurrentPositionOnce(ctx: TrackingContext): Promise<Posi
 
 export async function initTracking(ctx: TrackingContext): Promise<void> {
   if (initialized) return;
-
-  /**
-   * Responde ao comando `request_fix` da central: força um fix AGORA e publica. Mesmo
-   * caminho do heartbeat — a central usa isto quando a telemetria congelou (GPS
-   * hibernando parado, e o Doze podendo adiar o heartbeat por dezenas de minutos).
-   * A resposta não é síncrona: sai como uma posição normal no canal `posicao`.
-   *
-   * Registrado por injeção (`setCommandHandler`) para não criar import circular — este
-   * módulo já importa `publishPosition` do mqtt.
-   */
-  setCommandHandler((type) => {
-    if (type !== AgentCommandType.REQUEST_FIX) return;
-    void (async () => {
-      try {
-        const location = await BackgroundGeolocation.getCurrentPosition({
-          samples: 1,
-          persist: true,
-        });
-        report(ctx, toSample(location));
-      } catch {
-        /* sem fix disponível neste momento — a central verá a posição anterior */
-      }
-    })();
-  });
 
   BackgroundGeolocation.onLocation((location: Location) => {
     report(ctx, toSample(location));
