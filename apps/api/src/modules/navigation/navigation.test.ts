@@ -304,6 +304,46 @@ describe('progresso sobre a rota', () => {
     expect(offRoute.offRouteMeters).toBeGreaterThan(50);
   });
 
+  /**
+   * Regressão do falso positivo visto em campo (19/07/2026, Rua Campo Belo, BH): a rota
+   * dá a volta no quarteirão, o agente passa a ~25 m do destino pela rua paralela e a
+   * navegação anunciava "você chegou ao destino" com 160 m de rota ainda por percorrer.
+   * Medir a chegada pela linha reta era o erro; quem manda é o restante NO TRAÇADO.
+   */
+  describe('chegada em quarteirão urbano (regressão)', () => {
+    // Rota em "U": desce a Campo Belo, contorna e sobe pela paralela até o destino.
+    const aroundTheBlock: [number, number][] = [
+      [-43.9378, -19.9487], // origem
+      [-43.9378, -19.9497], // desce
+      [-43.9368, -19.9497], // contorna
+      [-43.9368, -19.9487], // sobe de volta
+      [-43.9371, -19.9491], // destino (fim do traçado)
+    ];
+    const destination = { lng: -43.9371, lat: -19.9491 };
+
+    it('NÃO declara chegada com o agente do outro lado do quarteirão', () => {
+      // Sobre o primeiro trecho, a poucos metros do destino em LINHA RETA…
+      const onParallelStreet = { lng: -43.9378, lat: -19.9491 };
+      const straight = evaluateProgress(onParallelStreet, aroundTheBlock, destination);
+
+      // …mas ainda com a volta inteira pela frente.
+      expect(straight.toDestinationMeters).toBeLessThan(80); // perto pela reta
+      expect(straight.remainingMeters).toBeGreaterThan(150); // longe pelo traçado
+      expect(straight.arrived).toBe(false);
+    });
+
+    it('declara chegada ao completar o traçado', () => {
+      const p = evaluateProgress(destination, aroundTheBlock, destination);
+      expect(p.arrived).toBe(true);
+    });
+
+    it('declara chegada também para quem cortou caminho até o destino', () => {
+      // Fora do traçado, mas em cima do destino: o ponto projeta no FIM da rota.
+      const p = evaluateProgress({ lng: -43.93712, lat: -19.94912 }, aroundTheBlock, destination);
+      expect(p.arrived).toBe(true);
+    });
+  });
+
   it('chegada tem precedência sobre desvio', () => {
     const dest = { lng: -43.93, lat: -19.93 };
     // Em cima do destino, mas fora do traçado: é sucesso, não desvio a recalcular.

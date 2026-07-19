@@ -136,6 +136,42 @@ function requireContext(): NavigationContext {
   return ctx;
 }
 
+/**
+ * Teto de espera das chamadas de rota. O `fetch` do React Native NÃO tem timeout: uma
+ * requisição emitida no instante em que o aparelho troca de Wi-Fi para dados móveis
+ * — o que acontece o tempo todo com o agente caminhando — fica pendente para sempre.
+ *
+ * Isso não trava só a chamada: como `handleMapTap` ignora toques enquanto há criação em
+ * curso, uma única requisição pendurada deixa o botão preso em "Traçando rota…" e o
+ * agente sem conseguir definir destino nenhum até reiniciar o app. Foi o que apareceu
+ * em campo. O servidor responde em ~1 s; 20 s é folga larga para rede ruim.
+ */
+const ROUTE_REQUEST_TIMEOUT_MS = 20_000;
+
+/**
+ * `authedFetch` com teto de espera. Falhar em voz alta é melhor do que pendurar a UI:
+ * o agente vê o erro e tenta de novo, em vez de ficar olhando um botão morto.
+ */
+async function fetchWithTimeout(
+  token: string,
+  path: string,
+  init: RequestInit = {},
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ROUTE_REQUEST_TIMEOUT_MS);
+  try {
+    return await authedFetch(token, path, { ...init, signal: controller.signal });
+  } catch (err) {
+    // `AbortError` é o nosso próprio teto disparando — traduz para algo acionável.
+    if (err instanceof Error && err.name === 'AbortError') {
+      throw new Error('Sem resposta do servidor. Verifique a conexão e tente de novo.');
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function errorMessage(res: Response, fallback: string): Promise<string> {
   const body = (await res.json().catch(() => null)) as
     | { error?: string; message?: string; statusCode?: number }
@@ -160,7 +196,7 @@ async function errorMessage(res: Response, fallback: string): Promise<string> {
 /** Baixa o traçado apontado pelo comando. `null` quando a rota não existe mais (404). */
 async function fetchRoute(routeId: string): Promise<RouteInfo | null> {
   const c = requireContext();
-  const res = await authedFetch(c.token, `/operations/${c.operationId}/routes/${routeId}`);
+  const res = await fetchWithTimeout(c.token, `/operations/${c.operationId}/routes/${routeId}`);
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(await errorMessage(res, `Erro ${res.status} ao obter a rota`));
   return (await res.json()) as RouteInfo;
@@ -169,7 +205,7 @@ async function fetchRoute(routeId: string): Promise<RouteInfo | null> {
 /** Rota ativa do agente no servidor. `null` quando não há nenhuma (404). */
 async function fetchActiveRoute(): Promise<RouteInfo | null> {
   const c = requireContext();
-  const res = await authedFetch(
+  const res = await fetchWithTimeout(
     c.token,
     `/operations/${c.operationId}/agents/${c.agentId}/routes/active`,
   );
@@ -187,7 +223,7 @@ export async function requestRouteToDestination(
   label?: string,
 ): Promise<RouteInfo> {
   const c = requireContext();
-  const res = await authedFetch(c.token, `/operations/${c.operationId}/routes`, {
+  const res = await fetchWithTimeout(c.token, `/operations/${c.operationId}/routes`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ agentId: c.agentId, lat: destination.lat, lng: destination.lng, label }),
@@ -208,7 +244,7 @@ export async function cancelActiveRoute(): Promise<void> {
   const current = state.route;
   try {
     if (current && ctx) {
-      await authedFetch(ctx.token, `/operations/${ctx.operationId}/routes/${current.id}`, {
+      await fetchWithTimeout(ctx.token, `/operations/${ctx.operationId}/routes/${current.id}`, {
         method: 'DELETE',
       });
     }
@@ -328,6 +364,10 @@ function onPosition(sample: PositionSample): void {
   const destination: LatLng = { lat: route.destination.lat, lng: route.destination.lng };
   const straightToDestination = haversineMeters(pos, destination);
 
+  // Quanto FALTA NO TRAÇADO — é isto que decide a chegada, não a linha reta até o
+  // destino. Sem traçado utilizável (fallback degradado), a reta é tudo que há.
+  const remainingOnPath = path ? progressAlongPath(path, pos).remainingMeters : straightToDestination;
+
   if (route.fallback || !path) {
     // Provedor de rotas fora: o traçado é a reta origem→destino. Não existe manobra
     // para anunciar, então degrada para rumo + distância direta — fingir turn-by-turn
@@ -361,7 +401,12 @@ function onPosition(sample: PositionSample): void {
     announceStep(route, distanceToManeuver);
   }
 
-  if (straightToDestination <= ROUTE_ARRIVAL_METERS && !arrivalAnnounced) {
+  // Chegada = traçado completado. Comparar a LINHA RETA com o destino produzia falso
+  // positivo em quarteirão urbano: o agente passava a 25 m do destino pela rua paralela,
+  // com a volta inteira ainda pela frente, e a barra anunciava "você chegou" no meio do
+  // caminho (visto em campo, 19/07/2026). Medir pelo traçado também cobre o atalho: quem
+  // chega por fora da rota projeta no fim dela, e o restante cai para perto de zero.
+  if (remainingOnPath <= ROUTE_ARRIVAL_METERS && !arrivalAnnounced) {
     arrivalAnnounced = true;
     emit({ arrived: true });
     // A chegada é falada mesmo no traçado direto: não é instrução de via, é o fim da

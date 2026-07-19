@@ -43,16 +43,63 @@ function distanceToSegment(p: GeoPoint, a: [number, number], b: [number, number]
  * recebida.
  */
 export function distanceToPath(p: GeoPoint, geometry: [number, number][]): number {
-  if (geometry.length === 0) return Number.POSITIVE_INFINITY;
-  const first = geometry[0]!;
-  if (geometry.length === 1) return haversineMeters(p, { lng: first[0], lat: first[1] });
+  return projectOnPath(p, geometry).offRouteMeters;
+}
 
-  let min = Number.POSITIVE_INFINITY;
+export interface PathProjection {
+  /** Distância (m) do ponto ao traçado. */
+  offRouteMeters: number;
+  /** Distância (m) que ainda falta percorrer NO TRAÇADO, do ponto projetado até o fim. */
+  remainingMeters: number;
+}
+
+/**
+ * Projeta o ponto no traçado: quão longe está dele e quanto falta até o fim.
+ *
+ * O "quanto falta" é medido ao longo da rota, não em linha reta — e essa distinção é o
+ * que impede o falso positivo de chegada. Num quarteirão urbano o agente passa a 25 m
+ * do destino pela rua paralela enquanto a rota ainda dá a volta inteira: pela reta
+ * "chegou", pelo traçado faltam 160 m. Quem manda é o traçado.
+ */
+export function projectOnPath(p: GeoPoint, geometry: [number, number][]): PathProjection {
+  if (geometry.length === 0) {
+    return { offRouteMeters: Number.POSITIVE_INFINITY, remainingMeters: 0 };
+  }
+  const first = geometry[0]!;
+  if (geometry.length === 1) {
+    return {
+      offRouteMeters: haversineMeters(p, { lng: first[0], lat: first[1] }),
+      remainingMeters: 0,
+    };
+  }
+
+  // Comprimento acumulado do vértice i até o fim (calculado de trás para frente).
+  const suffix = new Array<number>(geometry.length).fill(0);
+  for (let i = geometry.length - 2; i >= 0; i--) {
+    const a = geometry[i]!;
+    const b = geometry[i + 1]!;
+    suffix[i] = suffix[i + 1]! + haversineMeters({ lng: a[0], lat: a[1] }, { lng: b[0], lat: b[1] });
+  }
+
+  let bestOff = Number.POSITIVE_INFINITY;
+  let bestIndex = 0;
   for (let i = 1; i < geometry.length; i++) {
     const d = distanceToSegment(p, geometry[i - 1]!, geometry[i]!);
-    if (d < min) min = d;
+    if (d < bestOff) {
+      bestOff = d;
+      bestIndex = i - 1;
+    }
   }
-  return min;
+
+  // Do ponto até o PRÓXIMO vértice, mais todo o resto. Aproxima o trecho percorrido
+  // dentro do segmento pela distância ao vértice seguinte — erro de poucos metros,
+  // irrelevante contra o raio de chegada.
+  const next = geometry[bestIndex + 1]!;
+  const toNext = haversineMeters(p, { lng: next[0], lat: next[1] });
+  return {
+    offRouteMeters: bestOff,
+    remainingMeters: Math.min(toNext, suffix[bestIndex]!) + suffix[bestIndex + 1]!,
+  };
 }
 
 export interface RouteProgress {
@@ -62,7 +109,9 @@ export interface RouteProgress {
   deviated: boolean;
   /** Distância (m) em linha reta até o destino. */
   toDestinationMeters: number;
-  /** Entrou no raio de chegada ⇒ rota concluída. */
+  /** Distância (m) que falta percorrer NO TRAÇADO. É o que decide a chegada. */
+  remainingMeters: number;
+  /** Completou o traçado ⇒ rota concluída. */
   arrived: boolean;
 }
 
@@ -80,14 +129,23 @@ export function evaluateProgress(
   const deviationLimit = opts.deviationMeters ?? ROUTE_DEVIATION_METERS;
   const arrivalLimit = opts.arrivalMeters ?? ROUTE_ARRIVAL_METERS;
 
-  const offRouteMeters = distanceToPath(current, geometry);
+  const { offRouteMeters, remainingMeters } = projectOnPath(current, geometry);
   const toDestinationMeters = haversineMeters(current, destination);
-  const arrived = toDestinationMeters <= arrivalLimit;
+
+  // Chegada é medida pelo que FALTA NO TRAÇADO, não pela linha reta até o destino.
+  // A reta produz falso positivo em quarteirão urbano: o agente passa a 25 m do
+  // destino pela rua paralela, a rota ainda tem 160 m para dar a volta, e a navegação
+  // anunciava "você chegou" no meio do caminho. Foi exatamente o que apareceu em campo.
+  //
+  // Medir pelo traçado também cobre o atalho: quem chega ao destino por fora da rota
+  // tem o ponto projetado no FIM do traçado, então o restante cai para perto de zero.
+  const arrived = remainingMeters <= arrivalLimit;
 
   return {
     offRouteMeters,
     deviated: !arrived && offRouteMeters > deviationLimit,
     toDestinationMeters,
+    remainingMeters,
     arrived,
   };
 }
