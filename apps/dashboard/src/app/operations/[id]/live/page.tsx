@@ -406,6 +406,8 @@ export default function LiveOperationPage() {
   const [routeDestination, setRouteDestination] = useState<{ lng: number; lat: number } | null>(
     null,
   );
+  /** Endereço do destino marcado, resolvido por geocodificação reversa. */
+  const [routeDestinationLabel, setRouteDestinationLabel] = useState<string | null>(null);
   /** Pontos a enquadrar no próximo `fitNonce`. Vazio ⇒ o mapa volta ao padrão. */
   const [fitOverride, setFitOverride] = useState<[number, number][]>([]);
 
@@ -1713,17 +1715,41 @@ export default function LiveOperationPage() {
               agentColors={agentColors}
               routes={plannedRoutes}
               pendingDestination={routeDestination}
+              pendingDestinationLabel={routeDestinationLabel}
+              onSearchAddress={(q) => {
+                // Enviesa pelo primeiro agente com posição; sem referência, "Rua Bahia"
+                // devolve acertos no país inteiro. Cai no centro do mapa se não houver.
+                const first = Object.values(agents)[0];
+                return api.geocode(
+                  operationId,
+                  q,
+                  first ? { lat: first.lat, lng: first.lng } : undefined,
+                );
+              }}
+              onPickResult={(r) => {
+                setRouteDestination({ lng: r.lng, lat: r.lat });
+                setRouteDestinationLabel(r.label);
+                setFitOverride([[r.lng, r.lat]]);
+                setFitNonce((n) => n + 1);
+              }}
               picking={routePicking}
               onPickingChange={(p) => {
                 setRoutePicking(p);
                 setRouteDestination(null);
+                setRouteDestinationLabel(null);
                 // Sair do modo de zona ao entrar no de destino evita que um clique
                 // no mapa faça as duas coisas ao mesmo tempo.
                 if (p) setPlacing(false);
               }}
               onDispatch={async (input) => {
-                const created = await api.createRoute(operationId, input);
+                // O rótulo vindo da busca/reversa prevalece sobre o texto digitado só
+                // quando este está vazio — o operador ainda pode nomear o ponto.
+                const created = await api.createRoute(operationId, {
+                  ...input,
+                  label: input.label ?? routeDestinationLabel ?? undefined,
+                });
                 setRouteDestination(null);
+                setRouteDestinationLabel(null);
                 await reloadRoutes();
                 toast.success(
                   created.fallback
@@ -2547,7 +2573,18 @@ export default function LiveOperationPage() {
                   if (placing) setPendingCenter({ lng, lat });
                   // Marcar destino e posicionar zona são modos exclusivos: o clique
                   // pertence a um ou a outro, nunca aos dois.
-                  else if (routePicking) setRouteDestination({ lng, lat });
+                  else if (routePicking) {
+                    setRouteDestination({ lng, lat });
+                    // Resolve o endereço em segundo plano: o operador confirma o destino
+                    // por um logradouro, não por um par de coordenadas. Se o provedor
+                    // falhar ou não conhecer o ponto, o rótulo simplesmente não aparece —
+                    // marcar o destino não pode depender disso.
+                    setRouteDestinationLabel(null);
+                    void api
+                      .reverseGeocode(operationId, lat, lng)
+                      .then((r) => setRouteDestinationLabel(r?.label ?? null))
+                      .catch(() => setRouteDestinationLabel(null));
+                  }
                 }}
                 editGeofence={editGeo}
                 onGeofenceMove={(lng, lat) => setEditGeo((e) => (e ? { ...e, lng, lat } : e))}

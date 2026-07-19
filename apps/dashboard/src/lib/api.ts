@@ -2,6 +2,7 @@ import type {
   AuditLogEntry,
   DeviceBlockInfo,
   E2eeKeyBackup,
+  GeocodeResult,
   KeyDirectoryEntry,
   LoginResponse,
   Operation,
@@ -323,6 +324,24 @@ export const api = {
   /** Recalcula a partir da posição atual do agente, mantendo o destino. */
   recalculateRoute: (opId: string, routeId: string) =>
     request<RouteInfo>(`/operations/${opId}/routes/${routeId}/recalculate`, { method: 'POST' }),
+
+  /**
+   * Busca de endereço. `near` enviesa o resultado — sem ele, "Rua Bahia" devolve
+   * acertos no país inteiro. Passe a posição de um agente ou o centro da operação.
+   */
+  geocode: (opId: string, q: string, near?: { lat: number; lng: number }) => {
+    const params = new URLSearchParams({ q });
+    if (near) {
+      params.set('lat', String(near.lat));
+      params.set('lng', String(near.lng));
+    }
+    return request<GeocodeResult[]>(`/operations/${opId}/geocode?${params.toString()}`);
+  },
+  /** Coordenada → endereço. Devolve `null` quando não há endereço mapeado ali. */
+  reverseGeocode: (opId: string, lat: number, lng: number) =>
+    request<GeocodeResult | null>(
+      `/operations/${opId}/geocode/reverse?lat=${lat}&lng=${lng}`,
+    ),
 };
 
 export interface Settings {

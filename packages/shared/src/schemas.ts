@@ -250,6 +250,41 @@ export const createRouteSchema = z.object({
 });
 export type CreateRoute = z.infer<typeof createRouteSchema>;
 
+/**
+ * Busca de endereço. `lat`/`lng` são opcionais e servem para ENVIESAR o resultado para
+ * perto de quem busca — sem isso, "Rua Bahia" devolve acertos no país inteiro.
+ */
+export const geocodeQuerySchema = z.object({
+  q: z.string().min(3).max(200),
+  lat: z.coerce.number().min(-90).max(90).optional(),
+  lng: z.coerce.number().min(-180).max(180).optional(),
+});
+export type GeocodeQuery = z.infer<typeof geocodeQuerySchema>;
+
+/** Geocodificação reversa: coordenada → endereço (rótulo do destino tocado no mapa). */
+export const reverseGeocodeSchema = z.object({
+  lat: z.coerce.number().min(-90).max(90),
+  lng: z.coerce.number().min(-180).max(180),
+});
+export type ReverseGeocode = z.infer<typeof reverseGeocodeSchema>;
+
+/**
+ * Endereço encontrado, em DUAS linhas como nos apps de navegação do mercado: via em
+ * destaque, localidade abaixo em tom secundário.
+ */
+export interface GeocodeResult {
+  /** Linha principal: via com número, ou o nome do lugar. */
+  title: string;
+  /** Linha secundária: bairro · cidade. Pode ser vazia. */
+  subtitle: string;
+  /** `title` + `subtitle` — vira o rótulo da rota exibido na central. */
+  label: string;
+  lat: number;
+  lng: number;
+  /** Granularidade do acerto (`house`, `road`, `suburb`…). */
+  kind?: string;
+}
+
 /** Um passo (manobra) do trajeto, já com a instrução redigida em pt-BR. */
 export interface RouteStep {
   /** Instrução pronta para exibir/falar (ex.: "Vire à direita na Rua dos Aimorés"). */

@@ -30,6 +30,20 @@ const envSchema = z.object({
   OSRM_BASE_URL: z.string().default('https://router.project-osrm.org'),
   /** Timeout (ms) do provedor de rotas. Estourou ⇒ despacha a linha reta. */
   ROUTING_TIMEOUT_MS: z.coerce.number().default(10_000),
+
+  /**
+   * Geocodificação (endereço ↔ coordenada). Nominatim público em desenvolvimento; em
+   * produção sai junto com o provedor de rotas gerenciado, na mesma chave.
+   */
+  NOMINATIM_BASE_URL: z.string().default('https://nominatim.openstreetmap.org'),
+  /**
+   * A política do Nominatim EXIGE um User-Agent identificando a aplicação, com contato
+   * — requisição sem isso é recusada. Trocar o e-mail pelo do responsável antes de
+   * qualquer uso sério.
+   */
+  GEOCODING_USER_AGENT: z.string().default('Cerberus/1.0 (contato: devsrnbtlls@gmail.com)'),
+  /** Restringe a busca a países (ISO 3166-1 alpha-2). Vazio = mundo todo. */
+  GEOCODING_COUNTRY_CODES: z.string().default('br'),
 });
 
 export type Env = z.infer<typeof envSchema>;

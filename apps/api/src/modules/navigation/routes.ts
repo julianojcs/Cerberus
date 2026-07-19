@@ -3,6 +3,8 @@ import { Types } from 'mongoose';
 import {
   AgentCommandType,
   createRouteSchema,
+  geocodeQuerySchema,
+  reverseGeocodeSchema,
   Role,
   RouteProfile,
   RouteSource,
@@ -13,6 +15,7 @@ import {
 } from '@cerberus/shared';
 import { Route } from '../../models/index.js';
 import { assertOperationScope, isSuperAdmin } from '../scope.js';
+import { NominatimGeocodingProvider } from './geocoding.js';
 import { OsrmRoutingProvider } from './provider.js';
 import { createAndDispatchRoute, dispatchRouteCommand, lastKnownPosition } from './service.js';
 
@@ -43,6 +46,7 @@ function resolveActor(claims: AuthClaims): Actor {
 
 export async function navigationRoutes(app: FastifyInstance): Promise<void> {
   const provider = new OsrmRoutingProvider(app.env.OSRM_BASE_URL, app.env.ROUTING_TIMEOUT_MS);
+  await geocodingRoutes(app);
 
   /**
    * Cria a rota até o destino e despacha para o agente.
@@ -229,6 +233,59 @@ export async function navigationRoutes(app: FastifyInstance): Promise<void> {
         recalculatedFrom: String(previous._id),
       });
       return reply.code(201).send({ ...serializeRoute(route), dispatched });
+    },
+  );
+}
+
+/**
+ * Busca de endereço e geocodificação reversa (issue #131).
+ *
+ * Registradas junto da navegação porque existem para alimentar o campo "destino": o
+ * agente busca no celular, o operador busca ao despachar pela central, e o toque no
+ * mapa vira endereço legível em vez de um par de coordenadas cruas.
+ */
+async function geocodingRoutes(app: FastifyInstance): Promise<void> {
+  const geocoder = new NominatimGeocodingProvider(
+    app.env.NOMINATIM_BASE_URL,
+    app.env.GEOCODING_USER_AGENT,
+    app.env.GEOCODING_COUNTRY_CODES,
+  );
+
+  /**
+   * `GET /operations/:id/geocode?q=&lat=&lng=`
+   *
+   * `lat`/`lng` enviesam o resultado para perto de quem busca — sem isso, "Rua Bahia"
+   * devolve acertos no país inteiro e a lista fica inútil em campo.
+   */
+  app.get('/operations/:id/geocode', { onRequest: [app.authenticate] }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    if (!assertOperationScope(request, reply, id)) return;
+
+    const query = geocodeQuerySchema.safeParse(request.query);
+    if (!query.success) return reply.code(400).send({ error: 'Busca inválida' });
+
+    const near =
+      query.data.lat != null && query.data.lng != null
+        ? { lat: query.data.lat, lng: query.data.lng }
+        : undefined;
+    return geocoder.search(query.data.q, near);
+  });
+
+  /** `GET /operations/:id/geocode/reverse?lat=&lng=` — coordenada → endereço. */
+  app.get(
+    '/operations/:id/geocode/reverse',
+    { onRequest: [app.authenticate] },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      if (!assertOperationScope(request, reply, id)) return;
+
+      const point = reverseGeocodeSchema.safeParse(request.query);
+      if (!point.success) return reply.code(400).send({ error: 'Coordenada inválida' });
+
+      const result = await geocoder.reverse(point.data);
+      // 200 com `null`: não achar endereço é resposta legítima (meio de mata, mar), não
+      // erro. O cliente cai no rótulo por coordenada sem tratar exceção.
+      return result;
     },
   );
 }
