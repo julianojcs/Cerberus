@@ -31,13 +31,53 @@ export interface GeocodeResult {
   lng: number;
   /** Granularidade do acerto (`house`, `road`, `suburb`…) — ordena a lista na UI. */
   kind?: string;
+  /** Número de porta, quando o mapa tem esse dado. Ausente ⇒ acerto no nível da via. */
+  houseNumber?: string;
+}
+
+/**
+ * Resposta da busca. É um envelope, e não uma lista pura, por causa do número de porta:
+ * quando o número pedido não existe no mapa, o provedor devolve a VIA inteira sem avisar
+ * — o operador pesquisa "Rua da Bahia 1601" e recebe três trechos de "Rua da Bahia",
+ * sem pista de que o 1601 foi descartado. O envelope carrega esse fato para a UI poder
+ * dizer em voz alta.
+ */
+export interface GeocodeResponse {
+  results: GeocodeResult[];
+  /** Número de porta detectado na consulta, se houver. */
+  houseNumber?: string;
+  /** `true` quando algum resultado realmente casou com esse número. */
+  houseNumberMatched: boolean;
 }
 
 export interface GeocodingProvider {
   readonly name: string;
   /** `near` enviesa o resultado; sem ele, "Rua Bahia" devolve o Brasil inteiro. */
-  search(query: string, near?: GeoPoint): Promise<GeocodeResult[]>;
+  search(query: string, near?: GeoPoint): Promise<GeocodeResponse>;
   reverse(point: GeoPoint): Promise<GeocodeResult | null>;
+}
+
+/**
+ * Separa o número de porta do nome da via. O Nominatim é bem mais preciso na consulta
+ * ESTRUTURADA (`street=1578 Avenida Paulista` acerta o 1578; o texto livre equivalente
+ * devolve o 1600, o número mapeado mais próximo) — mas para usá-la é preciso saber onde
+ * o nome termina e o número começa.
+ *
+ * A guarda dos dois termos existe porque em português o número às vezes É o nome da via:
+ * "Rua 7", "Quadra 12". Exigir nome com pelo menos duas palavras antes do número separa
+ * esse caso de "Rua da Bahia 1601". Nomes com número no meio ("Rua 15 de Novembro") não
+ * casam com o padrão, que ancora no fim da string.
+ */
+export function parseHouseNumber(query: string): { street: string; houseNumber?: string } {
+  // O sufixo de letra é comum no Brasil ("1212-A", "45B") e vai INTEIRO para o provedor:
+  // é assim que o `addr:housenumber` costuma estar no mapa, e cortar a letra pediria
+  // um número que não existe.
+  const match = query.match(/^(.+?)[,\s]+(\d{1,6}(?:\s?[-/]?\s?[A-Za-z])?)\s*$/);
+  if (!match) return { street: query.trim() };
+
+  const street = match[1]!.trim();
+  if (street.split(/\s+/).length < 2) return { street: query.trim() };
+  return { street, houseNumber: match[2] };
 }
 
 /* --------------------------------------------------- Limite de uso e cache */
@@ -149,6 +189,7 @@ function toResult(p: NominatimPlace): GeocodeResult | null {
     lat,
     lng,
     kind: p.addresstype ?? p.type,
+    houseNumber: p.address?.house_number,
   };
 }
 
@@ -203,17 +244,9 @@ export class NominatimGeocodingProvider implements GeocodingProvider {
     });
   }
 
-  async search(query: string, near?: GeoPoint): Promise<GeocodeResult[]> {
-    const key = `s:${query.toLowerCase()}:${near ? `${near.lat.toFixed(2)},${near.lng.toFixed(2)}` : ''}`;
-    const hit = cached(key);
-    if (hit) return hit;
-
-    const params = new URLSearchParams({
-      q: query,
-      format: 'jsonv2',
-      addressdetails: '1',
-      limit: '6',
-    });
+  /** Parâmetros comuns às duas formas de consulta (livre e estruturada). */
+  private baseParams(near?: GeoPoint): URLSearchParams {
+    const params = new URLSearchParams({ format: 'jsonv2', addressdetails: '1', limit: '6' });
     if (this.countryCodes) params.set('countrycodes', this.countryCodes);
     if (near) {
       params.set('viewbox', viewbox(near));
@@ -221,12 +254,54 @@ export class NominatimGeocodingProvider implements GeocodingProvider {
       // vez esconderia um destino legítimo logo além do limite arbitrário da caixa.
       params.set('bounded', '0');
     }
+    return params;
+  }
 
+  private async fetchPlaces(params: URLSearchParams): Promise<GeocodeResult[]> {
     const body = await this.call(`/search?${params.toString()}`);
     const places = Array.isArray(body) ? (body as NominatimPlace[]) : [];
-    const results = dedupe(places.map(toResult).filter((r): r is GeocodeResult => r !== null));
+    return dedupe(places.map(toResult).filter((r): r is GeocodeResult => r !== null));
+  }
+
+  async search(query: string, near?: GeoPoint): Promise<GeocodeResponse> {
+    const key = `s:${query.toLowerCase()}:${near ? `${near.lat.toFixed(2)},${near.lng.toFixed(2)}` : ''}`;
+    const { street, houseNumber } = parseHouseNumber(query);
+
+    const hit = cached(key);
+    if (hit) {
+      return {
+        results: hit,
+        houseNumber,
+        houseNumberMatched: hit.some((r) => r.houseNumber === houseNumber),
+      };
+    }
+
+    let results: GeocodeResult[] = [];
+    if (houseNumber) {
+      // Consulta estruturada primeiro: é a que acerta o número exato em vez do mapeado
+      // mais próximo. A cidade não vai junto porque não a conhecemos — o viés do
+      // `viewbox` já ancora a busca na região da operação.
+      const structured = this.baseParams(near);
+      structured.set('street', `${houseNumber} ${street}`);
+      results = await this.fetchPlaces(structured);
+    }
+
+    // Sem número, ou estruturada vazia: texto livre. Vale a pena mesmo quando o número
+    // não existe no mapa — devolve a via, e o agente ajusta o ponto exato no mapa.
+    if (results.length === 0) {
+      const free = this.baseParams(near);
+      free.set('q', query);
+      results = await this.fetchPlaces(free);
+    }
+
     remember(key, results);
-    return results;
+    return {
+      results,
+      houseNumber,
+      // Só é "casado" se algum resultado trouxer O número pedido. Sem isso a UI não tem
+      // como distinguir "achei a porta" de "achei a rua e joguei o número fora".
+      houseNumberMatched: results.some((r) => r.houseNumber === houseNumber),
+    };
   }
 
   async reverse(point: GeoPoint): Promise<GeocodeResult | null> {

@@ -283,6 +283,23 @@ export interface GeocodeResult {
   lng: number;
   /** Granularidade do acerto (`house`, `road`, `suburb`…). */
   kind?: string;
+  /** Número de porta, quando o mapa tem esse dado. Ausente ⇒ acerto no nível da via. */
+  houseNumber?: string;
+}
+
+/**
+ * Resposta da busca de endereço. É um envelope, e não uma lista pura, por causa do
+ * número de porta: quando o número pedido não está mapeado, o provedor devolve a VIA
+ * inteira sem avisar — pesquisar "Rua da Bahia 1601" traz três trechos de "Rua da
+ * Bahia" sem pista de que o 1601 foi descartado. Estes campos deixam a UI dizer isso
+ * em voz alta, em vez de o usuário concluir que o sistema ignorou o que ele digitou.
+ */
+export interface GeocodeResponse {
+  results: GeocodeResult[];
+  /** Número de porta detectado na consulta, se houver. */
+  houseNumber?: string;
+  /** `true` quando algum resultado realmente casou com esse número. */
+  houseNumberMatched: boolean;
 }
 
 /** Um passo (manobra) do trajeto, já com a instrução redigida em pt-BR. */

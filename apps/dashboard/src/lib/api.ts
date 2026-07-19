@@ -2,6 +2,7 @@ import type {
   AuditLogEntry,
   DeviceBlockInfo,
   E2eeKeyBackup,
+  GeocodeResponse,
   GeocodeResult,
   KeyDirectoryEntry,
   LoginResponse,
@@ -335,7 +336,7 @@ export const api = {
       params.set('lat', String(near.lat));
       params.set('lng', String(near.lng));
     }
-    return request<GeocodeResult[]>(`/operations/${opId}/geocode?${params.toString()}`);
+    return request<GeocodeResponse>(`/operations/${opId}/geocode?${params.toString()}`);
   },
   /** Coordenada → endereço. Devolve `null` quando não há endereço mapeado ali. */
   reverseGeocode: (opId: string, lat: number, lng: number) =>

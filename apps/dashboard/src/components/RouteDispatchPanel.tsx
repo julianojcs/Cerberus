@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import type { GeocodeResult, RouteInfo } from '@cerberus/shared';
+import type { GeocodeResponse, GeocodeResult, RouteInfo } from '@cerberus/shared';
 
 /**
  * Despacho de destino e acompanhamento das rotas ativas (issue #131).
@@ -48,7 +48,7 @@ export interface RouteDispatchPanelProps {
   onCancelRoute: (routeId: string) => Promise<void>;
   onFocusRoute?: (route: RouteInfo) => void;
   /** Busca de endereço. A página injeta para o painel não conhecer o cliente de API. */
-  onSearchAddress: (query: string) => Promise<GeocodeResult[]>;
+  onSearchAddress: (query: string) => Promise<GeocodeResponse>;
   /** Resultado escolhido vira o destino pendente (a página é dona desse estado). */
   onPickResult: (result: GeocodeResult) => void;
 }
@@ -75,9 +75,16 @@ export function RouteDispatchPanel({
   // Busca de endereço. `results === null` distingue "ainda não buscou" de "buscou e não
   // achou nada" — sem isso a lista vazia apareceria como erro logo ao abrir o painel.
   const [query, setQuery] = useState('');
-  const [results, setResults] = useState<GeocodeResult[] | null>(null);
+  const [response, setResponse] = useState<GeocodeResponse | null>(null);
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
+  const results = response?.results ?? null;
+  /**
+   * O número foi digitado mas nenhum resultado o trouxe. Acontece porque o
+   * OpenStreetMap não tem o número daquela via mapeado — não dá para inventá-lo, mas
+   * calar sobre isso faz parecer que o sistema ignorou o que o operador digitou.
+   */
+  const missingNumber = !!response?.houseNumber && !response.houseNumberMatched;
 
   /**
    * Dispara só ao SUBMETER, nunca a cada tecla. A política de uso do Nominatim proíbe
@@ -89,9 +96,9 @@ export function RouteDispatchPanel({
     setSearching(true);
     setSearchError(null);
     try {
-      setResults(await onSearchAddress(q));
+      setResponse(await onSearchAddress(q));
     } catch (err) {
-      setResults(null);
+      setResponse(null);
       setSearchError(err instanceof Error ? err.message : 'Falha na busca de endereço');
     } finally {
       setSearching(false);
@@ -102,7 +109,7 @@ export function RouteDispatchPanel({
     onPickResult(result);
     // O endereço vira o rótulo da rota: é o que a central lê depois no painel.
     setLabel(result.label);
-    setResults(null);
+    setResponse(null);
     setQuery('');
   }
 
@@ -204,7 +211,7 @@ export function RouteDispatchPanel({
                   type="button"
                   onClick={() => {
                     setQuery('');
-                    setResults(null);
+                    setResponse(null);
                     setSearchError(null);
                   }}
                   title="Limpar"
@@ -244,6 +251,16 @@ export function RouteDispatchPanel({
           </div>
 
           {searchError && <span style={{ fontSize: 12, color: '#ff7b72' }}>{searchError}</span>}
+
+          {missingNumber && (
+            // Sem este aviso o operador conclui que o sistema descartou o que digitou.
+            // O número não está no mapa; a via está — dá para escolher o trecho e
+            // ajustar o ponto exato clicando no mapa.
+            <span style={{ fontSize: 12, color: '#d29922', lineHeight: 1.4 }}>
+              O número {response?.houseNumber} não está mapeado nesta via. Escolha o trecho
+              abaixo e ajuste o ponto exato clicando no mapa.
+            </span>
+          )}
           {results !== null && results.length === 0 && !searching && (
             <span style={{ fontSize: 12, color: 'var(--muted)' }}>
               Nenhum endereço encontrado.

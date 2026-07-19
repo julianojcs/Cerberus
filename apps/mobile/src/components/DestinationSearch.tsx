@@ -9,7 +9,7 @@ import {
 } from 'react-native';
 import { searchAddresses } from '../services/navigation';
 import type { LatLng } from '../shared/geo';
-import type { GeocodeResult } from '../shared/contracts';
+import type { GeocodeResponse, GeocodeResult } from '../shared/contracts';
 
 /**
  * Busca de destino por endereço (issue #131).
@@ -31,7 +31,7 @@ import type { GeocodeResult } from '../shared/contracts';
 type SearchPhase =
   | { kind: 'idle' }
   | { kind: 'loading' }
-  | { kind: 'done'; results: GeocodeResult[] }
+  | { kind: 'done'; response: GeocodeResponse }
   | { kind: 'error'; message: string };
 
 /** O `kind` do provedor só serve para escolher o ícone — a lista já vem ordenada. */
@@ -65,7 +65,7 @@ export function DestinationSearch({
     if (!text || phase.kind === 'loading' || disabled) return;
     setPhase({ kind: 'loading' });
     try {
-      setPhase({ kind: 'done', results: await searchAddresses(text, near) });
+      setPhase({ kind: 'done', response: await searchAddresses(text, near) });
     } catch (e) {
       setPhase({
         kind: 'error',
@@ -124,17 +124,30 @@ export function DestinationSearch({
 
       {phase.kind === 'error' && <Text style={styles.errorText}>{phase.message}</Text>}
 
-      {phase.kind === 'done' && phase.results.length === 0 && (
+      {phase.kind === 'done' && phase.response.results.length === 0 && (
         <Text style={styles.stateText}>
           Nenhum resultado encontrado. Tente incluir o número, o bairro ou a cidade.
         </Text>
       )}
 
+      {/* Número digitado, mas nenhum acerto o trouxe: o OpenStreetMap não tem esse
+          número mapeado na via. Não dá para inventá-lo — mas calar faria o agente
+          concluir que o app descartou o que ele digitou. */}
+      {phase.kind === 'done' &&
+        !!phase.response.houseNumber &&
+        !phase.response.houseNumberMatched &&
+        phase.response.results.length > 0 && (
+          <Text style={styles.warningText}>
+            O número {phase.response.houseNumber} não está mapeado nesta via. Escolha o
+            trecho abaixo e ajuste o ponto exato tocando no mapa.
+          </Text>
+        )}
+
       {/* Lista simples (o servidor devolve no máximo 6 acertos já sem repetições): uma
           FlatList aqui viraria lista virtualizada dentro do ScrollView da tela, que o
           React Native adverte e mede errado. */}
       {phase.kind === 'done' &&
-        phase.results.map((result) => (
+        phase.response.results.map((result) => (
           <TouchableOpacity
             key={`${result.lat},${result.lng},${result.label}`}
             style={styles.item}
@@ -203,6 +216,8 @@ const styles = StyleSheet.create({
   stateText: { color: '#8b9aa8', fontSize: 13, marginTop: 12, lineHeight: 18 },
   loadingText: { color: '#8b9aa8', fontSize: 13, lineHeight: 18 },
   errorText: { color: '#e3b341', fontSize: 13, marginTop: 12, lineHeight: 18 },
+  // Âmbar: é aviso, não falha — a busca funcionou, o dado é que não existe no mapa.
+  warningText: { color: '#d29922', fontSize: 13, marginTop: 12, lineHeight: 18 },
   hint: { color: '#8b9aa8', fontSize: 12, marginTop: 10, lineHeight: 17 },
   item: {
     flexDirection: 'row',

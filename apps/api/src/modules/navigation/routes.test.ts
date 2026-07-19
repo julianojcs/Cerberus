@@ -537,10 +537,26 @@ describe('busca de endereço e geocodificação reversa', () => {
       headers: { authorization: `Bearer ${agentToken}` },
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json()[0]).toMatchObject({
+    expect(res.json().results[0]).toMatchObject({
       title: 'Rua Coral',
       subtitle: 'São Pedro · Belo Horizonte',
     });
+  });
+
+  it('sinaliza o número de porta que o mapa não conhece', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: true, json: async () => [NOMINATIM_PLACE] }),
+    );
+    const res = await app.inject({
+      method: 'GET',
+      url: `/operations/${operationId}/geocode?q=Rua%20Coral%201601&lat=-19.94&lng=-43.93`,
+      headers: { authorization: `Bearer ${agentToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+    // O app usa estes campos para avisar em vez de o número sumir em silêncio.
+    expect(res.json()).toMatchObject({ houseNumber: '1601', houseNumberMatched: false });
+    expect(res.json().results.length).toBeGreaterThan(0);
   });
 
   it('busca curta demais → 400 (não vale gastar chamada externa)', async () => {

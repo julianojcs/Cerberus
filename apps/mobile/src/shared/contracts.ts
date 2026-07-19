@@ -172,6 +172,22 @@ export interface GeocodeResult {
   lng: number;
   /** Granularidade do acerto (`house`, `road`, `suburb`…). */
   kind?: string;
+  /** Número de porta, quando o mapa tem esse dado. Ausente ⇒ acerto no nível da via. */
+  houseNumber?: string;
+}
+
+/**
+ * Resposta da busca. Envelope, e não lista pura, por causa do número de porta: quando o
+ * número pedido não está mapeado no OSM, o provedor devolve a VIA inteira sem avisar.
+ * Estes campos deixam a tela dizer isso, em vez de o agente concluir que o app ignorou
+ * o que ele digitou.
+ */
+export interface GeocodeResponse {
+  results: GeocodeResult[];
+  /** Número de porta detectado na consulta, se houver. */
+  houseNumber?: string;
+  /** `true` quando algum resultado realmente casou com esse número. */
+  houseNumberMatched: boolean;
 }
 
 export interface PositionSample {

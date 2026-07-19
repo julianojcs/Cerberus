@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   AgentCommandType,
   ROUTE_ARRIVAL_METERS,
+  type GeocodeResponse,
   type GeocodeResult,
   type PositionSample,
   type RouteInfo,
@@ -255,7 +256,7 @@ export async function requestRouteToDestination(
 export async function searchAddresses(
   query: string,
   near?: LatLng | null,
-): Promise<GeocodeResult[]> {
+): Promise<GeocodeResponse> {
   const c = requireContext();
   const params = [`q=${encodeURIComponent(query)}`];
   if (near) params.push(`lat=${near.lat}`, `lng=${near.lng}`);
@@ -264,8 +265,13 @@ export async function searchAddresses(
     `/operations/${c.operationId}/geocode?${params.join('&')}`,
   );
   if (!res.ok) throw new Error(await errorMessage(res, `Erro ${res.status} na busca de endereço`));
-  const body: unknown = await res.json();
-  return Array.isArray(body) ? (body as GeocodeResult[]) : [];
+  const body = (await res.json()) as GeocodeResponse | null;
+  // Envelope, não lista: ele carrega se o número de porta pedido foi realmente
+  // encontrado. Sem isso a tela mostraria a via e o agente concluiria que o número
+  // digitado foi ignorado.
+  return body && Array.isArray(body.results)
+    ? body
+    : { results: [], houseNumberMatched: false };
 }
 
 /**

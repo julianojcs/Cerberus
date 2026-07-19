@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { clearGeocodeCache, NominatimGeocodingProvider } from './geocoding.js';
+import { clearGeocodeCache, NominatimGeocodingProvider, parseHouseNumber } from './geocoding.js';
 
 /**
  * Contrato do Nominatim fixado por resposta REAL capturada do serviço público
@@ -64,6 +64,11 @@ function provider() {
   return new NominatimGeocodingProvider('http://stub', 'Cerberus/teste', 'br', 1000);
 }
 
+/** URLSearchParams codifica espaço como `+`; normaliza para a asserção ficar legível. */
+function readableUrl(url: unknown): string {
+  return decodeURIComponent(String(url)).replace(/\+/g, ' ');
+}
+
 function okJson(body: unknown) {
   return { ok: true, json: async () => body };
 }
@@ -78,11 +83,41 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe('separação do número de porta', () => {
+  it('separa o número no fim, com ou sem vírgula', () => {
+    expect(parseHouseNumber('Rua da Bahia 1601')).toEqual({
+      street: 'Rua da Bahia',
+      houseNumber: '1601',
+    });
+    expect(parseHouseNumber('Rua da Bahia, 1601')).toEqual({
+      street: 'Rua da Bahia',
+      houseNumber: '1601',
+    });
+    // Sufixo de letra vai inteiro: é assim que o número está no mapa.
+    expect(parseHouseNumber('Avenida Afonso Pena 1212-A')).toMatchObject({
+      street: 'Avenida Afonso Pena',
+      houseNumber: '1212-A',
+    });
+  });
+
+  it('não confunde número que É o nome da via', () => {
+    // "Rua 7" — sem nome suficiente antes do número, é o nome da via, não porta.
+    expect(parseHouseNumber('Rua 7')).toEqual({ street: 'Rua 7' });
+    expect(parseHouseNumber('Quadra 12')).toEqual({ street: 'Quadra 12' });
+    // Número no MEIO do nome não casa com o padrão, que ancora no fim.
+    expect(parseHouseNumber('Rua 15 de Novembro')).toEqual({ street: 'Rua 15 de Novembro' });
+  });
+
+  it('consulta sem número passa intacta', () => {
+    expect(parseHouseNumber('Praça da Liberdade')).toEqual({ street: 'Praça da Liberdade' });
+  });
+});
+
 describe('busca de endereço', () => {
   it('divide o endereço em duas linhas e dedupe trechos da mesma via', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(okJson(NOMINATIM_SEARCH)));
 
-    const results = await provider().search('Rua da Bahia 1200', { lat: -19.93, lng: -43.93 });
+    const { results } = await provider().search('Rua da Bahia 1200', { lat: -19.93, lng: -43.93 });
 
     // Três resultados do provedor, dois idênticos → sobram dois.
     expect(results).toHaveLength(2);
@@ -125,10 +160,83 @@ describe('busca de endereço', () => {
 
   it('provedor fora devolve lista vazia, não exceção', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('ECONNREFUSED')));
-    await expect(provider().search('Rua X')).resolves.toEqual([]);
+    await expect(provider().search('Rua X')).resolves.toMatchObject({ results: [] });
 
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 429 }));
-    await expect(provider().search('Rua Y')).resolves.toEqual([]);
+    await expect(provider().search('Rua Y')).resolves.toMatchObject({ results: [] });
+  });
+
+  /**
+   * Caso reportado em campo (19/07/2026): buscar "Rua da Bahia 1601" devolvia três
+   * trechos de "Rua da Bahia" sem número nenhum, e nada na tela dizia que o 1601 tinha
+   * sido descartado. O 1601 não está mapeado no OSM — não dá para inventá-lo —, mas o
+   * silêncio é o que fazia parecer que o sistema ignorou o que o usuário digitou.
+   */
+  describe('número de porta ausente no mapa', () => {
+    const ONLY_STREETS = [
+      {
+        lat: '-19.9307',
+        lon: '-43.9391',
+        addresstype: 'road',
+        address: { road: 'Rua da Bahia', suburb: 'Centro', city: 'Belo Horizonte' },
+      },
+    ];
+
+    it('tenta a consulta ESTRUTURADA antes do texto livre', async () => {
+      const fetchMock = vi.fn().mockResolvedValue(okJson(ONLY_STREETS));
+      vi.stubGlobal('fetch', fetchMock);
+
+      await provider().search('Rua da Bahia 1601', { lat: -19.93, lng: -43.93 });
+
+      // A estruturada acerta o número exato; o texto livre devolve o mais próximo.
+      expect(readableUrl(fetchMock.mock.calls[0]![0])).toContain('street=1601 Rua da Bahia');
+    });
+
+    it('avisa que o número não foi encontrado, em vez de descartá-lo em silêncio', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(okJson(ONLY_STREETS)));
+
+      const res = await provider().search('Rua da Bahia 1601', { lat: -19.93, lng: -43.93 });
+
+      expect(res.houseNumber).toBe('1601');
+      expect(res.houseNumberMatched).toBe(false);
+      // A via ainda vem: o agente escolhe o trecho e ajusta o ponto no mapa.
+      expect(res.results.length).toBeGreaterThan(0);
+    });
+
+    it('confirma o acerto quando o número existe no mapa', async () => {
+      const withNumber = [
+        {
+          lat: '-19.9245',
+          lon: '-43.9352',
+          addresstype: 'building',
+          address: {
+            house_number: '1200',
+            road: 'Rua da Bahia',
+            suburb: 'Centro',
+            city: 'Belo Horizonte',
+          },
+        },
+      ];
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(okJson(withNumber)));
+
+      const res = await provider().search('Rua da Bahia 1200', { lat: -19.93, lng: -43.93 });
+      expect(res.houseNumberMatched).toBe(true);
+      expect(res.results[0]!.title).toBe('Rua da Bahia, 1200');
+    });
+
+    it('cai no texto livre quando a estruturada não acha nada', async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(okJson([])) // estruturada vazia
+        .mockResolvedValueOnce(okJson(ONLY_STREETS)); // texto livre acha a via
+      vi.stubGlobal('fetch', fetchMock);
+
+      const res = await provider().search('Rua da Bahia 1601', { lat: -19.93, lng: -43.93 });
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(readableUrl(fetchMock.mock.calls[1]![0])).toContain('q=Rua da Bahia 1601');
+      expect(res.results.length).toBeGreaterThan(0);
+    });
   });
 
   it('reaproveita o cache em vez de repetir a chamada externa', async () => {
