@@ -74,6 +74,54 @@ export function buildRoutePath(geometry: [number, number][]): RoutePath {
   return { points, suffix };
 }
 
+/** Onde está quem percorreu N metros do traçado, e para onde aponta. */
+export interface PathCursor {
+  pos: LatLng;
+  /** Rumo do segmento atual — a direção em que o trajeto segue naquele ponto. */
+  heading: number;
+  /** `true` quando a distância pedida alcançou (ou passou) o fim do traçado. */
+  done: boolean;
+}
+
+/**
+ * Inverso do `progressAlongPath`: em vez de "onde estou em relação ao traçado", devolve
+ * "onde eu estaria depois de andar N metros por ele". Existe para a SIMULAÇÃO de
+ * deslocamento — sem sair andando na rua, é assim que se gera uma sequência de posições
+ * fisicamente coerente (na via, com rumo real) para exercitar o turn-by-turn.
+ *
+ * Usa o `suffix` já pré-computado pelo `buildRoutePath`: `suffix[i]` é o que falta de
+ * `points[i]` até o fim, então o total é `suffix[0]` e a busca do segmento é uma
+ * varredura simples sobre um vetor decrescente.
+ */
+export function pointAtDistance(path: RoutePath, metersFromStart: number): PathCursor {
+  const { points, suffix } = path;
+  if (points.length === 0) return { pos: { lat: 0, lng: 0 }, heading: 0, done: true };
+  if (points.length === 1) return { pos: points[0], heading: 0, done: true };
+
+  const total = suffix[0];
+  if (metersFromStart >= total) {
+    const last = points[points.length - 1];
+    const prev = points[points.length - 2];
+    return { pos: last, heading: bearingDegrees(prev, last), done: true };
+  }
+  const travelled = Math.max(0, metersFromStart);
+  const remaining = total - travelled;
+
+  // `suffix` decresce: o segmento é o primeiro cujo fim já passou do que resta.
+  let i = 0;
+  while (i < points.length - 2 && suffix[i + 1] > remaining) i += 1;
+
+  const a = points[i];
+  const b = points[i + 1];
+  const segLen = suffix[i] - suffix[i + 1];
+  const t = segLen > 0 ? (suffix[i] - remaining) / segLen : 0;
+  return {
+    pos: { lat: a.lat + (b.lat - a.lat) * t, lng: a.lng + (b.lng - a.lng) * t },
+    heading: bearingDegrees(a, b),
+    done: false,
+  };
+}
+
 export interface PathProgress {
   /** Vértice inicial do segmento mais próximo da posição. */
   index: number;

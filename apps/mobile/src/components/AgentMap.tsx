@@ -134,6 +134,29 @@ html,body,#map{height:100%;margin:0;background:#0b0f14}
       try { map.fitBounds(routeCasing.getBounds(), { padding: [30, 30] }); fitted = true; } catch (e) {}
     }
   };
+  // Ponto escolhido mas AINDA NÃO confirmado (toque no mapa ou acerto da busca). É um
+  // marcador à parte do destino da rota (🏁): enquanto o agente lê o diálogo de
+  // confirmação, uma rota anterior pode continuar ativa na tela, e misturar os dois
+  // marcadores faria parecer que a rota já mudou de destino.
+  var pinMarker = null;
+  window.__pin = function (pin, center) {
+    if (!pin) {
+      if (pinMarker) { map.removeLayer(pinMarker); pinMarker = null; }
+      return;
+    }
+    if (!pinMarker) {
+      pinMarker = L.marker([pin.lat, pin.lng], {
+        icon: L.divIcon({ className: '', html: '<div class="dest">📍</div>', iconSize: [30, 30], iconAnchor: [15, 28] })
+      }).addTo(map);
+    } else {
+      pinMarker.setLatLng([pin.lat, pin.lng]);
+    }
+    pinMarker.unbindTooltip();
+    if (pin.label) pinMarker.bindTooltip(pin.label, { direction: 'top', offset: [0, -30] });
+    // Só a busca pede enquadramento: quem tocou no mapa já está olhando para o ponto, e
+    // mover o mapa sob o dedo dele seria desorientador.
+    if (center) { map.setView([pin.lat, pin.lng], Math.max(map.getZoom(), 16)); fitted = true; }
+  };
   window.__pick = function (on) { pickMode = !!on; };
   map.on('click', function (e) {
     if (!pickMode || !window.ReactNativeWebView) return;
@@ -157,6 +180,16 @@ html,body,#map{height:100%;margin:0;background:#0b0f14}
 </body>
 </html>`;
 
+/**
+ * Ponto marcado à espera de confirmação: o toque no mapa ou o acerto escolhido na busca
+ * de endereço. `center` enquadra o mapa nele — verdadeiro para a busca (o ponto pode
+ * estar fora da tela), falso para o toque.
+ */
+export interface DestinationPin extends TrackPoint {
+  label?: string;
+  center?: boolean;
+}
+
 /** Rota planejada a desenhar. `path` já vem em `{lat,lng}` (transposto em shared/geo). */
 export interface PlannedRoute {
   /** Identidade do traçado: quando muda, o mapa reenquadra o trajeto inteiro. */
@@ -174,6 +207,7 @@ export function AgentMap({
   heading = null,
   focus = null,
   route = null,
+  pin = null,
   pickMode = false,
   onMapTap,
 }: {
@@ -185,6 +219,8 @@ export function AgentMap({
   /** Centralizar o mapa na posição do agente; `nonce` muda a cada acionamento. */
   focus?: { lat: number; lng: number; nonce: number } | null;
   route?: PlannedRoute | null;
+  /** Destino candidato, ainda não confirmado. `null` remove o marcador. */
+  pin?: DestinationPin | null;
   /** Habilita a escolha de destino por toque no mapa (Fase 6b). */
   pickMode?: boolean;
   onMapTap?: (point: TrackPoint) => void;
@@ -196,6 +232,7 @@ export function AgentMap({
   // rota (re-render, `ready` do WebView) não pode mexer no zoom do agente.
   const routeIdRef = useRef<string | null>(null);
   const routeFitRef = useRef(0);
+  const pinKeyRef = useRef<string | null>(null);
 
   const push = useCallback(() => {
     if (!readyRef.current) return;
@@ -220,6 +257,18 @@ export function AgentMap({
       }, ${routeFitRef.current}); true;`,
     );
   }, [route]);
+
+  const pushPin = useCallback(() => {
+    if (!readyRef.current) return;
+    // O enquadramento só acontece quando o ponto é OUTRO: re-render (ou o `ready` do
+    // WebView reenviando tudo) não pode roubar o zoom/centro que o agente ajustou.
+    const key = pin ? `${pin.lat},${pin.lng}` : null;
+    const moved = key !== pinKeyRef.current;
+    pinKeyRef.current = key;
+    ref.current?.injectJavaScript(
+      `window.__pin(${JSON.stringify(pin)}, ${Boolean(pin?.center) && moved}); true;`,
+    );
+  }, [pin]);
 
   const pushPickMode = useCallback(() => {
     if (!readyRef.current) return;
@@ -246,6 +295,10 @@ export function AgentMap({
   }, [pushRoute]);
 
   useEffect(() => {
+    pushPin();
+  }, [pushPin]);
+
+  useEffect(() => {
     pushPickMode();
   }, [pushPickMode]);
 
@@ -256,6 +309,7 @@ export function AgentMap({
       push();
       pushFocus();
       pushRoute();
+      pushPin();
       pushPickMode();
       return;
     }

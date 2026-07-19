@@ -154,6 +154,26 @@ export interface RouteInfo {
   createdBy?: string;
 }
 
+/**
+ * Acerto da busca de endereço (`GET /operations/:id/geocode`) e da geocodificação
+ * reversa. DUAS linhas de propósito, como nos apps de navegação do mercado: a via em
+ * destaque e a localidade em tom secundário. O `display_name` cru do provedor tem oito
+ * níveis administrativos ("…, Mesorregião, Região Sudeste, Brasil") e não cabe numa
+ * lista de celular — quem fatia é o servidor, o app só exibe.
+ */
+export interface GeocodeResult {
+  /** Linha principal: via com número, ou o nome do lugar. */
+  title: string;
+  /** Linha secundária: bairro · cidade. Pode ser vazia. */
+  subtitle: string;
+  /** `title` + `subtitle` — é o rótulo com que a rota nasce e aparece na central. */
+  label: string;
+  lat: number;
+  lng: number;
+  /** Granularidade do acerto (`house`, `road`, `suburb`…). */
+  kind?: string;
+}
+
 export interface PositionSample {
   lat: number;
   lng: number;

@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import bcrypt from 'bcryptjs';
 import type { FastifyInstance } from 'fastify';
@@ -504,6 +504,103 @@ describe('acompanhamento na ponte de ingest (chegada e desvio)', () => {
       { $set: { status: 'cancelada' } },
     );
     await expect(track({ lng: -43.9, lat: -19.9 })).resolves.toBeUndefined();
+  });
+});
+
+/**
+ * Endpoints de geocodificação. Cobrem a camada de REDE — o adaptador em si tem testes
+ * próprios em `geocoding.test.ts`. Vale separado porque o app assume este formato: se a
+ * serialização mudar, é aqui que quebra, não lá.
+ */
+describe('busca de endereço e geocodificação reversa', () => {
+  const NOMINATIM_PLACE = {
+    lat: '-19.9481',
+    lon: '-43.9377',
+    addresstype: 'road',
+    display_name: 'Rua Coral, São Pedro, Belo Horizonte, Minas Gerais, Brasil',
+    address: { road: 'Rua Coral', suburb: 'São Pedro', city: 'Belo Horizonte' },
+  };
+
+  beforeEach(async () => {
+    const { clearGeocodeCache } = await import('./geocoding.js');
+    clearGeocodeCache();
+  });
+
+  it('busca devolve a lista em duas linhas', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: true, json: async () => [NOMINATIM_PLACE] }),
+    );
+    const res = await app.inject({
+      method: 'GET',
+      url: `/operations/${operationId}/geocode?q=Rua%20Coral&lat=-19.94&lng=-43.93`,
+      headers: { authorization: `Bearer ${agentToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()[0]).toMatchObject({
+      title: 'Rua Coral',
+      subtitle: 'São Pedro · Belo Horizonte',
+    });
+  });
+
+  it('busca curta demais → 400 (não vale gastar chamada externa)', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/operations/${operationId}/geocode?q=ab`,
+      headers: { authorization: `Bearer ${agentToken}` },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('reversa devolve o endereço do ponto', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: true, json: async () => NOMINATIM_PLACE }),
+    );
+    const res = await app.inject({
+      method: 'GET',
+      url: `/operations/${operationId}/geocode/reverse?lat=-19.9481&lng=-43.9377`,
+      headers: { authorization: `Bearer ${agentToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().label).toBe('Rua Coral · São Pedro · Belo Horizonte');
+  });
+
+  it('ponto sem endereço serializa `null` com 200, não erro', async () => {
+    // Meio de mata, mar, área não mapeada. O app precisa distinguir isto de falha —
+    // ele cai no rótulo por coordenada e segue permitindo definir o destino.
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
+    const res = await app.inject({
+      method: 'GET',
+      url: `/operations/${operationId}/geocode/reverse?lat=0&lng=0`,
+      headers: { authorization: `Bearer ${agentToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toBeNull();
+  });
+
+  it('coordenada fora de faixa → 400', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/operations/${operationId}/geocode/reverse?lat=999&lng=0`,
+      headers: { authorization: `Bearer ${agentToken}` },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('exige autenticação e respeita o escopo da operação', async () => {
+    const anon = await app.inject({
+      method: 'GET',
+      url: `/operations/${operationId}/geocode?q=Rua%20Coral`,
+    });
+    expect(anon.statusCode).toBe(401);
+
+    const outOfScope = await app.inject({
+      method: 'GET',
+      url: '/operations/000000000000000000000000/geocode?q=Rua%20Coral',
+      headers: { authorization: `Bearer ${adminToken}` },
+    });
+    expect(outOfScope.statusCode).toBe(403);
   });
 });
 

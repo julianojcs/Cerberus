@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   AgentCommandType,
   ROUTE_ARRIVAL_METERS,
+  type GeocodeResult,
   type PositionSample,
   type RouteInfo,
 } from '../shared/contracts';
@@ -173,9 +174,11 @@ async function fetchWithTimeout(
 }
 
 async function errorMessage(res: Response, fallback: string): Promise<string> {
-  const body = (await res.json().catch(() => null)) as
-    | { error?: string; message?: string; statusCode?: number }
-    | null;
+  const body = (await res.json().catch(() => null)) as {
+    error?: string;
+    message?: string;
+    statusCode?: number;
+  } | null;
 
   // Os erros da NOSSA API vêm como `{ error: '<texto pt-BR>' }` e são para o agente ler.
   // Já o envelope PADRÃO do Fastify (rota inexistente, erro não tratado) traz
@@ -234,6 +237,57 @@ export async function requestRouteToDestination(
   // chegar (o POST responde 201 mesmo com o MQTT fora) e a rota já está em mãos.
   await applyRoute(route, 'silent');
   return route;
+}
+
+// --- Geocodificação (busca de endereço e o inverso) ---
+
+/**
+ * Busca de endereço. `near` é a posição ATUAL do agente e vai SEMPRE que existir: sem
+ * viés de proximidade, "Rua Bahia" devolve acertos no país inteiro e a lista fica
+ * inútil para quem está a dois quarteirões do destino.
+ *
+ * **Não chamar a cada tecla digitada.** A política de uso do Nominatim proíbe
+ * expressamente busca por digitação (autocomplete), e o servidor serializa as chamadas
+ * num teto de 1 req/s para o processo INTEIRO — um debounce local não contornaria isso,
+ * só encheria a fila e atrasaria a busca de todo mundo na mesma API. A busca dispara no
+ * SUBMIT (botão ou tecla de busca do teclado). Não "melhorar" isto para autocomplete.
+ */
+export async function searchAddresses(
+  query: string,
+  near?: LatLng | null,
+): Promise<GeocodeResult[]> {
+  const c = requireContext();
+  const params = [`q=${encodeURIComponent(query)}`];
+  if (near) params.push(`lat=${near.lat}`, `lng=${near.lng}`);
+  const res = await fetchWithTimeout(
+    c.token,
+    `/operations/${c.operationId}/geocode?${params.join('&')}`,
+  );
+  if (!res.ok) throw new Error(await errorMessage(res, `Erro ${res.status} na busca de endereço`));
+  const body: unknown = await res.json();
+  return Array.isArray(body) ? (body as GeocodeResult[]) : [];
+}
+
+/**
+ * Coordenada → endereço, para o toque no mapa mostrar "Rua X, 100 · Centro" em vez de
+ * um par de números. NUNCA lança: o endereço é um enfeite do diálogo de confirmação, e
+ * o agente não pode perder a capacidade de definir destino porque o geocodificador
+ * está fora do ar. `null` (resposta legítima do servidor em meio de mata) e falha de
+ * rede colapsam no mesmo caso — quem chama cai no rótulo por coordenada.
+ */
+export async function reverseGeocode(point: LatLng): Promise<GeocodeResult | null> {
+  try {
+    const c = requireContext();
+    const res = await fetchWithTimeout(
+      c.token,
+      `/operations/${c.operationId}/geocode/reverse?lat=${point.lat}&lng=${point.lng}`,
+    );
+    if (!res.ok) return null;
+    const body: unknown = await res.json();
+    return body && typeof body === 'object' ? (body as GeocodeResult) : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -366,7 +420,9 @@ function onPosition(sample: PositionSample): void {
 
   // Quanto FALTA NO TRAÇADO — é isto que decide a chegada, não a linha reta até o
   // destino. Sem traçado utilizável (fallback degradado), a reta é tudo que há.
-  const remainingOnPath = path ? progressAlongPath(path, pos).remainingMeters : straightToDestination;
+  const remainingOnPath = path
+    ? progressAlongPath(path, pos).remainingMeters
+    : straightToDestination;
 
   if (route.fallback || !path) {
     // Provedor de rotas fora: o traçado é a reta origem→destino. Não existe manobra

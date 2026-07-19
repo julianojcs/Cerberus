@@ -32,18 +32,28 @@ import {
   getLastSample,
   initTracking,
   setShareLocation,
+  startSimulatedMovement,
   startTracking,
+  stopSimulatedMovement,
   stopTracking,
   subscribePositions,
+  subscribeSimulation,
 } from '../services/geolocation';
 import { outboxSize } from '../services/outbox';
 import { pingSession } from '../services/heartbeat';
 import { pickPhoto, uploadPhoto, type PickedPhoto } from '../services/media';
-import { AgentMap, type PlannedRoute, type TrackPoint } from '../components/AgentMap';
+import {
+  AgentMap,
+  type DestinationPin,
+  type PlannedRoute,
+  type TrackPoint,
+} from '../components/AgentMap';
+import { DestinationSearch } from '../components/DestinationSearch';
 import { NavigationBar } from '../components/NavigationBar';
 import {
   cancelActiveRoute,
   requestRouteToDestination,
+  reverseGeocode,
   startNavigation,
   subscribeNavigation,
   type NavigationState,
@@ -51,7 +61,7 @@ import {
 import { isMuted, setMuted } from '../services/speech';
 import { toLatLngPath } from '../shared/geo';
 import { formatClock, formatDistance, formatDuration } from '../shared/format';
-import type { PositionSample } from '../shared/contracts';
+import type { GeocodeResult, PositionSample } from '../shared/contracts';
 
 /** Máximo de pontos mantidos na trilha em memória. */
 const MAX_TRACK = 500;
@@ -92,11 +102,17 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
   const [operationName, setOperationName] = useState<string | null>(null);
   // --- Navegação por rota (issue #131) ---
   const [nav, setNav] = useState<NavigationState | null>(null);
+  /** Simulação de deslocamento — só existe em build de desenvolvimento (`__DEV__`). */
+  const [simulating, setSimulating] = useState(false);
   const [muted, setMutedState] = useState(isMuted());
   // Escolha do destino pelo próprio agente (Fase 6b): enquanto ligado, o toque no
   // mapa vira destino em vez de gesto solto.
   const [picking, setPicking] = useState(false);
   const [creatingRoute, setCreatingRoute] = useState(false);
+  // Destino candidato (toque no mapa ou acerto da busca), à espera de confirmação.
+  const [pin, setPin] = useState<DestinationPin | null>(null);
+  // Geocodificação reversa em curso — o diálogo do toque espera o endereço.
+  const [resolvingAddress, setResolvingAddress] = useState(false);
   // A chegada é anunciada UMA vez — o estado `arrived` continua verdadeiro depois.
   const arrivalAlerted = useRef(false);
 
@@ -145,6 +161,19 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
       stop();
     };
   }, [session.token, operationId, agentId]);
+
+  /**
+   * Simulação de deslocamento (desenvolvimento): reflete o estado e, ao sair da tela,
+   * ENCERRA. Deixá-la viva fora daqui seguiria publicando posição sintética na central
+   * sem ninguém à vista para desligar.
+   */
+  useEffect(() => {
+    const unsubscribe = subscribeSimulation(setSimulating);
+    return () => {
+      unsubscribe();
+      stopSimulatedMovement();
+    };
+  }, []);
 
   // Chegada ao destino: alerta uma única vez por rota (o `arrived` permanece ligado).
   useEffect(() => {
@@ -286,22 +315,32 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
     setMutedState(next);
   }
 
-  // Fase 6b: o agente toca no mapa e confirma. O servidor traça a partir da ÚLTIMA
-  // POSIÇÃO CONHECIDA dele — se ele nunca publicou (compartilhamento desligado desde
-  // o início), a API responde 409 e a mensagem dela é repassada como está.
-  function handleMapTap(point: TrackPoint) {
-    if (!picking || creatingRoute || !operationId) return;
+  /**
+   * Confirmação ÚNICA dos dois caminhos de escolha de destino — o toque no mapa e o
+   * acerto da busca por endereço terminam aqui. O servidor traça a partir da ÚLTIMA
+   * POSIÇÃO CONHECIDA do agente: se ele nunca publicou (compartilhamento desligado
+   * desde o início), a API responde 409 e a mensagem dela é repassada como está.
+   *
+   * `label` vem da geocodificação; sem ela sobra a coordenada — o fluxo de rota nunca
+   * depende do geocodificador estar de pé.
+   */
+  function confirmDestination(point: TrackPoint, label?: string) {
+    const description = label ?? `${point.lat.toFixed(5)}, ${point.lng.toFixed(5)}`;
     Alert.alert(
       'Definir destino',
-      `Traçar rota até ${point.lat.toFixed(5)}, ${point.lng.toFixed(5)}?`,
+      `Traçar rota até ${description}?`,
       [
-        { text: 'Cancelar', style: 'cancel' },
+        { text: 'Cancelar', style: 'cancel', onPress: () => setPin(null) },
         {
           text: 'Traçar rota',
           onPress: () => {
             setCreatingRoute(true);
-            void requestRouteToDestination(point, 'Destino escolhido no app')
-              .then(() => setPicking(false))
+            void requestRouteToDestination(point, label ?? 'Destino escolhido no app')
+              .then(() => {
+                setPicking(false);
+                // A partir daqui quem marca o ponto é o destino da rota (🏁).
+                setPin(null);
+              })
               .catch((e: unknown) =>
                 Alert.alert(
                   'Falha',
@@ -312,7 +351,37 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
           },
         },
       ],
+      // Android: sem isto o toque fora do diálogo o fecha SEM callback e o marcador
+      // ficaria órfão no mapa, sugerindo um destino que ninguém confirmou.
+      { cancelable: false },
     );
+  }
+
+  // Fase 6b: o agente toca no mapa. O ponto é marcado na hora e o endereço é buscado
+  // por geocodificação reversa para o diálogo dizer "Rua X, 100" em vez de um par de
+  // números. `reverseGeocode` NUNCA lança — sem endereço, cai na coordenada.
+  function handleMapTap(point: TrackPoint) {
+    if (!picking || creatingRoute || resolvingAddress || !operationId) return;
+    setPin(point);
+    setResolvingAddress(true);
+    void reverseGeocode(point)
+      .then((address) => {
+        if (address) setPin({ ...point, label: address.label });
+        confirmDestination(point, address?.label);
+      })
+      .finally(() => setResolvingAddress(false));
+  }
+
+  /**
+   * Acerto escolhido na busca por endereço. Já vem com rótulo e coordenada do provedor,
+   * então não há reversa a fazer: marca (enquadrando, porque o ponto pode estar fora da
+   * tela) e cai direto na confirmação.
+   */
+  function handleSearchSelect(result: GeocodeResult) {
+    if (creatingRoute || !operationId) return;
+    const point: TrackPoint = { lat: result.lat, lng: result.lng };
+    setPin({ ...point, label: result.label, center: true });
+    confirmDestination(point, result.label);
   }
 
   function handleCancelRoute() {
@@ -602,6 +671,7 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
               heading={pos?.heading ?? null}
               focus={focus}
               route={plannedRoute}
+              pin={pin}
               pickMode={picking}
               onMapTap={handleMapTap}
             />
@@ -619,21 +689,64 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
           <TouchableOpacity
             style={[styles.destBtn, picking && styles.destBtnActive]}
             onPress={() => setPicking((p) => !p)}
-            disabled={creatingRoute || !operationId}
+            disabled={creatingRoute || resolvingAddress || !operationId}
           >
             <Text style={styles.destBtnText}>
               {creatingRoute
                 ? 'Traçando rota…'
-                : picking
-                  ? 'Toque no mapa para escolher o destino (toque aqui para desistir)'
-                  : '📍 Definir destino no mapa'}
+                : resolvingAddress
+                  ? 'Identificando o endereço…'
+                  : picking
+                    ? 'Toque no mapa para escolher o destino (toque aqui para desistir)'
+                    : '📍 Definir destino no mapa'}
             </Text>
           </TouchableOpacity>
+
+          {/* Segundo caminho para o mesmo destino: buscar por endereço em vez de mirar
+              no mapa. O toque continua valendo — quem sabe o nome da rua digita, quem
+              conhece o ponto de referência aponta. */}
+          <DestinationSearch
+            near={pos ? { lat: pos.lat, lng: pos.lng } : null}
+            onSelect={handleSearchSelect}
+            disabled={creatingRoute || resolvingAddress || !operationId}
+          />
 
           <View style={[styles.row, { marginTop: 12 }]}>
             <Text style={styles.compassLabel}>Girar com o movimento (bússola)</Text>
             <Switch value={headingUp} onValueChange={setHeadingUp} />
           </View>
+
+          {/* Simulação de deslocamento — SÓ em build de desenvolvimento. Percorre a rota
+              ativa gerando posições, para exercitar o turn-by-turn (avanço de passo,
+              locução, chegada) sem sair andando. O GPS real fica suspenso enquanto roda. */}
+          {__DEV__ && (
+            <>
+              <View style={[styles.row, { marginTop: 12 }]}>
+                <Text style={styles.compassLabel}>Simular deslocamento (dev)</Text>
+                <Switch
+                  value={simulating}
+                  disabled={!nav?.route}
+                  onValueChange={(on) => {
+                    if (!on) {
+                      stopSimulatedMovement();
+                      return;
+                    }
+                    const geometry = nav?.route?.geometry;
+                    if (geometry) {
+                      startSimulatedMovement({ operationId, agentId }, geometry, { speedKmh: 40 });
+                    }
+                  }}
+                />
+              </View>
+              <Text style={styles.hint}>
+                {!nav?.route
+                  ? 'Defina um destino para poder simular o percurso.'
+                  : simulating
+                    ? 'Percorrendo a rota a 40 km/h. O GPS real está suspenso; a central recebe estas posições.'
+                    : 'Percorre a rota ativa gerando posições, sem precisar se deslocar.'}
+              </Text>
+            </>
+          )}
           <Text style={styles.hint}>
             {nav?.route
               ? `Rota ${nav.route.source === 'central' ? 'despachada pela central' : 'definida por você'} · ${formatDistance(nav.route.distanceMeters)} · ${formatDuration(nav.route.durationSec)} previstos. O traçado já está no aparelho e continua valendo sem rede.`
@@ -687,6 +800,7 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
                   heading={pos?.heading ?? null}
                   focus={focus}
                   route={plannedRoute}
+                  pin={pin}
                   pickMode={picking}
                   onMapTap={handleMapTap}
                 />
