@@ -44,6 +44,19 @@ const envSchema = z.object({
   GEOCODING_USER_AGENT: z.string().default('Cerberus/1.0 (contato: devsrnbtlls@gmail.com)'),
   /** Restringe a busca a países (ISO 3166-1 alpha-2). Vazio = mundo todo. */
   GEOCODING_COUNTRY_CODES: z.string().default('br'),
+
+  /**
+   * Controle da simulação pelo dashboard (issue #134). Habilita os endpoints que fazem
+   * a API GERAR telemetria falsa (só para a operação SIMULAÇÃO, só admin). É uma trava
+   * de segurança: em produção REAL isto fica desligado, para o servidor nunca poder
+   * forjar posição de agente. Ligar apenas em dev/homologação (`SIMULATION_ENABLED=true`).
+   * Coerção explícita: só `'true'`/`'1'` habilitam — `z.coerce.boolean('false')` daria
+   * `true` (string não-vazia), então NÃO usar coerce aqui.
+   */
+  SIMULATION_ENABLED: z
+    .string()
+    .optional()
+    .transform((v) => v === 'true' || v === '1'),
 });
 
 export type Env = z.infer<typeof envSchema>;

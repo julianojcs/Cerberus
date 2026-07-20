@@ -79,6 +79,7 @@ import { resolveColor, resolveStrongColor } from '@/lib/tailwind-colors';
 import { buildRoutes, assignAgentColors, splitSegments, type Route } from '@/lib/routes';
 import { MapEffectsMenu } from '@/components/MapEffectsMenu';
 import { RouteDispatchPanel } from '@/components/RouteDispatchPanel';
+import { SimulationControl } from '@/components/SimulationControl';
 
 /** Histórico buscado para montar as rotas por agente. */
 const HISTORY_LIMIT = 5000;
@@ -2103,6 +2104,8 @@ export default function LiveOperationPage() {
           >
             <h3 style={{ margin: 0 }}>Agentes ({agentList.length})</h3>
           </div>
+          {/* Controle da simulação — só aparece na operação SIMULAÇÃO (auto-gate pela API). */}
+          <SimulationControl operationId={operationId} />
           <p className="muted" style={{ fontSize: 12, margin: '8px 0' }}>
             A <strong>trilha ao vivo</strong> (cor do agente) cresce em tempo real durante o
             deslocamento. As <strong>rotas</strong> abaixo são o histórico — selecione-as e ajuste o

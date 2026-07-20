@@ -195,6 +195,17 @@ export const api = {
     }),
   latestPositions: (operationId: string) =>
     request<LatestPosition[]>(`/operations/${operationId}/positions/latest`),
+
+  // --- Controle da simulação (issue #134) — só autorizado na operação SIMULAÇÃO. O GET
+  // serve de gate: se a API recusar (403/404), o componente de controle nem aparece.
+  simulationStatus: (operationId: string) =>
+    request<SimulationStatus>(`/operations/${operationId}/simulation`),
+  startSimulation: (operationId: string) =>
+    request<SimulationStatus>(`/operations/${operationId}/simulation/start`, { method: 'POST' }),
+  pauseSimulation: (operationId: string) =>
+    request<SimulationStatus>(`/operations/${operationId}/simulation/pause`, { method: 'POST' }),
+  stopSimulation: (operationId: string) =>
+    request<SimulationStatus>(`/operations/${operationId}/simulation/stop`, { method: 'POST' }),
   // Histórico da operação (trilha). Vem ordenado do mais recente para o mais antigo.
   positionHistory: (operationId: string, limit = 2000) =>
     request<LatestPosition[]>(`/operations/${operationId}/positions?limit=${limit}`),
@@ -352,6 +363,14 @@ export interface Settings {
   connectRoutes: boolean;
   /** Intervalo (min) sem transmissão que quebra a rota em segmentos. */
   maxGapMinutes: number;
+}
+
+/** Estado do controle da simulação hospedada na API (issue #134). */
+export interface SimulationStatus {
+  running: boolean;
+  paused: boolean;
+  agentIds: string[];
+  startedAt: string | null;
 }
 
 /** Forma de uma zona. Sem `shape` ⇒ círculo (retrocompat). */

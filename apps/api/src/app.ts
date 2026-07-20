@@ -18,6 +18,7 @@ import { mediaRoutes } from './modules/media/routes.js';
 import { geofenceRoutes } from './modules/geofences/routes.js';
 import { navigationRoutes } from './modules/navigation/routes.js';
 import { settingsRoutes } from './modules/settings/routes.js';
+import { simulationRoutes } from './modules/simulation/routes.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -83,6 +84,7 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
   await app.register(geofenceRoutes);
   await app.register(navigationRoutes);
   await app.register(settingsRoutes);
+  await app.register(simulationRoutes);
 
   return app;
 }
