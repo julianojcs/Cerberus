@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 32" width="27" height="29" role="img" aria-label="Destino da rota">
+  <!-- Animação embutida: roda mesmo carregado como <img>. A flâmula balança (skew + leve
+       compressão) pivotando no mastro; o mastro e a ponteira ficam parados. -->
+  <style>
+    .pennant {
+      transform-box: fill-box;
+      transform-origin: left center;
+      animation: flagwave 1.8s ease-in-out infinite;
+    }
+    @keyframes flagwave {
+      0%, 100% { transform: skewY(0deg) scaleX(1); }
+      25%      { transform: skewY(-5deg) scaleX(0.94); }
+      50%      { transform: skewY(1.5deg) scaleX(1); }
+      75%      { transform: skewY(5deg) scaleX(0.94); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .pennant { animation: none; }
+    }
+  </style>
+  <!-- Mastro inclinado pra trás + ponteira -->
+  <line x1="15.2" y1="30.5" x2="12.8" y2="3.2" stroke="#22303c" stroke-width="2.2" stroke-linecap="round" />
+  <circle cx="12.7" cy="3" r="1.7" fill="#22303c" />
+  <!-- Flâmula triangular vermelha -->
+  <path class="pennant" d="M13.4 4.2 L28.5 8 L13.4 11.6 Z" fill="#e5231b" stroke="#ffffff" stroke-width="1"
+    stroke-linejoin="round" />
+</svg>
