@@ -23,16 +23,29 @@
  * BROKER: prefere `SIM_MQTT_*` (aponta para o HiveMQ, para o dashboard/ponte da nuvem
  * verem os agentes); se ausente, cai em `MQTT_*` e por fim `mqtt://localhost:1883`.
  * No modo `--roster`, os agentes/equipes vêm de `sim-roster.ts` (mesma fonte do setup).
+ *
+ * NAVEGAÇÃO (issue #131): o simulador assina o canal de comando do agente e, ao receber
+ * `route_assign`, baixa a rota por HTTPS (logando como o próprio agente) e passa a
+ * percorrê-la — parando no destino, para o servidor detectar a chegada. Com
+ * `--deviate-after <m>` ele sai da rota de propósito depois de N metros, provocando a
+ * detecção de desvio e o recálculo automático na ponte de ingest. Assim o ciclo
+ * despacho → seguir → desviar → recalcular → chegar é exercitado SEM celular.
+ *
+ *   npm run api:sim -- --op <id> --roster --api http://localhost:3000
+ *   npm run api:sim -- --op <id> --agent AG-SIM-01 --deviate-after 300
  */
 import mqtt, { type MqttClient } from 'mqtt';
 import {
   ActivityType,
+  AgentCommandType,
+  agentCommandTopic,
   agentPositionTopic,
   agentStatusTopic,
   type AgentStatus,
   type PositionSample,
+  type RouteInfo,
 } from '@cerberus/shared';
-import { SIM_TEAMS, teamOf } from './sim-roster.js';
+import { SIM_TEAMS, agentUsername, teamOf } from '../modules/simulation/roster.js';
 
 /** Metros entre agentes da mesma equipe ao longo do traçado (coluna de patrulha). */
 const TEAM_STAGGER_M = 45;
@@ -123,12 +136,20 @@ function buildPath(points: LngLat[]): Path {
   return { points, cum, total };
 }
 
-/** Posição + rumo a `dist` metros do início do traçado (dá a volta ao passar do fim). */
-function locate(path: Path, dist: number): { at: LngLat; heading: number } {
+/**
+ * Posição + rumo a `dist` metros do início do traçado.
+ *
+ * `loop` distingue os dois usos: o CIRCUITO de patrulha dá a volta indefinidamente,
+ * enquanto uma ROTA atribuída precisa PARAR no destino — se desse a volta, o agente
+ * voltaria ao início e a chegada nunca seria detectada pelo servidor.
+ */
+function locate(path: Path, dist: number, loop = true): { at: LngLat; heading: number } {
   const first = path.points[0] ?? ([0, 0] as LngLat);
   if (path.total <= 0) return { at: first, heading: 0 };
 
-  const d = ((dist % path.total) + path.total) % path.total; // circuito fechado
+  const d = loop
+    ? ((dist % path.total) + path.total) % path.total // circuito fechado
+    : Math.min(Math.max(0, dist), path.total - 0.001); // rota: trava no destino
   let i = 1;
   while (i < path.cum.length - 1 && (path.cum[i] ?? 0) < d) i++;
 
@@ -176,6 +197,84 @@ async function routeOnStreets(
   }
 }
 
+/** Move um ponto `meters` na direção `bearingDeg` — usado para SAIR da rota no desvio. */
+function moveTo([lng, lat]: LngLat, bearingDeg: number, meters: number): LngLat {
+  const br = toRad(bearingDeg);
+  const dr = meters / R_EARTH;
+  const lat1 = toRad(lat);
+  const lng1 = toRad(lng);
+  const lat2 = Math.asin(
+    Math.sin(lat1) * Math.cos(dr) + Math.cos(lat1) * Math.sin(dr) * Math.cos(br),
+  );
+  const lng2 =
+    lng1 +
+    Math.atan2(
+      Math.sin(br) * Math.sin(dr) * Math.cos(lat1),
+      Math.cos(dr) - Math.sin(lat1) * Math.sin(lat2),
+    );
+  return [toDeg(lng2), toDeg(lat2)];
+}
+
+// --- API REST (para seguir rotas atribuídas) ----------------------------------------
+/**
+ * O canal `comando` carrega apenas o `routeId` (payload mínimo — ver a regra de MQTT),
+ * então para SEGUIR a rota o simulador precisa baixá-la por HTTPS, exatamente como o
+ * app faz. Isso exige um JWT: ele loga como o próprio agente simulado, cujas
+ * credenciais o `setup-simulation.ts` cadastrou.
+ */
+async function login(apiUrl: string, agentId: string, password: string): Promise<string | null> {
+  try {
+    const res = await fetch(`${apiUrl}/auth/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: agentUsername(agentId), password }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) return null;
+    const body = (await res.json()) as { token?: string };
+    return body.token ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchRoute(
+  apiUrl: string,
+  token: string,
+  operationId: string,
+  routeId: string,
+): Promise<RouteInfo | null> {
+  try {
+    const res = await fetch(`${apiUrl}/operations/${operationId}/routes/${routeId}`, {
+      headers: { authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as RouteInfo;
+  } catch {
+    return null;
+  }
+}
+
+/** Rota já ativa ao subir: recupera um despacho anterior, como o app faz na reconexão. */
+async function fetchActiveRoute(
+  apiUrl: string,
+  token: string,
+  operationId: string,
+  agentId: string,
+): Promise<RouteInfo | null> {
+  try {
+    const res = await fetch(
+      `${apiUrl}/operations/${operationId}/agents/${agentId}/routes/active`,
+      { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(10_000) },
+    );
+    if (!res.ok) return null;
+    return (await res.json()) as RouteInfo | null;
+  } catch {
+    return null;
+  }
+}
+
 // --- CLI ---------------------------------------------------------------------------
 interface Options {
   operationId: string;
@@ -188,6 +287,15 @@ interface Options {
   waypoints: LngLat[] | null;
   gapSec: number;
   idle: boolean;
+  /** Base da API REST — onde o simulador loga e baixa a rota atribuída. */
+  apiUrl: string;
+  /** Senha dos agentes simulados (a que o setup cadastrou). */
+  agentPassword: string;
+  /**
+   * Metros de rota percorridos antes de SAIR dela de propósito, para provocar o
+   * recálculo por desvio no servidor. `0` = nunca desviar.
+   */
+  deviateAfterM: number;
 }
 
 /** Plano de um agente: id, região a patrulhar e offset inicial no traçado (escalonamento). */
@@ -233,6 +341,9 @@ function parseArgs(argv: string[]): Options {
     waypoints,
     gapSec: Number(get('--gap') ?? 0),
     idle: has('--idle'),
+    apiUrl: (get('--api') ?? process.env.SIM_API_URL ?? 'http://localhost:3000').replace(/\/$/, ''),
+    agentPassword: get('--password') ?? process.env.SIM_AGENT_PASSWORD ?? 'cerberus123',
+    deviateAfterM: Number(get('--deviate-after') ?? 0),
   };
 }
 
@@ -304,7 +415,53 @@ async function startAgent(opts: Options, plan: AgentPlan): Promise<() => void> {
 
   const positionTopic = agentPositionTopic(opts.operationId, agentId);
   const statusTopic = agentStatusTopic(opts.operationId, agentId);
+  const commandTopic = agentCommandTopic(opts.operationId, agentId);
   const offline = JSON.stringify({ online: false } satisfies AgentStatus);
+
+  // --- Estado de percurso ---------------------------------------------------------
+  // `circuit`: patrulha padrão (dá a volta). `route`: seguindo a rota atribuída (para
+  // no destino). `deviating`: saiu da rota de propósito, para o servidor detectar o
+  // desvio e recalcular.
+  // Offset inicial: agentes da mesma equipe saem escalonados (coluna de patrulha).
+  let travelled = plan.startOffsetM; // metros percorridos no traçado atual
+  let battery = 1; // schema: 0..1 (não 0..100)
+  const circuitPath = path;
+  let followPath = circuitPath;
+  let mode: 'circuit' | 'route' | 'deviating' = 'circuit';
+  let routeId: string | null = null;
+  /** Rota que já provocou desvio — o desvio é UMA vez, senão o recálculo nunca converge. */
+  let deviatedRouteId: string | null = null;
+  let deviateBearing = 0;
+  let freePos: LngLat | null = null; // posição enquanto fora de qualquer traçado
+  let token: string | null = null;
+
+  /** Passa a seguir a rota recebida: troca o traçado e recomeça a contagem. */
+  function followRoute(route: RouteInfo): void {
+    if (route.geometry.length < 2) {
+      console.warn(`[${tag}] rota ${route.id} sem geometria utilizável — ignorada.`);
+      return;
+    }
+    followPath = buildPath(route.geometry);
+    travelled = 0;
+    freePos = null;
+    routeId = route.id;
+    mode = 'route';
+    const via = route.recalculatedFrom ? 'RECALCULADA' : 'nova';
+    console.log(
+      `[${tag}] rota ${via} ${route.id} · ${(route.distanceMeters / 1000).toFixed(2)} km · ` +
+        `${route.steps.length} passo(s)${route.fallback ? ' · FALLBACK (linha reta)' : ''}`,
+    );
+  }
+
+  /** Volta ao circuito de patrulha (cancelamento ou fim de teste). */
+  function backToCircuit(): void {
+    followPath = circuitPath;
+    mode = 'circuit';
+    routeId = null;
+    freePos = null;
+    travelled = 0;
+    console.log(`[${tag}] sem rota — de volta ao circuito de patrulha.`);
+  }
 
   const broker = brokerConfig();
   const client: MqttClient = mqtt.connect(broker.url, {
@@ -320,13 +477,39 @@ async function startAgent(opts: Options, plan: AgentPlan): Promise<() => void> {
     will: { topic: statusTopic, payload: offline, qos: 1, retain: true },
   });
 
-  // Offset inicial: agentes da mesma equipe saem escalonados (coluna de patrulha).
-  let travelled = plan.startOffsetM; // metros percorridos no circuito
-  let battery = 1; // schema: 0..1 (não 0..100)
   let ticks = 0;
   let timer: NodeJS.Timeout | undefined;
 
   client.on('error', (err) => console.error(`[${agentId}] MQTT: ${err.message}`));
+
+  /**
+   * Canal de CONTROLE da central. `route_assign` traz só o ponteiro (`routeId`), então
+   * a rota é baixada por HTTPS — mesmo contrato do app. Sem token (API fora, ou agente
+   * não cadastrado) o comando é registrado e ignorado: o simulador segue no circuito.
+   */
+  client.on('message', (topic, payload) => {
+    if (topic !== commandTopic) return;
+    let command: { type?: string; routeId?: string };
+    try {
+      command = JSON.parse(payload.toString());
+    } catch {
+      return; // comando ilegível — ignora
+    }
+    if (command.type === AgentCommandType.ROUTE_CANCEL) {
+      backToCircuit();
+      return;
+    }
+    if (command.type !== AgentCommandType.ROUTE_ASSIGN || !command.routeId) return;
+    if (!token) {
+      console.warn(`[${tag}] rota atribuída, mas sem token (API inacessível) — ignorada.`);
+      return;
+    }
+    const id = command.routeId;
+    void fetchRoute(opts.apiUrl, token, opts.operationId, id).then((route) => {
+      if (route) followRoute(route);
+      else console.warn(`[${tag}] falha ao baixar a rota ${id}.`);
+    });
+  });
 
   client.on('connect', () => {
     // Presença retida: o dashboard sabe o estado assim que assina, sem esperar posição.
@@ -335,6 +518,22 @@ async function startAgent(opts: Options, plan: AgentPlan): Promise<() => void> {
       retain: true,
     });
     console.log(`[${tag}] online (${brokerHost(broker.url)}) → ${positionTopic}`);
+
+    // Canal de comando: é por onde a central despacha a rota (route_assign).
+    client.subscribe(commandTopic, { qos: 1 });
+
+    // Loga na API e recupera uma rota já ativa — mesmo caminho do app ao reconectar.
+    void (async () => {
+      token = await login(opts.apiUrl, agentId, opts.agentPassword);
+      if (!token) {
+        console.warn(
+          `[${tag}] sem login em ${opts.apiUrl} — seguirá o circuito e IGNORARÁ rotas atribuídas.`,
+        );
+        return;
+      }
+      const active = await fetchActiveRoute(opts.apiUrl, token, opts.operationId, agentId);
+      if (active) followRoute(active);
+    })();
 
     const speedMs = (opts.speedKmh * 1000) / 3600;
     timer = setInterval(() => {
@@ -353,8 +552,37 @@ async function startAgent(opts: Options, plan: AgentPlan): Promise<() => void> {
       }
 
       const moving = !opts.idle;
-      if (moving) travelled += speedMs * opts.intervalSec;
-      const { at, heading } = locate(path, travelled);
+      const step = speedMs * opts.intervalSec;
+
+      // DESVIO (uma vez por rota): depois de percorrer `--deviate-after` metros da rota,
+      // sai dela perpendicularmente. O servidor mede a distância ao traçado, acumula as
+      // faltas e recalcula — a rota nova chega pelo canal de comando e volta ao normal.
+      if (
+        mode === 'route' &&
+        opts.deviateAfterM > 0 &&
+        travelled >= opts.deviateAfterM &&
+        routeId !== deviatedRouteId
+      ) {
+        const here = locate(followPath, travelled, false);
+        deviateBearing = (here.heading + 90) % 360; // perpendicular: afasta rápido
+        freePos = here.at;
+        deviatedRouteId = routeId;
+        mode = 'deviating';
+        console.log(`[${tag}] ⚠ SAINDO da rota de propósito (rumo ${deviateBearing.toFixed(0)}°)`);
+      }
+
+      let at: LngLat;
+      let heading: number;
+      if (mode === 'deviating' && freePos) {
+        // Fora de qualquer traçado: anda em linha reta, afastando-se da rota.
+        if (moving) freePos = moveTo(freePos, deviateBearing, step);
+        at = freePos;
+        heading = deviateBearing;
+      } else {
+        if (moving) travelled += step;
+        // Rota NÃO dá a volta: trava no destino para a chegada ser detectada.
+        ({ at, heading } = locate(followPath, travelled, mode !== 'route'));
+      }
 
       // Ruído gaussiano leve no fix (~±4 m) — GPS perfeito não existe e a trilha
       // suave demais esconde bugs de suavização/filtro no painel.
