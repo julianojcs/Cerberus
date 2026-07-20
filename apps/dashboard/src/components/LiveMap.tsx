@@ -436,12 +436,19 @@ function syncPlanned(map: MlMap, routes: PlannedRouteLine[]): void {
   );
 }
 
-/** Pino do destino — losango na cor do agente, distinto dos marcadores de agente. */
-function destinationEl(color: string, label?: string): HTMLDivElement {
+/**
+ * Marcador de DESTINO da rota: uma bandeira vermelha com mastro (flâmula triangular
+ * balançando ao vento — a animação vive dentro do SVG `public/svg/flag-destination.svg`).
+ * Forma deliberadamente distinta dos marcadores de AGENTE (pino/seta): o destino é
+ * sempre "a bandeira". Ancorado pela BASE do mastro (ver `anchor: 'bottom'` no Marker),
+ * então o ponto exato do destino fica sob o pé da bandeira.
+ */
+function destinationEl(label?: string): HTMLDivElement {
   const el = document.createElement('div');
-  el.style.cssText =
-    'width:18px;height:18px;transform:rotate(45deg);border-radius:3px;' +
-    `background:${color};border:2px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.35);cursor:default`;
+  el.style.cssText = 'cursor:default;filter:drop-shadow(0 1px 1.5px rgba(0,0,0,.55));';
+  el.innerHTML =
+    '<img src="/svg/flag-destination.svg" width="27" height="29" alt="Destino" ' +
+    'draggable="false" style="display:block" />';
   if (label) el.title = label;
   return el;
 }
@@ -1147,7 +1154,8 @@ export function LiveMap({
         continue;
       }
       destMarkersRef.current[r.id] = new maplibregl.Marker({
-        element: destinationEl(r.color, r.destination.label ?? `Destino de ${r.agentId}`),
+        element: destinationEl(r.destination.label ?? `Destino de ${r.agentId}`),
+        anchor: 'bottom', // o pé do mastro é fincado no ponto do destino
       })
         .setLngLat(lngLat)
         .addTo(map);
