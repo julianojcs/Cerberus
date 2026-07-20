@@ -37,6 +37,14 @@ export function agentCommandTopic(operationId: string, agentId: string): string 
 export const AgentCommandType = {
   /** Pede uma posição fresca AGORA (o GPS hiberna parado; o Doze adia o heartbeat). */
   REQUEST_FIX: 'request_fix',
+  /**
+   * Uma rota foi atribuída a este agente. O comando carrega APENAS o `routeId` — o
+   * traçado vem por HTTPS (`GET /operations/:id/routes/:routeId`), porque um trajeto
+   * com instruções passa fácil de dezenas de KB e estouraria o canal de controle.
+   */
+  ROUTE_ASSIGN: 'route_assign',
+  /** A rota ativa foi cancelada. Sem `routeId` ⇒ cancela o que estiver ativo. */
+  ROUTE_CANCEL: 'route_cancel',
 } as const;
 export type AgentCommandType = (typeof AgentCommandType)[keyof typeof AgentCommandType];
 
@@ -62,6 +70,124 @@ export function operationBroadcastTopic(operationId: string): string {
 /** `operacao/{operationId}/equipe/{teamId}/broadcast` — mensagem aos membros da equipe. */
 export function teamBroadcastTopic(operationId: string, teamId: string): string {
   return `${TOPIC_ROOT}/${operationId}/${TEAM_SEGMENT}/${teamId}/broadcast`;
+}
+
+// --- Navegação por rota (issue #131) ---
+
+/**
+ * Manobra de um passo. Vocabulário PRÓPRIO do Cerberus (não é o do OSRM). No app serve
+ * só para escolher o ícone: a frase já vem redigida em `RouteStep.instruction`.
+ */
+export const RouteManeuver = {
+  DEPART: 'depart',
+  ARRIVE: 'arrive',
+  STRAIGHT: 'straight',
+  TURN_LEFT: 'turn_left',
+  TURN_RIGHT: 'turn_right',
+  SLIGHT_LEFT: 'slight_left',
+  SLIGHT_RIGHT: 'slight_right',
+  SHARP_LEFT: 'sharp_left',
+  SHARP_RIGHT: 'sharp_right',
+  UTURN: 'uturn',
+  ROUNDABOUT: 'roundabout',
+  MERGE: 'merge',
+  FORK_LEFT: 'fork_left',
+  FORK_RIGHT: 'fork_right',
+  RAMP: 'ramp',
+} as const;
+export type RouteManeuver = (typeof RouteManeuver)[keyof typeof RouteManeuver];
+
+/** Quem definiu o destino: a central despachou, ou o próprio agente escolheu no app. */
+export const RouteSource = {
+  CENTRAL: 'central',
+  AGENT: 'agent',
+} as const;
+export type RouteSource = (typeof RouteSource)[keyof typeof RouteSource];
+
+/** Raio (m) do destino que caracteriza a chegada — espelha o valor do servidor. */
+export const ROUTE_ARRIVAL_METERS = 30;
+
+/**
+ * Distância (m) do traçado a partir da qual o agente está FORA da rota. O app NÃO
+ * dispara recálculo com isto (quem detecta desvio é a ponte de ingest, que empurra a
+ * rota nova como um `route_assign`) — serve apenas para avisar o agente na tela.
+ */
+export const ROUTE_DEVIATION_METERS = 50;
+
+/** Um passo (manobra) do trajeto, com a instrução JÁ redigida em pt-BR pelo servidor. */
+export interface RouteStep {
+  /** Pronta para exibir/falar. O app NUNCA traduz nem reescreve. */
+  instruction: string;
+  maneuver: RouteManeuver;
+  streetName?: string;
+  distanceMeters: number;
+  durationSec: number;
+  /** Onde a manobra acontece: `[lng, lat]` (GeoJSON) — inverter antes de usar no mapa. */
+  location: [number, number];
+}
+
+/** Rota serializada pela API — é o que o app baixa e segue (offline, depois de baixada). */
+export interface RouteInfo {
+  id: string;
+  operationId: string;
+  agentId: string;
+  source: RouteSource;
+  /** `ativa` | `concluida` | `cancelada` | `substituida`. */
+  status: string;
+  /** Sempre `driving` hoje (decisão de produto da issue #131). */
+  profile: string;
+  destination: { lat: number; lng: number; label?: string };
+  /** Traçado completo em `[[lng, lat], …]` — GeoJSON, NÃO é a ordem do Leaflet. */
+  geometry: [number, number][];
+  steps: RouteStep[];
+  distanceMeters: number;
+  durationSec: number;
+  /**
+   * `true` quando o provedor de rotas estava fora e o traçado é a LINHA RETA
+   * origem→destino. Nesse caso não há manobra real: o app degrada para rumo +
+   * distância e não fala instrução nenhuma.
+   */
+  fallback: boolean;
+  /** Id da rota que esta substituiu (recálculo por desvio feito pelo servidor). */
+  recalculatedFrom?: string;
+  createdAt: string;
+  createdBy?: string;
+}
+
+/**
+ * Acerto da busca de endereço (`GET /operations/:id/geocode`) e da geocodificação
+ * reversa. DUAS linhas de propósito, como nos apps de navegação do mercado: a via em
+ * destaque e a localidade em tom secundário. O `display_name` cru do provedor tem oito
+ * níveis administrativos ("…, Mesorregião, Região Sudeste, Brasil") e não cabe numa
+ * lista de celular — quem fatia é o servidor, o app só exibe.
+ */
+export interface GeocodeResult {
+  /** Linha principal: via com número, ou o nome do lugar. */
+  title: string;
+  /** Linha secundária: bairro · cidade. Pode ser vazia. */
+  subtitle: string;
+  /** `title` + `subtitle` — é o rótulo com que a rota nasce e aparece na central. */
+  label: string;
+  lat: number;
+  lng: number;
+  /** Granularidade do acerto (`house`, `road`, `suburb`…). */
+  kind?: string;
+  /** Número de porta, quando o mapa tem esse dado. Ausente ⇒ acerto no nível da via. */
+  houseNumber?: string;
+}
+
+/**
+ * Resposta da busca. Envelope, e não lista pura, por causa do número de porta: quando o
+ * número pedido não está mapeado no OSM, o provedor devolve a VIA inteira sem avisar.
+ * Estes campos deixam a tela dizer isso, em vez de o agente concluir que o app ignorou
+ * o que ele digitou.
+ */
+export interface GeocodeResponse {
+  results: GeocodeResult[];
+  /** Número de porta detectado na consulta, se houver. */
+  houseNumber?: string;
+  /** `true` quando algum resultado realmente casou com esse número. */
+  houseNumberMatched: boolean;
 }
 
 export interface PositionSample {

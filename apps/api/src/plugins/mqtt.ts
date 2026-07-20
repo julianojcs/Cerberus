@@ -18,6 +18,8 @@ import {
   Team,
 } from '../models/index.js';
 import { detectGeofenceEvents, type GeofenceLike } from '../modules/geofences/detect.js';
+import { OsrmRoutingProvider } from '../modules/navigation/provider.js';
+import { trackRouteProgress } from '../modules/navigation/track.js';
 
 /**
  * Fila de serialização POR AGENTE. Os handlers de mensagem do MQTT são assíncronos
@@ -47,6 +49,8 @@ function serializePerAgent(key: string, task: () => Promise<void>): Promise<void
  */
 export default fp(async function mqttPlugin(app: FastifyInstance) {
   const { MQTT_BROKER_URL, MQTT_CLIENT_ID, MQTT_USERNAME, MQTT_PASSWORD } = app.env;
+  // Motor de rotas do acompanhamento (recálculo automático por desvio).
+  const routingProvider = new OsrmRoutingProvider(app.env.OSRM_BASE_URL, app.env.ROUTING_TIMEOUT_MS);
 
   const client: MqttClient = mqtt.connect(MQTT_BROKER_URL, {
     clientId: `${MQTT_CLIENT_ID}_${process.pid}`,
@@ -81,6 +85,16 @@ export default fp(async function mqttPlugin(app: FastifyInstance) {
         await serializePerAgent(`${operationId}:${agentId}`, async () => {
           const sample = await persistPosition(operationId, agentId, raw);
           await checkGeofences(app, client, operationId, agentId, sample);
+          // Navegação (issue #131): chegada ao destino e desvio do traçado. Entra na
+          // MESMA fila por agente do geofencing — o recálculo lê e reescreve a rota
+          // ativa, e posições concorrentes criariam rotas duplicadas.
+          await trackRouteProgress(
+            { log: app.log, mqtt: client, provider: routingProvider },
+            operationId,
+            agentId,
+            { lng: sample.lng, lat: sample.lat },
+            sample.capturedAt,
+          );
         });
       } else if (channel === AgentChannel.MENSAGEM) {
         await persistMessage(operationId, agentId, raw);

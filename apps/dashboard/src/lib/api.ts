@@ -2,9 +2,12 @@ import type {
   AuditLogEntry,
   DeviceBlockInfo,
   E2eeKeyBackup,
+  GeocodeResponse,
+  GeocodeResult,
   KeyDirectoryEntry,
   LoginResponse,
   Operation,
+  RouteInfo,
   SessionInfo,
   TeamInfo,
   UserInfo,
@@ -192,6 +195,17 @@ export const api = {
     }),
   latestPositions: (operationId: string) =>
     request<LatestPosition[]>(`/operations/${operationId}/positions/latest`),
+
+  // --- Controle da simulação (issue #134) — só autorizado na operação SIMULAÇÃO. O GET
+  // serve de gate: se a API recusar (403/404), o componente de controle nem aparece.
+  simulationStatus: (operationId: string) =>
+    request<SimulationStatus>(`/operations/${operationId}/simulation`),
+  startSimulation: (operationId: string) =>
+    request<SimulationStatus>(`/operations/${operationId}/simulation/start`, { method: 'POST' }),
+  pauseSimulation: (operationId: string) =>
+    request<SimulationStatus>(`/operations/${operationId}/simulation/pause`, { method: 'POST' }),
+  stopSimulation: (operationId: string) =>
+    request<SimulationStatus>(`/operations/${operationId}/simulation/stop`, { method: 'POST' }),
   // Histórico da operação (trilha). Vem ordenado do mais recente para o mais antigo.
   positionHistory: (operationId: string, limit = 2000) =>
     request<LatestPosition[]>(`/operations/${operationId}/positions?limit=${limit}`),
@@ -303,6 +317,43 @@ export const api = {
     request<void>(`/devices/${encodeURIComponent(deviceId)}/unblock`, { method: 'POST' }),
   blockedDevices: () => request<DeviceBlockInfo[]>('/devices/blocked'),
   audit: (limit = 200) => request<AuditLogEntry[]>(`/audit?limit=${limit}`),
+
+  // --- Rotas PLANEJADAS (issue #131) ---
+  // Trajeto até um destino. Não confundir com as "rotas" de `lib/routes.ts`, que são
+  // o rastro JÁ percorrido pelo agente.
+
+  /** Despacha um destino. A origem é a última posição conhecida do agente, no servidor. */
+  createRoute: (opId: string, input: { agentId: string; lat: number; lng: number; label?: string }) =>
+    request<RouteInfo & { dispatched: boolean }>(`/operations/${opId}/routes`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  /** Sem `status` vêm só as ativas; `'todas'` traz o histórico. */
+  routes: (opId: string, status?: 'todas') =>
+    request<RouteInfo[]>(`/operations/${opId}/routes${status ? `?status=${status}` : ''}`),
+  cancelRoute: (opId: string, routeId: string) =>
+    request<void>(`/operations/${opId}/routes/${routeId}`, { method: 'DELETE' }),
+  /** Recalcula a partir da posição atual do agente, mantendo o destino. */
+  recalculateRoute: (opId: string, routeId: string) =>
+    request<RouteInfo>(`/operations/${opId}/routes/${routeId}/recalculate`, { method: 'POST' }),
+
+  /**
+   * Busca de endereço. `near` enviesa o resultado — sem ele, "Rua Bahia" devolve
+   * acertos no país inteiro. Passe a posição de um agente ou o centro da operação.
+   */
+  geocode: (opId: string, q: string, near?: { lat: number; lng: number }) => {
+    const params = new URLSearchParams({ q });
+    if (near) {
+      params.set('lat', String(near.lat));
+      params.set('lng', String(near.lng));
+    }
+    return request<GeocodeResponse>(`/operations/${opId}/geocode?${params.toString()}`);
+  },
+  /** Coordenada → endereço. Devolve `null` quando não há endereço mapeado ali. */
+  reverseGeocode: (opId: string, lat: number, lng: number) =>
+    request<GeocodeResult | null>(
+      `/operations/${opId}/geocode/reverse?lat=${lat}&lng=${lng}`,
+    ),
 };
 
 export interface Settings {
@@ -312,6 +363,14 @@ export interface Settings {
   connectRoutes: boolean;
   /** Intervalo (min) sem transmissão que quebra a rota em segmentos. */
   maxGapMinutes: number;
+}
+
+/** Estado do controle da simulação hospedada na API (issue #134). */
+export interface SimulationStatus {
+  running: boolean;
+  paused: boolean;
+  agentIds: string[];
+  startedAt: string | null;
 }
 
 /** Forma de uma zona. Sem `shape` ⇒ círculo (retrocompat). */

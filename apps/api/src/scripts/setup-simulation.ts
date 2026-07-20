@@ -35,7 +35,7 @@ import {
   SIM_TEAMS,
   agentDisplayName,
   agentUsername,
-} from './sim-roster.js';
+} from '../modules/simulation/roster.js';
 
 /** Mascara a senha da connection string para log seguro. */
 function maskUri(uri: string): string {

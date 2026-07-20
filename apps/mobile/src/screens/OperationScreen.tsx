@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   AppState,
@@ -32,33 +32,39 @@ import {
   getLastSample,
   initTracking,
   setShareLocation,
+  startSimulatedMovement,
   startTracking,
+  stopSimulatedMovement,
   stopTracking,
   subscribePositions,
+  subscribeSimulation,
 } from '../services/geolocation';
 import { outboxSize } from '../services/outbox';
 import { pingSession } from '../services/heartbeat';
 import { pickPhoto, uploadPhoto, type PickedPhoto } from '../services/media';
-import { AgentMap, type TrackPoint } from '../components/AgentMap';
-import type { PositionSample } from '../shared/contracts';
+import {
+  AgentMap,
+  type DestinationPin,
+  type PlannedRoute,
+  type TrackPoint,
+} from '../components/AgentMap';
+import { DestinationSearch } from '../components/DestinationSearch';
+import { NavigationBar } from '../components/NavigationBar';
+import {
+  cancelActiveRoute,
+  requestRouteToDestination,
+  reverseGeocode,
+  startNavigation,
+  subscribeNavigation,
+  type NavigationState,
+} from '../services/navigation';
+import { isMuted, setMuted } from '../services/speech';
+import { toLatLngPath } from '../shared/geo';
+import { formatClock, formatDistance, formatDuration } from '../shared/format';
+import type { GeocodeResult, PositionSample } from '../shared/contracts';
 
 /** Máximo de pontos mantidos na trilha em memória. */
 const MAX_TRACK = 500;
-
-/** Exibe o instante de captura (UTC) no fuso do operador para leitura em campo. */
-function formatTime(iso: string): string {
-  try {
-    return new Intl.DateTimeFormat('pt-BR', {
-      timeZone: 'America/Sao_Paulo',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-    }).format(new Date(iso));
-  } catch {
-    // Fallback caso o build do Hermes não traga ICU/fuso: hora local do device.
-    return new Date(iso).toTimeString().slice(0, 8);
-  }
-}
 
 /**
  * Tela operacional do agente: liga/desliga o reporte de posição, mostra o status
@@ -74,7 +80,7 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
   const [pending, setPending] = useState(0);
   const [pos, setPos] = useState<PositionSample | null>(getLastSample());
   const [track, setTrack] = useState<TrackPoint[]>([]);
-  const [showRoute, setShowRoute] = useState(true);
+  const [showTrack, setShowTrack] = useState(true);
   const [centering, setCentering] = useState(false);
   // Centralizar o mapa no agente sob demanda (nonce muda a cada toque).
   const [focus, setFocus] = useState<{ lat: number; lng: number; nonce: number } | null>(null);
@@ -94,6 +100,21 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
   const [composeTeam, setComposeTeam] = useState<MyTeam | null>(null);
   // Nome da operação (cabeçalho) — o token só traz o id; buscamos o nome.
   const [operationName, setOperationName] = useState<string | null>(null);
+  // --- Navegação por rota (issue #131) ---
+  const [nav, setNav] = useState<NavigationState | null>(null);
+  /** Simulação de deslocamento — só existe em build de desenvolvimento (`__DEV__`). */
+  const [simulating, setSimulating] = useState(false);
+  const [muted, setMutedState] = useState(isMuted());
+  // Escolha do destino pelo próprio agente (Fase 6b): enquanto ligado, o toque no
+  // mapa vira destino em vez de gesto solto.
+  const [picking, setPicking] = useState(false);
+  const [creatingRoute, setCreatingRoute] = useState(false);
+  // Destino candidato (toque no mapa ou acerto da busca), à espera de confirmação.
+  const [pin, setPin] = useState<DestinationPin | null>(null);
+  // Geocodificação reversa em curso — o diálogo do toque espera o endereço.
+  const [resolvingAddress, setResolvingAddress] = useState(false);
+  // A chegada é anunciada UMA vez — o estado `arrived` continua verdadeiro depois.
+  const arrivalAlerted = useRef(false);
 
   useEffect(() => {
     connectMqtt(session.token, operationId, agentId);
@@ -128,6 +149,47 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
       }),
     [],
   );
+
+  // Navegação por rota: assina os comandos `route_assign`/`route_cancel`, o fluxo de
+  // posições e recupera do servidor a rota despachada enquanto o app estava fora.
+  useEffect(() => {
+    if (!operationId) return;
+    const stop = startNavigation({ token: session.token, operationId, agentId });
+    const unsubscribe = subscribeNavigation(setNav);
+    return () => {
+      unsubscribe();
+      stop();
+    };
+  }, [session.token, operationId, agentId]);
+
+  /**
+   * Simulação de deslocamento (desenvolvimento): reflete o estado e, ao sair da tela,
+   * ENCERRA. Deixá-la viva fora daqui seguiria publicando posição sintética na central
+   * sem ninguém à vista para desligar.
+   */
+  useEffect(() => {
+    const unsubscribe = subscribeSimulation(setSimulating);
+    return () => {
+      unsubscribe();
+      stopSimulatedMovement();
+    };
+  }, []);
+
+  // Chegada ao destino: alerta uma única vez por rota (o `arrived` permanece ligado).
+  useEffect(() => {
+    if (!nav?.arrived) {
+      arrivalAlerted.current = false;
+      return;
+    }
+    if (arrivalAlerted.current) return;
+    arrivalAlerted.current = true;
+    Alert.alert(
+      'Destino alcançado',
+      nav.route?.destination.label
+        ? `Você chegou a ${nav.route.destination.label}.`
+        : 'Você chegou ao destino.',
+    );
+  }, [nav?.arrived, nav?.route?.destination.label]);
 
   // Nome da operação para o cabeçalho (o token só traz o id).
   useEffect(() => {
@@ -228,6 +290,113 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
     } finally {
       setCentering(false);
     }
+  }
+
+  // Traçado planejado no formato do mapa. A transposição GeoJSON `[lng, lat]` →
+  // `{lat, lng}` acontece só aqui (via `toLatLngPath`) — ver as regras de coordenadas.
+  const plannedRoute = useMemo<PlannedRoute | null>(() => {
+    const route = nav?.route;
+    if (!route) return null;
+    return {
+      id: route.id,
+      path: toLatLngPath(route.geometry),
+      destination: {
+        lat: route.destination.lat,
+        lng: route.destination.lng,
+        label: route.destination.label,
+      },
+      fallback: route.fallback,
+    };
+  }, [nav?.route]);
+
+  function handleToggleMute() {
+    const next = !muted;
+    setMuted(next);
+    setMutedState(next);
+  }
+
+  /**
+   * Confirmação ÚNICA dos dois caminhos de escolha de destino — o toque no mapa e o
+   * acerto da busca por endereço terminam aqui. O servidor traça a partir da ÚLTIMA
+   * POSIÇÃO CONHECIDA do agente: se ele nunca publicou (compartilhamento desligado
+   * desde o início), a API responde 409 e a mensagem dela é repassada como está.
+   *
+   * `label` vem da geocodificação; sem ela sobra a coordenada — o fluxo de rota nunca
+   * depende do geocodificador estar de pé.
+   */
+  function confirmDestination(point: TrackPoint, label?: string) {
+    const description = label ?? `${point.lat.toFixed(5)}, ${point.lng.toFixed(5)}`;
+    Alert.alert(
+      'Definir destino',
+      `Traçar rota até ${description}?`,
+      [
+        { text: 'Cancelar', style: 'cancel', onPress: () => setPin(null) },
+        {
+          text: 'Traçar rota',
+          onPress: () => {
+            setCreatingRoute(true);
+            void requestRouteToDestination(point, label ?? 'Destino escolhido no app')
+              .then(() => {
+                setPicking(false);
+                // A partir daqui quem marca o ponto é o destino da rota (🏁).
+                setPin(null);
+              })
+              .catch((e: unknown) =>
+                Alert.alert(
+                  'Falha',
+                  e instanceof Error ? e.message : 'Não foi possível traçar a rota.',
+                ),
+              )
+              .finally(() => setCreatingRoute(false));
+          },
+        },
+      ],
+      // Android: sem isto o toque fora do diálogo o fecha SEM callback e o marcador
+      // ficaria órfão no mapa, sugerindo um destino que ninguém confirmou.
+      { cancelable: false },
+    );
+  }
+
+  // Fase 6b: o agente toca no mapa. O ponto é marcado na hora e o endereço é buscado
+  // por geocodificação reversa para o diálogo dizer "Rua X, 100" em vez de um par de
+  // números. `reverseGeocode` NUNCA lança — sem endereço, cai na coordenada.
+  function handleMapTap(point: TrackPoint) {
+    if (!picking || creatingRoute || resolvingAddress || !operationId) return;
+    setPin(point);
+    setResolvingAddress(true);
+    void reverseGeocode(point)
+      .then((address) => {
+        if (address) setPin({ ...point, label: address.label });
+        confirmDestination(point, address?.label);
+      })
+      .finally(() => setResolvingAddress(false));
+  }
+
+  /**
+   * Acerto escolhido na busca por endereço. Já vem com rótulo e coordenada do provedor,
+   * então não há reversa a fazer: marca (enquadrando, porque o ponto pode estar fora da
+   * tela) e cai direto na confirmação.
+   */
+  function handleSearchSelect(result: GeocodeResult) {
+    if (creatingRoute || !operationId) return;
+    const point: TrackPoint = { lat: result.lat, lng: result.lng };
+    setPin({ ...point, label: result.label, center: true });
+    confirmDestination(point, result.label);
+  }
+
+  function handleCancelRoute() {
+    Alert.alert('Cancelar rota', 'Encerrar a navegação até o destino atual?', [
+      { text: 'Manter', style: 'cancel' },
+      {
+        text: 'Cancelar rota',
+        style: 'destructive',
+        onPress: () => {
+          void cancelActiveRoute().catch(() => {
+            /* já limpa localmente; a central verá o cancelamento no próximo sync */
+          });
+        },
+      },
+    ]);
   }
 
   function handleLogout() {
@@ -366,8 +535,9 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
                 </View>
               </View>
               <Text style={styles.status}>
-                Atualizado às <Text style={{ color: '#e6edf3' }}>{formatTime(pos.capturedAt)}</Text>{' '}
-                · {track.length} ponto(s) na sessão
+                Atualizado às{' '}
+                <Text style={{ color: '#e6edf3' }}>{formatClock(pos.capturedAt)}</Text> ·{' '}
+                {track.length} ponto(s) na sessão
               </Text>
             </>
           ) : (
@@ -406,7 +576,7 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
                   <Text style={[styles.scopeBadge, { color: badgeColor }]}>{badge}</Text>
                   <Text style={styles.broadcastText}>{m.text}</Text>
                   <Text style={styles.broadcastMeta}>
-                    {m.senderId} · {formatTime(m.capturedAt)}
+                    {m.senderId} · {formatClock(m.capturedAt)}
                   </Text>
                 </View>
               );
@@ -474,9 +644,20 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
               <TouchableOpacity onPress={() => setFullscreen(true)} hitSlop={8}>
                 <Text style={styles.expandIcon}>⛶</Text>
               </TouchableOpacity>
-              <Switch value={showRoute} onValueChange={setShowRoute} />
+              <Switch value={showTrack} onValueChange={setShowTrack} />
             </View>
           </View>
+
+          {/* Barra turn-by-turn: fica ACIMA do mapa para ser lida sem procurar. */}
+          {nav && (
+            <NavigationBar
+              state={nav}
+              muted={muted}
+              onToggleMute={handleToggleMute}
+              onCancel={handleCancelRoute}
+            />
+          )}
+
           <View
             style={styles.mapWrap}
             onTouchStart={() => setScrollEnabled(false)}
@@ -485,10 +666,14 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
           >
             <AgentMap
               track={track}
-              showRoute={showRoute}
+              showTrack={showTrack}
               headingUp={headingUp}
               heading={pos?.heading ?? null}
               focus={focus}
+              route={plannedRoute}
+              pin={pin}
+              pickMode={picking}
+              onMapTap={handleMapTap}
             />
             <TouchableOpacity
               style={styles.centerBtn}
@@ -499,14 +684,75 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
               <Text style={styles.centerBtnText}>{centering ? '…' : '◎'}</Text>
             </TouchableOpacity>
           </View>
+
+          {/* Destino escolhido pelo próprio agente (Fase 6b). */}
+          <TouchableOpacity
+            style={[styles.destBtn, picking && styles.destBtnActive]}
+            onPress={() => setPicking((p) => !p)}
+            disabled={creatingRoute || resolvingAddress || !operationId}
+          >
+            <Text style={styles.destBtnText}>
+              {creatingRoute
+                ? 'Traçando rota…'
+                : resolvingAddress
+                  ? 'Identificando o endereço…'
+                  : picking
+                    ? 'Toque no mapa para escolher o destino (toque aqui para desistir)'
+                    : '📍 Definir destino no mapa'}
+            </Text>
+          </TouchableOpacity>
+
+          {/* Segundo caminho para o mesmo destino: buscar por endereço em vez de mirar
+              no mapa. O toque continua valendo — quem sabe o nome da rua digita, quem
+              conhece o ponto de referência aponta. */}
+          <DestinationSearch
+            near={pos ? { lat: pos.lat, lng: pos.lng } : null}
+            onSelect={handleSearchSelect}
+            disabled={creatingRoute || resolvingAddress || !operationId}
+          />
+
           <View style={[styles.row, { marginTop: 12 }]}>
             <Text style={styles.compassLabel}>Girar com o movimento (bússola)</Text>
             <Switch value={headingUp} onValueChange={setHeadingUp} />
           </View>
+
+          {/* Simulação de deslocamento — SÓ em build de desenvolvimento. Percorre a rota
+              ativa gerando posições, para exercitar o turn-by-turn (avanço de passo,
+              locução, chegada) sem sair andando. O GPS real fica suspenso enquanto roda. */}
+          {__DEV__ && (
+            <>
+              <View style={[styles.row, { marginTop: 12 }]}>
+                <Text style={styles.compassLabel}>Simular deslocamento (dev)</Text>
+                <Switch
+                  value={simulating}
+                  disabled={!nav?.route}
+                  onValueChange={(on) => {
+                    if (!on) {
+                      stopSimulatedMovement();
+                      return;
+                    }
+                    const geometry = nav?.route?.geometry;
+                    if (geometry) {
+                      startSimulatedMovement({ operationId, agentId }, geometry, { speedKmh: 40 });
+                    }
+                  }}
+                />
+              </View>
+              <Text style={styles.hint}>
+                {!nav?.route
+                  ? 'Defina um destino para poder simular o percurso.'
+                  : simulating
+                    ? 'Percorrendo a rota a 40 km/h. O GPS real está suspenso; a central recebe estas posições.'
+                    : 'Percorre a rota ativa gerando posições, sem precisar se deslocar.'}
+              </Text>
+            </>
+          )}
           <Text style={styles.hint}>
-            {track.length > 0
-              ? `${track.length} ponto(s) na sessão${showRoute ? '' : ' · rota oculta'}.`
-              : 'Dois dedos giram o mapa; a bússola (canto) volta ao norte. O trajeto aparece conforme você se desloca (requer rede).'}
+            {nav?.route
+              ? `Rota ${nav.route.source === 'central' ? 'despachada pela central' : 'definida por você'} · ${formatDistance(nav.route.distanceMeters)} · ${formatDuration(nav.route.durationSec)} previstos. O traçado já está no aparelho e continua valendo sem rede.`
+              : track.length > 0
+                ? `${track.length} ponto(s) na sessão${showTrack ? '' : ' · rastro oculto'}.`
+                : 'Dois dedos giram o mapa; a bússola (canto) volta ao norte. O trajeto aparece conforme você se desloca (requer rede).'}
           </Text>
         </View>
 
@@ -521,8 +767,8 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
             <Text style={styles.modalTitle}>Seu percurso</Text>
             <View style={styles.percursoActions}>
               <View style={styles.modalToggle}>
-                <Text style={styles.modalToggleLabel}>Rota</Text>
-                <Switch value={showRoute} onValueChange={setShowRoute} />
+                <Text style={styles.modalToggleLabel}>Rastro</Text>
+                <Switch value={showTrack} onValueChange={setShowTrack} />
               </View>
               <View style={styles.modalToggle}>
                 <Text style={styles.modalToggleLabel}>Bússola</Text>
@@ -533,15 +779,30 @@ export function OperationScreen({ session, onLogout }: { session: Session; onLog
               </TouchableOpacity>
             </View>
           </View>
+          {/* Tela cheia é o modo de uso ao volante: a barra vem antes do mapa. */}
+          {nav?.route && (
+            <View style={styles.modalNav}>
+              <NavigationBar
+                state={nav}
+                muted={muted}
+                onToggleMute={handleToggleMute}
+                onCancel={handleCancelRoute}
+              />
+            </View>
+          )}
           <View style={styles.modalMap}>
             {fullscreen ? (
               <>
                 <AgentMap
                   track={track}
-                  showRoute={showRoute}
+                  showTrack={showTrack}
                   headingUp={headingUp}
                   heading={pos?.heading ?? null}
                   focus={focus}
+                  route={plannedRoute}
+                  pin={pin}
+                  pickMode={picking}
+                  onMapTap={handleMapTap}
                 />
                 <TouchableOpacity
                   style={styles.centerBtn}
@@ -767,6 +1028,19 @@ const styles = StyleSheet.create({
   modalTitle: { color: '#e6edf3', fontSize: 18, fontWeight: '700' },
   modalClose: { color: '#c1121f', fontWeight: '700', fontSize: 15 },
   modalMap: { flex: 1 },
+  modalNav: { paddingHorizontal: 12 },
+  destBtn: {
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: '#263543',
+    borderRadius: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    alignItems: 'center',
+  },
+  destBtnActive: { borderColor: '#2f81f7', backgroundColor: '#1c2733' },
+  // Cor explícita: sem ela o texto herdaria a cor de sistema e sumiria no escuro.
+  destBtnText: { color: '#e6edf3', fontSize: 14, fontWeight: '600' },
   modalToggle: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   modalToggleLabel: { color: '#8b9aa8', fontSize: 12 },
   compassLabel: { color: '#e6edf3', fontSize: 14 },

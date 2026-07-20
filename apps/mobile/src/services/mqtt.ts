@@ -21,19 +21,30 @@ let commandTopic: string | null = null;
 let commandCtx: { operationId: string; agentId: string } | null = null;
 
 /**
- * Handler dos comandos da central. Registrado de fora (pelo serviço de geolocalização)
- * para não criar import circular: geolocation já importa `publishPosition` daqui.
+ * Handlers dos comandos da central. Registrados de fora (geolocalização e navegação)
+ * para não criar import circular: os dois já importam deste módulo.
  *
- * O CONTEXTO viaja com o comando de propósito. Antes o geolocation guardava o seu, mas
- * quem o preenchia era o `initTracking` — que roda uma vez só; um hot reload zerava o
- * contexto e o comando chegava para um handler sem identidade. Aqui o contexto nasce no
- * mesmo lugar que a conexão, então vale um invariante: se um comando CHEGOU, havia
- * conexão; se havia conexão, há contexto.
+ * É um CONJUNTO, não um slot único: `request_fix` é tratado pela telemetria e
+ * `route_assign`/`route_cancel` pela navegação. Com um slot só, o segundo a registrar
+ * derrubaria o primeiro em silêncio.
+ *
+ * O CONTEXTO viaja com o comando: antes o geolocation guardava o seu via `initTracking`
+ * (que roda uma vez só) e um hot reload o zerava, deixando o handler sem identidade. O
+ * ctx nasce no mesmo lugar que a conexão — vale o invariante: comando chegou ⇒ havia
+ * conexão ⇒ há contexto. `routeId` é o ponteiro dos comandos de rota; o traçado nunca
+ * viaja no canal de controle (ver .claude/rules/mqtt-multitenant.md).
  */
-type CommandHandler = (type: string, ctx: { operationId: string; agentId: string }) => void;
-let commandHandler: CommandHandler | null = null;
-export function setCommandHandler(h: CommandHandler | null): void {
-  commandHandler = h;
+type CommandHandler = (
+  type: string,
+  ctx: { operationId: string; agentId: string },
+  routeId?: string,
+) => void;
+const commandHandlers = new Set<CommandHandler>();
+export function addCommandHandler(h: CommandHandler): () => void {
+  commandHandlers.add(h);
+  return () => {
+    commandHandlers.delete(h);
+  };
 }
 
 /**
@@ -109,11 +120,16 @@ function handleIncoming(topic: string, payload: Uint8Array): void {
   // decifrar um envelope E2EE que não existe aqui).
   if (topic === commandTopic) {
     try {
-      const { type } = JSON.parse(Buffer.from(payload).toString()) as { type?: string };
-      // Diagnóstico: separa "o comando não chegou ao aparelho" de "chegou e o GPS não
-      // conseguiu um fix" — hoje os dois terminam igual (o card não muda).
+      const { type, routeId } = JSON.parse(Buffer.from(payload).toString()) as {
+        type?: string;
+        routeId?: string;
+      };
+      // O ctx viaja com o comando (nasce no connect); routeId é o ponteiro da rota.
+      // Diagnóstico: separa "o comando não chegou" de "chegou e o GPS não pegou fix".
       console.warn('[mqtt] COMANDO recebido do dashboard:', type);
-      if (type && commandCtx) commandHandler?.(type, commandCtx);
+      // Dispara TODOS os handlers — telemetria (request_fix) e navegação (route_*).
+      if (type && commandCtx)
+        for (const handler of commandHandlers) handler(type, commandCtx, routeId);
     } catch {
       /* comando inválido — ignora */
     }

@@ -400,6 +400,54 @@ function syncRoutes(map: MlMap, routes: PlottedRoute[]): void {
   );
 }
 
+/**
+ * Rota PLANEJADA (issue #131): o trajeto a percorrer até um destino. Não confundir
+ * com `PlottedRoute` acima, que é o rastro JÁ percorrido — os dois aparecem no mesmo
+ * mapa, por isso a rota planejada tem tratamento visual próprio (linha com contorno
+ * claro, mais larga) em vez de virar mais uma linha na cor do agente.
+ */
+export interface PlannedRouteLine {
+  id: string;
+  agentId: string;
+  points: [number, number][];
+  color: string; // hex (cor do agente)
+  destination: { lng: number; lat: number; label?: string };
+  /** Traçado direto (provedor de rotas fora): desenha tracejado para não parecer via real. */
+  fallback?: boolean;
+}
+
+function plannedFC(routes: PlannedRouteLine[], fallback: boolean): GeoJSON.FeatureCollection {
+  return {
+    type: 'FeatureCollection',
+    features: routes
+      .filter((r) => !!r.fallback === fallback && r.points.length >= 2)
+      .map((r) => ({
+        type: 'Feature',
+        properties: { color: r.color, agentId: r.agentId },
+        geometry: { type: 'LineString', coordinates: r.points },
+      })),
+  };
+}
+
+function syncPlanned(map: MlMap, routes: PlannedRouteLine[]): void {
+  (map.getSource('planned-routes') as GeoJSONSource | undefined)?.setData(
+    plannedFC(routes, false),
+  );
+  (map.getSource('planned-routes-direct') as GeoJSONSource | undefined)?.setData(
+    plannedFC(routes, true),
+  );
+}
+
+/** Pino do destino — losango na cor do agente, distinto dos marcadores de agente. */
+function destinationEl(color: string, label?: string): HTMLDivElement {
+  const el = document.createElement('div');
+  el.style.cssText =
+    'width:18px;height:18px;transform:rotate(45deg);border-radius:3px;' +
+    `background:${color};border:2px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.35);cursor:default`;
+  if (label) el.title = label;
+  return el;
+}
+
 function toFeatureCollection(
   trails: AgentTrails,
   colors?: Record<string, string>,
@@ -580,6 +628,7 @@ export function LiveMap({
   showTrails = true,
   showTrailDirection = false,
   routes = [],
+  plannedRoutes = [],
   agentColors = {},
   mediaMarkers = [],
   onMediaClick,
@@ -608,6 +657,8 @@ export function LiveMap({
   /** Efeito "Sentido das trilhas": setas ao longo das trilhas e rotas. */
   showTrailDirection?: boolean;
   routes?: PlottedRoute[];
+  /** Rotas PLANEJADAS ativas (issue #131) — trajeto a percorrer, com pino de destino. */
+  plannedRoutes?: PlannedRouteLine[];
   agentColors?: Record<string, string>;
   mediaMarkers?: MediaMarker[];
   onMediaClick?: (id: string) => void;
@@ -706,6 +757,10 @@ export function LiveMap({
   showTrailDirectionRef.current = showTrailDirection;
   const routesRef = useRef<PlottedRoute[]>(routes);
   routesRef.current = routes;
+  const plannedRoutesRef = useRef<PlannedRouteLine[]>(plannedRoutes);
+  plannedRoutesRef.current = plannedRoutes;
+  /** Pinos de destino, indexados por rota (removidos quando a rota sai do ar). */
+  const destMarkersRef = useRef<Record<string, Marker>>({});
   const agentColorsRef = useRef<Record<string, string>>(agentColors);
   agentColorsRef.current = agentColors;
   const fitPointsRef = useRef<[number, number][] | undefined>(fitPoints);
@@ -836,6 +891,53 @@ export function LiveMap({
         source: 'agent-routes',
         layout: directionLayout,
         paint: { 'icon-color': ['get', 'color'] },
+      });
+
+      // Rotas PLANEJADAS (issue #131), por cima de tudo: é a ordem de deslocamento
+      // vigente, tem de ganhar do rastro histórico na leitura do mapa. O contorno
+      // claro por baixo garante contraste tanto sobre o tile quanto sobre a trilha.
+      map.addSource('planned-routes', {
+        type: 'geojson',
+        data: plannedFC(plannedRoutesRef.current, false),
+      });
+      map.addLayer({
+        id: 'planned-routes-casing',
+        type: 'line',
+        source: 'planned-routes',
+        layout: { 'line-join': 'round', 'line-cap': 'round' },
+        paint: { 'line-color': '#0b0f14', 'line-width': 10, 'line-opacity': 0.55 },
+      });
+      map.addLayer({
+        id: 'planned-routes-line',
+        type: 'line',
+        source: 'planned-routes',
+        layout: { 'line-join': 'round', 'line-cap': 'round' },
+        paint: { 'line-color': ['get', 'color'], 'line-width': 5, 'line-opacity': 0.95 },
+      });
+      // Traçado DIRETO (provedor de rotas fora): tracejado, para o operador não ler
+      // uma linha reta sobre quarteirões como se fosse itinerário por via.
+      map.addSource('planned-routes-direct', {
+        type: 'geojson',
+        data: plannedFC(plannedRoutesRef.current, true),
+      });
+      map.addLayer({
+        id: 'planned-routes-direct-line',
+        type: 'line',
+        source: 'planned-routes-direct',
+        layout: { 'line-join': 'round', 'line-cap': 'round' },
+        paint: {
+          'line-color': ['get', 'color'],
+          'line-width': 4,
+          'line-opacity': 0.85,
+          'line-dasharray': [1.5, 1.5],
+        },
+      });
+      map.addLayer({
+        id: 'planned-routes-direction',
+        type: 'symbol',
+        source: 'planned-routes',
+        layout: { ...directionLayout, visibility: 'visible', 'symbol-spacing': 90 },
+        paint: { 'icon-color': '#ffffff', 'icon-opacity': 0.95 },
       });
       styleReadyRef.current = true;
     });
@@ -1011,6 +1113,36 @@ export function LiveMap({
     if (!map || !styleReadyRef.current) return;
     syncRoutes(map, routes);
   }, [routes]);
+
+  // Rotas planejadas: traçado + pino de destino. Os pinos são marcadores DOM (e não
+  // uma camada `symbol`) para carregarem o rótulo do destino no `title` sem exigir
+  // uma fonte de glifos — o estilo do mapa é raster puro, sem glyphs configurados.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !styleReadyRef.current) return;
+    syncPlanned(map, plannedRoutes);
+
+    const alive = new Set(plannedRoutes.map((r) => r.id));
+    for (const [id, marker] of Object.entries(destMarkersRef.current)) {
+      if (!alive.has(id)) {
+        marker.remove();
+        delete destMarkersRef.current[id];
+      }
+    }
+    for (const r of plannedRoutes) {
+      const lngLat: [number, number] = [r.destination.lng, r.destination.lat];
+      const existing = destMarkersRef.current[r.id];
+      if (existing) {
+        existing.setLngLat(lngLat);
+        continue;
+      }
+      destMarkersRef.current[r.id] = new maplibregl.Marker({
+        element: destinationEl(r.color, r.destination.label ?? `Destino de ${r.agentId}`),
+      })
+        .setLngLat(lngLat)
+        .addTo(map);
+    }
+  }, [plannedRoutes]);
 
   // Enquadra (fitBounds) quando `fitNonce` muda: usa `fitPoints` se fornecido
   // (mapa global), senão as rotas plotadas (comportamento padrão da live page).

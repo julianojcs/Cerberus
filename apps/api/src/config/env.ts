@@ -20,6 +20,43 @@ const envSchema = z.object({
 
   JWT_SECRET: z.string().min(8, 'JWT_SECRET deve ter ao menos 8 caracteres'),
   JWT_EXPIRES_IN: z.string().default('8h'),
+
+  /**
+   * Motor de rotas (issue #131). O padrão é o OSRM público, que serve para
+   * DESENVOLVIMENTO — não tem SLA e o uso pesado é desencorajado. Em produção isto
+   * aponta para uma API de rotas gerenciada (ver `modules/navigation/provider.ts`);
+   * auto-hospedar OSRM está fora de cogitação porque exigiria Docker.
+   */
+  OSRM_BASE_URL: z.string().default('https://router.project-osrm.org'),
+  /** Timeout (ms) do provedor de rotas. Estourou ⇒ despacha a linha reta. */
+  ROUTING_TIMEOUT_MS: z.coerce.number().default(10_000),
+
+  /**
+   * Geocodificação (endereço ↔ coordenada). Nominatim público em desenvolvimento; em
+   * produção sai junto com o provedor de rotas gerenciado, na mesma chave.
+   */
+  NOMINATIM_BASE_URL: z.string().default('https://nominatim.openstreetmap.org'),
+  /**
+   * A política do Nominatim EXIGE um User-Agent identificando a aplicação, com contato
+   * — requisição sem isso é recusada. Trocar o e-mail pelo do responsável antes de
+   * qualquer uso sério.
+   */
+  GEOCODING_USER_AGENT: z.string().default('Cerberus/1.0 (contato: devsrnbtlls@gmail.com)'),
+  /** Restringe a busca a países (ISO 3166-1 alpha-2). Vazio = mundo todo. */
+  GEOCODING_COUNTRY_CODES: z.string().default('br'),
+
+  /**
+   * Controle da simulação pelo dashboard (issue #134). Habilita os endpoints que fazem
+   * a API GERAR telemetria falsa (só para a operação SIMULAÇÃO, só admin). É uma trava
+   * de segurança: em produção REAL isto fica desligado, para o servidor nunca poder
+   * forjar posição de agente. Ligar apenas em dev/homologação (`SIMULATION_ENABLED=true`).
+   * Coerção explícita: só `'true'`/`'1'` habilitam — `z.coerce.boolean('false')` daria
+   * `true` (string não-vazia), então NÃO usar coerce aqui.
+   */
+  SIMULATION_ENABLED: z
+    .string()
+    .optional()
+    .transform((v) => v === 'true' || v === '1'),
 });
 
 export type Env = z.infer<typeof envSchema>;

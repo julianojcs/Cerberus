@@ -4,8 +4,9 @@ import BackgroundGeolocation, {
   type MotionActivityEvent,
   type MotionChangeEvent,
 } from 'react-native-background-geolocation';
-import { publishPosition, setCommandHandler } from './mqtt';
+import { addCommandHandler, publishPosition } from './mqtt';
 import { AgentCommandType, type PositionSample } from '../shared/contracts';
+import { buildRoutePath, pointAtDistance } from '../shared/geo';
 
 /**
  * Camada de telemetria. Configura o plugin nativo da Transistor Software para:
@@ -49,7 +50,7 @@ function toSample(location: Location): PositionSample {
  * junto com o comando, vindo do mqtt — antes ele era guardado aqui e o mesmo hot reload
  * o zerava, deixando o handler vivo porém sem identidade. Injeção evita import circular.
  */
-setCommandHandler((type, ctx) => {
+addCommandHandler((type, ctx) => {
   if (type !== AgentCommandType.REQUEST_FIX) return;
   void (async () => {
     try {
@@ -59,7 +60,7 @@ setCommandHandler((type, ctx) => {
         persist: true,
       });
       console.warn('[gps] fix obtido → publicando');
-      report(ctx, toSample(location));
+      reportFromGps(ctx, toSample(location));
     } catch (err) {
       // Sem log, um GPS que não consegue fix (Doze, sem sinal, permissão) é
       // indistinguível de "o comando nunca chegou".
@@ -108,6 +109,109 @@ function report(ctx: TrackingContext, sample: PositionSample): void {
 }
 
 /**
+ * Caminho das posições REAIS. Enquanto a simulação de deslocamento está ligada, o GPS
+ * é ignorado: se os dois publicassem, o agente ficaria oscilando entre a posição
+ * simulada e a real, e o turn-by-turn (que mede distância até a manobra a cada fix)
+ * enlouqueceria. A simulação chama `report` direto.
+ */
+function reportFromGps(ctx: TrackingContext, sample: PositionSample): void {
+  if (simulating) return;
+  report(ctx, sample);
+}
+
+// --- Simulação de deslocamento (DESENVOLVIMENTO) ------------------------------------
+/**
+ * Gera posições sintéticas ao longo de um traçado e as injeta no MESMO caminho do GPS
+ * (`report`), de modo que tudo a jusante não perceba a diferença: a barra turn-by-turn
+ * avança, a locução dispara, o mapa acompanha e — como `report` também publica — a
+ * central vê o agente percorrendo a rota.
+ *
+ * Existe porque a camada de navegação só se comprova em MOVIMENTO, e a alternativa era
+ * sair dirigindo com o aparelho na mão a cada ajuste.
+ */
+let simTimer: ReturnType<typeof setInterval> | null = null;
+let simulating = false;
+const simListeners = new Set<(active: boolean) => void>();
+
+export interface SimulationOptions {
+  /** Velocidade do deslocamento simulado. Padrão: 40 km/h (trânsito urbano). */
+  speedKmh?: number;
+  /** Intervalo entre posições. Padrão: 1 s (equivale a um GPS em navegação). */
+  intervalMs?: number;
+}
+
+export function isSimulatingMovement(): boolean {
+  return simulating;
+}
+
+/** Inscreve um ouvinte do liga/desliga da simulação (recebe o estado atual de imediato). */
+export function subscribeSimulation(listener: (active: boolean) => void): () => void {
+  simListeners.add(listener);
+  listener(simulating);
+  return () => {
+    simListeners.delete(listener);
+  };
+}
+
+function emitSimulation(): void {
+  for (const listener of simListeners) listener(simulating);
+}
+
+/**
+ * Percorre `geometry` (GeoJSON `[lng, lat]`, como vem da rota) do início ao fim.
+ * Devolve `false` se o traçado for curto demais para simular. Ao chegar ao fim, para
+ * sozinha — a última posição fica publicada, então a chegada é detectada normalmente.
+ */
+export function startSimulatedMovement(
+  ctx: TrackingContext,
+  geometry: [number, number][],
+  options: SimulationOptions = {},
+): boolean {
+  if (geometry.length < 2) return false;
+  stopSimulatedMovement();
+
+  const path = buildRoutePath(geometry);
+  const speedMs = ((options.speedKmh ?? 40) * 1000) / 3600;
+  const intervalMs = options.intervalMs ?? 1000;
+  const stepMeters = (speedMs * intervalMs) / 1000;
+  let travelled = 0;
+
+  simulating = true;
+  emitSimulation();
+
+  simTimer = setInterval(() => {
+    const cursor = pointAtDistance(path, travelled);
+    report(ctx, {
+      lat: cursor.pos.lat,
+      lng: cursor.pos.lng,
+      accuracy: 5,
+      speed: cursor.done ? 0 : Number(speedMs.toFixed(2)),
+      heading: Number(cursor.heading.toFixed(1)),
+      // Preserva a bateria real do aparelho; o resto da amostra é sintético.
+      battery: lastSample?.battery,
+      activity: cursor.done ? 'still' : 'in_vehicle',
+      capturedAt: new Date().toISOString(), // UTC absoluto, como o GPS
+    });
+    if (cursor.done) {
+      stopSimulatedMovement();
+      return;
+    }
+    travelled += stepMeters;
+  }, intervalMs);
+
+  return true;
+}
+
+/** Encerra a simulação e devolve o comando ao GPS real. */
+export function stopSimulatedMovement(): void {
+  if (simTimer) clearInterval(simTimer);
+  simTimer = null;
+  if (!simulating) return;
+  simulating = false;
+  emitSimulation();
+}
+
+/**
  * Obtém UMA posição sob demanda (ex.: botão "centralizar"), independentemente de o
  * rastreamento estar ligado ou de estar compartilhando. Garante o `ready()` do
  * plugin, NÃO publica no barramento e NÃO acrescenta ponto à trilha (só devolve).
@@ -128,13 +232,13 @@ export async function initTracking(ctx: TrackingContext): Promise<void> {
   if (initialized) return;
 
   BackgroundGeolocation.onLocation((location: Location) => {
-    report(ctx, toSample(location));
+    reportFromGps(ctx, toSample(location));
   });
 
   BackgroundGeolocation.onMotionChange((event: MotionChangeEvent) => {
     // event.isMoving indica transição parado <-> em movimento; a posição
     // vem em event.location (o evento NÃO é um Location direto como no onLocation).
-    report(ctx, toSample(event.location));
+    reportFromGps(ctx, toSample(event.location));
   });
 
   BackgroundGeolocation.onActivityChange((event: MotionActivityEvent) => {
@@ -150,7 +254,7 @@ export async function initTracking(ctx: TrackingContext): Promise<void> {
         samples: 1,
         persist: true,
       });
-      report(ctx, toSample(location));
+      reportFromGps(ctx, toSample(location));
     } catch {
       /* sem fix disponível neste ciclo — ignora */
     }

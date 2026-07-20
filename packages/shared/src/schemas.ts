@@ -7,6 +7,10 @@ import {
   OperationStatus,
   OperationType,
   Role,
+  type RouteManeuver,
+  type RouteProfile,
+  type RouteSource,
+  type RouteStatus,
   type SessionRevokeReason,
 } from './constants.js';
 
@@ -50,6 +54,12 @@ export type PositionSample = z.infer<typeof positionSampleSchema>;
  */
 export const agentCommandSchema = z.object({
   type: z.enum(enumValues(AgentCommandType)),
+  /**
+   * PONTEIRO para a rota (comandos `route_assign`/`route_cancel`) — nunca o traçado.
+   * O canal `comando` é controle e exige payload mínimo; o agente busca a rota em
+   * `GET /operations/:id/routes/:routeId`. Ver .claude/rules/mqtt-multitenant.md.
+   */
+  routeId: z.string().min(1).optional(),
 });
 export type AgentCommand = z.infer<typeof agentCommandSchema>;
 
@@ -216,6 +226,119 @@ export interface UserInfo {
   agentId?: string;
   operationIds: string[];
   blocked: boolean;
+}
+
+/* --------------------------------------------------------- Rotas (navegação) */
+
+/**
+ * Criação de uma rota até um destino (issue #131).
+ *
+ * `lat`/`lng` porque é entrada vinda de humano/mapa (convenção GPS); a persistência
+ * transpõe para GeoJSON `[lng, lat]` — ver .claude/rules/geospatial-coordinates.md.
+ *
+ * A ORIGEM não vem no corpo de propósito: é a última posição conhecida do agente,
+ * que o servidor já tem. Aceitar origem do cliente abriria espaço para traçar rota a
+ * partir de um ponto onde o agente não está.
+ */
+export const createRouteSchema = z.object({
+  /** Agente que vai receber a rota (canal MQTT); casa com `Position.agentId`. */
+  agentId: z.string().min(1).max(64),
+  lat: z.number().min(-90).max(90),
+  lng: z.number().min(-180).max(180),
+  /** Rótulo do destino exibido ao operador e ao agente (ex.: "Ponto de encontro"). */
+  label: z.string().min(1).max(120).optional(),
+});
+export type CreateRoute = z.infer<typeof createRouteSchema>;
+
+/**
+ * Busca de endereço. `lat`/`lng` são opcionais e servem para ENVIESAR o resultado para
+ * perto de quem busca — sem isso, "Rua Bahia" devolve acertos no país inteiro.
+ */
+export const geocodeQuerySchema = z.object({
+  q: z.string().min(3).max(200),
+  lat: z.coerce.number().min(-90).max(90).optional(),
+  lng: z.coerce.number().min(-180).max(180).optional(),
+});
+export type GeocodeQuery = z.infer<typeof geocodeQuerySchema>;
+
+/** Geocodificação reversa: coordenada → endereço (rótulo do destino tocado no mapa). */
+export const reverseGeocodeSchema = z.object({
+  lat: z.coerce.number().min(-90).max(90),
+  lng: z.coerce.number().min(-180).max(180),
+});
+export type ReverseGeocode = z.infer<typeof reverseGeocodeSchema>;
+
+/**
+ * Endereço encontrado, em DUAS linhas como nos apps de navegação do mercado: via em
+ * destaque, localidade abaixo em tom secundário.
+ */
+export interface GeocodeResult {
+  /** Linha principal: via com número, ou o nome do lugar. */
+  title: string;
+  /** Linha secundária: bairro · cidade. Pode ser vazia. */
+  subtitle: string;
+  /** `title` + `subtitle` — vira o rótulo da rota exibido na central. */
+  label: string;
+  lat: number;
+  lng: number;
+  /** Granularidade do acerto (`house`, `road`, `suburb`…). */
+  kind?: string;
+  /** Número de porta, quando o mapa tem esse dado. Ausente ⇒ acerto no nível da via. */
+  houseNumber?: string;
+}
+
+/**
+ * Resposta da busca de endereço. É um envelope, e não uma lista pura, por causa do
+ * número de porta: quando o número pedido não está mapeado, o provedor devolve a VIA
+ * inteira sem avisar — pesquisar "Rua da Bahia 1601" traz três trechos de "Rua da
+ * Bahia" sem pista de que o 1601 foi descartado. Estes campos deixam a UI dizer isso
+ * em voz alta, em vez de o usuário concluir que o sistema ignorou o que ele digitou.
+ */
+export interface GeocodeResponse {
+  results: GeocodeResult[];
+  /** Número de porta detectado na consulta, se houver. */
+  houseNumber?: string;
+  /** `true` quando algum resultado realmente casou com esse número. */
+  houseNumberMatched: boolean;
+}
+
+/** Um passo (manobra) do trajeto, já com a instrução redigida em pt-BR. */
+export interface RouteStep {
+  /** Instrução pronta para exibir/falar (ex.: "Vire à direita na Rua dos Aimorés"). */
+  instruction: string;
+  maneuver: RouteManeuver;
+  /** Nome da via do passo, quando o provedor souber. */
+  streetName?: string;
+  distanceMeters: number;
+  durationSec: number;
+  /** Onde a manobra acontece: `[lng, lat]` (pronto para MapLibre/Leaflet). */
+  location: [number, number];
+}
+
+/** Rota serializada — resposta da API e payload que o app do agente segue. */
+export interface RouteInfo {
+  id: string;
+  operationId: string;
+  agentId: string;
+  source: RouteSource;
+  status: RouteStatus;
+  profile: RouteProfile;
+  destination: { lat: number; lng: number; label?: string };
+  /** Traçado completo: `[[lng, lat], …]` — desenhável direto no mapa. */
+  geometry: [number, number][];
+  steps: RouteStep[];
+  distanceMeters: number;
+  durationSec: number;
+  /**
+   * `true` quando o provedor de rotas estava indisponível e o traçado é a linha reta
+   * entre origem e destino. O app degrada para rumo/distância em vez de fingir que
+   * tem instruções de via — ver o fallback em `modules/navigation/provider.ts`.
+   */
+  fallback: boolean;
+  /** Id da rota que esta substituiu (recálculo por desvio). */
+  recalculatedFrom?: string;
+  createdAt: string;
+  createdBy?: string;
 }
 
 /** Equipe (sub-grupo de uma operação) serializada — lista/CRUD + filtro no mapa. */

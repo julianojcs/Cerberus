@@ -8,6 +8,9 @@ import {
   OperationStatus,
   OperationType,
   Role,
+  RouteProfile,
+  RouteSource,
+  RouteStatus,
 } from '@cerberus/shared';
 
 /* ------------------------------------------------------------------ Users */
@@ -267,6 +270,77 @@ const geofenceMembershipSchema = new Schema(
 geofenceMembershipSchema.index({ operationId: 1, agentId: 1, geofenceId: 1 }, { unique: true });
 export type GeofenceMembershipDoc = InferSchemaType<typeof geofenceMembershipSchema>;
 export const GeofenceMembership = model('GeofenceMembership', geofenceMembershipSchema);
+
+/* ----------------------------------------------------- Rotas (navegação) */
+
+/**
+ * Rota atribuída a um agente até um destino (issue #131). Coleção PRÓPRIA, não uma
+ * extensão de `Geofence`: zona é área com gatilho enter/exit; rota é trajeto com
+ * progresso e ciclo de vida.
+ *
+ * Cuidado com o nome: em `apps/dashboard/src/lib/routes.ts` "rota" significa o rastro
+ * JÁ percorrido (histórico de posições). Aqui é o trajeto PLANEJADO — sentidos opostos.
+ *
+ * O traçado é calculado no servidor e persistido pronto (geometria + instruções em
+ * pt-BR) para o app poder SEGUIR a rota sem rede; só o recálculo por desvio precisa
+ * de conectividade.
+ */
+const routeSchema = new Schema(
+  {
+    operationId: { type: String, required: true, index: true },
+    /** Canal do agente que recebe a rota (casa com `Position.agentId`). */
+    agentId: { type: String, required: true },
+    source: { type: String, enum: Object.values(RouteSource), required: true },
+    status: { type: String, enum: Object.values(RouteStatus), default: RouteStatus.ATIVA },
+    profile: { type: String, enum: Object.values(RouteProfile), default: RouteProfile.DRIVING },
+    /** Destino — GeoJSON Point [lng, lat]. */
+    destination: {
+      type: { type: String, enum: ['Point'], default: 'Point', required: true },
+      coordinates: { type: [Number], required: true }, // [lng, lat]
+    },
+    destinationLabel: { type: String },
+    /** Traçado completo — GeoJSON LineString [[lng, lat], …]. */
+    geometry: {
+      type: { type: String, enum: ['LineString'], default: 'LineString', required: true },
+      coordinates: { type: [[Number]], required: true },
+    },
+    /** Passos com a instrução já redigida em pt-BR (o app não traduz nada). */
+    steps: {
+      type: [
+        {
+          _id: false,
+          instruction: { type: String, required: true },
+          maneuver: { type: String, required: true },
+          streetName: { type: String },
+          distanceMeters: { type: Number, required: true },
+          durationSec: { type: Number, required: true },
+          location: { type: [Number], required: true }, // [lng, lat]
+        },
+      ],
+      default: [],
+    },
+    distanceMeters: { type: Number, required: true },
+    durationSec: { type: Number, required: true },
+    /** Traçado é a linha reta (provedor de rotas indisponível) — o app não fala instruções. */
+    fallback: { type: Boolean, default: false },
+    /**
+     * Posições consecutivas fora do traçado. O recálculo só dispara a partir da
+     * segunda: uma leitura isolada de GPS ruim (túnel, viaduto, reflexão urbana)
+     * jogaria o agente para fora da rota e provocaria recálculo à toa. Zera assim
+     * que ele volta ao traçado.
+     */
+    deviationStrikes: { type: Number, default: 0 },
+    /** Rota que esta substituiu (recálculo por desvio). */
+    recalculatedFrom: { type: String, default: null },
+    createdBy: { type: Schema.Types.ObjectId, ref: 'User' },
+  },
+  { timestamps: true },
+);
+routeSchema.index({ destination: '2dsphere' });
+// Consulta dominante: "qual é a rota ATIVA deste agente?" — a cada posição recebida.
+routeSchema.index({ operationId: 1, agentId: 1, status: 1 });
+export type RouteDoc = InferSchemaType<typeof routeSchema>;
+export const Route = model('Route', routeSchema);
 
 /* -------------------------------------------------------------- Settings */
 
