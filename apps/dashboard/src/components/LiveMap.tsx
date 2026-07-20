@@ -447,7 +447,7 @@ function destinationEl(label?: string): HTMLDivElement {
   const el = document.createElement('div');
   el.style.cssText = 'cursor:default;filter:drop-shadow(0 1px 1.5px rgba(0,0,0,.55));';
   el.innerHTML =
-    '<img src="/svg/flag-destination.svg" width="27" height="29" alt="Destino" ' +
+    '<img src="/svg/flag-destination.svg" width="55" height="33" alt="Destino" ' +
     'draggable="false" style="display:block" />';
   if (label) el.title = label;
   return el;
