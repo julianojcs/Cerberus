@@ -483,7 +483,7 @@ function onPosition(sample: PositionSample): void {
  */
 export function startNavigation(context: NavigationContext): () => void {
   ctx = context;
-  const offCommand = addCommandHandler((type, routeId) => {
+  const offCommand = addCommandHandler((type, _ctx, routeId) => {
     if (type === AgentCommandType.ROUTE_ASSIGN) {
       void adoptRoute(routeId);
     } else if (type === AgentCommandType.ROUTE_CANCEL) {
