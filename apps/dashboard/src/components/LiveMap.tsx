@@ -430,9 +430,7 @@ function plannedFC(routes: PlannedRouteLine[], fallback: boolean): GeoJSON.Featu
 }
 
 function syncPlanned(map: MlMap, routes: PlannedRouteLine[]): void {
-  (map.getSource('planned-routes') as GeoJSONSource | undefined)?.setData(
-    plannedFC(routes, false),
-  );
+  (map.getSource('planned-routes') as GeoJSONSource | undefined)?.setData(plannedFC(routes, false));
   (map.getSource('planned-routes-direct') as GeoJSONSource | undefined)?.setData(
     plannedFC(routes, true),
   );
@@ -757,6 +755,9 @@ export function LiveMap({
   showTrailDirectionRef.current = showTrailDirection;
   const routesRef = useRef<PlottedRoute[]>(routes);
   routesRef.current = routes;
+  // Espelho dos agentes para o enquadramento ler a posição atual sem re-disparar o efeito.
+  const agentsRef = useRef<Record<string, AgentPoint>>(agents);
+  agentsRef.current = agents;
   const plannedRoutesRef = useRef<PlannedRouteLine[]>(plannedRoutes);
   plannedRoutesRef.current = plannedRoutes;
   /** Pinos de destino, indexados por rota (removidos quando a rota sai do ar). */
@@ -1144,13 +1145,21 @@ export function LiveMap({
     }
   }, [plannedRoutes]);
 
-  // Enquadra (fitBounds) quando `fitNonce` muda: usa `fitPoints` se fornecido
-  // (mapa global), senão as rotas plotadas (comportamento padrão da live page).
+  // Enquadra (fitBounds) quando `fitNonce` muda: com `fitPoints` explícito, foca aquilo
+  // (um alerta/rota específico); senão, enquadra as rotas plotadas MAIS as posições dos
+  // agentes de campo — assim o botão serve mesmo sem rota, e considera até os agentes
+  // desconectados, que mantêm a última posição conhecida em `agents`.
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !fitNonce) return;
     const explicit = fitPointsRef.current;
-    const pts = explicit && explicit.length ? explicit : routesRef.current.flatMap((r) => r.points);
+    const pts =
+      explicit && explicit.length
+        ? explicit
+        : [
+            ...routesRef.current.flatMap((r) => r.points),
+            ...Object.values(agentsRef.current).map((a): [number, number] => [a.lng, a.lat]),
+          ];
     if (pts.length === 0) return;
     if (pts.length === 1) {
       map.easeTo({ center: pts[0], zoom: 15, duration: 600 });

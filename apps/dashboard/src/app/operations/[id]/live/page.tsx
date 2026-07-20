@@ -1031,6 +1031,11 @@ export default function LiveOperationPage() {
     settings.connectRoutes,
   ]);
 
+  // O botão "Enquadrar" serve para rotas E para agentes de campo. Todo agente com
+  // posição (inclusive o desconectado, cuja última posição fica em `agents`) conta —
+  // só fica sem o que enquadrar quando não há rota plotada nem agente algum.
+  const nothingToFit = plottedRoutes.length === 0 && Object.keys(agents).length === 0;
+
   function toggleRoute(id: string) {
     setSelectedRouteIds((prev) => {
       const next = new Set(prev);
@@ -1766,7 +1771,9 @@ export default function LiveOperationPage() {
               onFocusRoute={(r) => {
                 // Reusa o mecanismo de enquadramento do mapa: enquadrar o traçado
                 // inteiro (e não só o pino) mostra de onde o agente vem.
-                setFitOverride(r.geometry.length > 1 ? r.geometry : [[r.destination.lng, r.destination.lat]]);
+                setFitOverride(
+                  r.geometry.length > 1 ? r.geometry : [[r.destination.lng, r.destination.lat]],
+                );
                 setFitNonce((n) => n + 1);
               }}
             />
@@ -2518,17 +2525,21 @@ export default function LiveOperationPage() {
                   </div>
                 </>
               )}
-              {/* Botão: enquadra o mapa em TODAS as rotas plotadas (fit bounds). O
-              rótulo só aparece no hover (em repouso mostra só o ícone). */}
+              {/* Botão: enquadra o mapa nos agentes de campo E nas rotas plotadas (fit
+              bounds). Limpa o override de foco antes, para cair no padrão (agentes +
+              rotas). O rótulo só aparece no hover (em repouso mostra só o ícone). */}
               <button
                 type="button"
                 className="maplabelbtn"
-                onClick={() => setFitNonce((n) => n + 1)}
-                disabled={plottedRoutes.length === 0}
+                onClick={() => {
+                  setFitOverride([]); // sai de um foco anterior (alerta/rota) para o padrão
+                  setFitNonce((n) => n + 1);
+                }}
+                disabled={nothingToFit}
                 title={
-                  plottedRoutes.length === 0
-                    ? 'Selecione rotas para enquadrar'
-                    : 'Enquadrar todas as rotas visíveis'
+                  nothingToFit
+                    ? 'Sem agentes ou rotas para enquadrar'
+                    : 'Enquadrar agentes e rotas no mapa'
                 }
                 style={{
                   position: 'absolute',
@@ -2543,13 +2554,13 @@ export default function LiveOperationPage() {
                   background: 'rgba(20,27,36,0.92)',
                   color: 'var(--text)',
                   boxShadow: '0 2px 12px rgba(0,0,0,.4)',
-                  cursor: plottedRoutes.length === 0 ? 'not-allowed' : 'pointer',
-                  opacity: plottedRoutes.length === 0 ? 0.5 : 1,
+                  cursor: nothingToFit ? 'not-allowed' : 'pointer',
+                  opacity: nothingToFit ? 0.5 : 1,
                   fontSize: 13,
                 }}
               >
                 <span>⤢</span>
-                <span className="maplabel">Enquadrar rotas</span>
+                <span className="maplabel">Enquadrar</span>
               </button>
               <LiveMap
                 agents={agents}
