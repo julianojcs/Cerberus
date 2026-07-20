@@ -53,6 +53,13 @@ export function PeriodRange({
   // ponta (evita a data/hora duplicada). O fim no extremo = "ao vivo" (thumb vermelho).
   const startAtMin = startPct <= 0.5;
   const endAtMax = endPct >= 99.5;
+  // Dois <input> sobrepostos: o do FIM é posterior no DOM, então fica por cima. Quando os
+  // thumbs empilham no MESMO ponto, só o de cima recebe o clique. No extremo DIREITO isso
+  // travava: o usuário agarrava o fim (já no máximo, imóvel) e o início ficava preso
+  // embaixo. Elevamos o início na metade direita — ali o único movimento útil é puxá-lo
+  // para a esquerda. À esquerda mantemos o fim por cima (lá o útil é empurrar o fim p/ a
+  // direita). Sem overlap, z-index é irrelevante (o clique só vale nos thumbs).
+  const startOnTop = startPct >= 50;
 
   const pill = (pct: number): React.CSSProperties => ({
     position: 'absolute',
@@ -116,6 +123,7 @@ export function PeriodRange({
           value={start}
           className={startAtMin ? 'live' : undefined}
           aria-label="Início do período"
+          style={{ zIndex: startOnTop ? 4 : undefined }}
           onChange={(e) => onChange(Math.min(Number(e.target.value), end), end)}
         />
         {/* Fim — nunca fica antes do início. No extremo (agora), vira "ao vivo": vermelho. */}
