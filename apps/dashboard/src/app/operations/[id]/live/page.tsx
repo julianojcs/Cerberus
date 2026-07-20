@@ -86,6 +86,12 @@ const HISTORY_LIMIT = 5000;
 /** Máximo de pontos por trilha ao vivo (limita memória/render num turno longo). */
 const MAX_LIVE_TRAIL = 2000;
 const HOUR_MS = 60 * 60 * 1000;
+/**
+ * Altura (px) que a barra de período FIXADA cobre no topo do mapa. Passada ao
+ * enquadramento como reserva superior, para agentes/rotas ao norte não ficarem atrás
+ * dela. Cobre o painel opaco (~72px) com folga; a margem-base do fitBounds soma abaixo.
+ */
+const PERIOD_BAR_FIT_INSET = 80;
 
 /**
  * Card de agente no sidebar. Com sinal = tem posição (do mapa). Sem sinal = designado
@@ -2583,6 +2589,7 @@ export default function LiveOperationPage() {
                 showGeofences={showZones}
                 plannedRoutes={plannedRouteLines}
                 fitPoints={fitOverride}
+                fitTopInset={barPinned ? PERIOD_BAR_FIT_INSET : 0}
                 onMapClick={(lng, lat) => {
                   if (placing) setPendingCenter({ lng, lat });
                   // Marcar destino e posicionar zona são modos exclusivos: o clique

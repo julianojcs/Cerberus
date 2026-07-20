@@ -640,6 +640,7 @@ export function LiveMap({
   focus = null,
   fitNonce = 0,
   fitPoints,
+  fitTopInset = 0,
 }: {
   agents: Record<string, AgentPoint>;
   /** Presenca por agente (canal `status` + LWT). Sem entrada = desconhecida. */
@@ -677,6 +678,12 @@ export function LiveMap({
    * do SA passa marcadores/rotas de uma operação (ou de tudo) para enquadrar.
    */
   fitPoints?: [number, number][];
+  /**
+   * Pixels reservados no TOPO ao enquadrar. Com a barra de período FIXADA, ela cobre o
+   * alto do mapa (overlay em `top: 0`): sem reservar esse espaço, um agente ao norte fica
+   * "dentro dos limites" mas ESCONDIDO atrás da barra.
+   */
+  fitTopInset?: number;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MlMap | null>(null);
@@ -766,6 +773,8 @@ export function LiveMap({
   agentColorsRef.current = agentColors;
   const fitPointsRef = useRef<[number, number][] | undefined>(fitPoints);
   fitPointsRef.current = fitPoints;
+  const fitTopInsetRef = useRef(fitTopInset);
+  fitTopInsetRef.current = fitTopInset;
 
   // Inicializa o mapa uma única vez.
   useEffect(() => {
@@ -1166,7 +1175,13 @@ export function LiveMap({
       return;
     }
     const bounds = pts.reduce((b, p) => b.extend(p), new maplibregl.LngLatBounds(pts[0], pts[0]));
-    map.fitBounds(bounds, { padding: 60, maxZoom: 16, duration: 600 });
+    map.fitBounds(bounds, {
+      // Reserva o topo quando a barra de período está fixada, para o conteúdo enquadrado
+      // não cair atrás dela.
+      padding: { top: 60 + fitTopInsetRef.current, bottom: 60, left: 60, right: 60 },
+      maxZoom: 16,
+      duration: 600,
+    });
   }, [fitNonce]);
 
   // Liga/desliga a exibição da rota conforme o toggle do operador.
