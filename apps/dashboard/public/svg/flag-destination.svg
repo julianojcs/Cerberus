@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 32" width="27" height="29" role="img" aria-label="Destino da rota">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 60 36" width="55" height="33" role="img" aria-label="Destino da rota">
   <!-- Animação embutida: roda mesmo carregado como <img>. A flâmula balança (skew + leve
        compressão) pivotando no mastro; o mastro e a ponteira ficam parados. -->
   <style>
@@ -9,18 +9,18 @@
     }
     @keyframes flagwave {
       0%, 100% { transform: skewY(0deg) scaleX(1); }
-      25%      { transform: skewY(-5deg) scaleX(0.94); }
+      25%      { transform: skewY(-4.5deg) scaleX(0.95); }
       50%      { transform: skewY(1.5deg) scaleX(1); }
-      75%      { transform: skewY(5deg) scaleX(0.94); }
+      75%      { transform: skewY(4.5deg) scaleX(0.95); }
     }
     @media (prefers-reduced-motion: reduce) {
       .pennant { animation: none; }
     }
   </style>
-  <!-- Mastro inclinado pra trás + ponteira -->
-  <line x1="15.2" y1="30.5" x2="12.8" y2="3.2" stroke="#22303c" stroke-width="2.2" stroke-linecap="round" />
-  <circle cx="12.7" cy="3" r="1.7" fill="#22303c" />
-  <!-- Flâmula triangular vermelha -->
-  <path class="pennant" d="M13.4 4.2 L28.5 8 L13.4 11.6 Z" fill="#e5231b" stroke="#ffffff" stroke-width="1"
+  <!-- Mastro inclinado pra trás + ponteira (centrado em x=30, ancorado pelo pé) -->
+  <line x1="30" y1="34" x2="27.6" y2="4" stroke="#22303c" stroke-width="2.4" stroke-linecap="round" />
+  <circle cx="27.5" cy="3.7" r="2" fill="#22303c" />
+  <!-- Flâmula triangular vermelha (dobro do tamanho anterior) -->
+  <path class="pennant" d="M28.2 5 L58.4 12.4 L28.2 19.8 Z" fill="#e5231b" stroke="#ffffff" stroke-width="1.2"
     stroke-linejoin="round" />
 </svg>
