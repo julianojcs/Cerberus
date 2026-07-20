@@ -39,6 +39,10 @@ export interface BuildOptions {
 export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance> {
   const env = loadEnv();
   const app = Fastify({
+    // O padrão do Fastify é 10s por plugin. No cold start do Render/Atlas free, só
+    // conectar no Atlas já pode chegar perto disso — folga para o boot não morrer por
+    // lentidão de infra (o build de índice já saiu do caminho crítico, ver mongo.ts).
+    pluginTimeout: 30_000,
     logger: {
       level: env.NODE_ENV === 'production' ? 'info' : 'debug',
       transport:
